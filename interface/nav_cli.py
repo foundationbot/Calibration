@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""nav-cli: the one command surface for the OKVIS node and its sidecar services (#610).
+"""nav-cli: the one command surface for the OKVIS node, its services and its apps (#610).
 
 Library AND command line. liveviz imports this module; an agent, a shell or a laptop runs it:
 
     nav-cli status                      nav-cli --robot phantom21 status
     nav-cli autonomy on|off             nav-cli mode explore|semantic|patrol|follow
     nav-cli verb reset-tracking|clear-goal
-    nav-cli svc start|stop|status clip|follow-me|llm
+    nav-cli service list|start|stop|status [NAME]  nav-cli app list|start|stop|status [NAME]
     nav-cli follow prompt [TEXT] | select X Y | off
     nav-cli slam restart [--mode M] [--autonomy A] [--follow-standoff M] [--app dma_live|replay] | stop
     nav-cli record start|stop|status    nav-cli semantic TEXT [--top N] [--save DIR]
@@ -359,15 +359,15 @@ def follow_sync(viz_dir: Path | None = None) -> None:
     """Start or stop follow_me.py to match follow_needed. Never writes the mode, a prompt or
     /nav_goal: obstacles and FOLLOW do not reach into each other through here. A (re)start
     drops a stale click, so in FOLLOW it takes the largest match, as at startup."""
-    if not svc_available("follow-me"):
+    if not unit_available("app", "follow_me"):
         return
     c = follow_cmd(viz_dir)
-    if follow_needed(c) and not svc_running("follow-me"):
+    if follow_needed(c) and not unit_running("app", "follow_me"):
         if c.get("click"):
             follow_cmd(viz_dir, click=None)
-        svc_start("follow-me")
-    elif not follow_needed(c) and svc_running("follow-me"):
-        svc_stop("follow-me")   # nothing to segment, not following: free its GPU share
+        app_start("follow_me")
+    elif not follow_needed(c) and unit_running("app", "follow_me"):
+        app_stop("follow_me")   # nothing to segment, not following: free its GPU share
 
 
 def follow_enter(viz_dir: Path | None = None) -> dict:
@@ -380,7 +380,7 @@ def follow_enter(viz_dir: Path | None = None) -> dict:
         navgoal_push(NAV_STOP)
         follow_cmd(viz_dir, mode="follow", since=time.time(), prompt=c.get("prompt") or "person")
     follow_sync(viz_dir)
-    return {"ok": True, "running": svc_running("follow-me")}
+    return {"ok": True, "running": unit_running("app", "follow_me")}
 
 
 def follow_leave(viz_dir: Path | None = None) -> dict:
@@ -401,27 +401,45 @@ def follow_off(viz_dir: Path | None = None) -> dict:
     return follow_leave(viz_dir)
 
 
-# ---------------------------------------------------------------- sidecar services
-# follow-me and the CLIP indexer each hold a CUDA context on the GPU SLAM shares, so they are
-# off by default and started on demand. They belong to NOBODY's process: whoever starts one
-# (liveviz, the agent, a shell) records its pid in /dev/shm, and anyone can see or stop it.
-# Each runs in its own process group so a stop takes its children (the indexer is a shell
-# script running two pythons). Only where the image carries the ML-deps layer
-# (PERCEPTION_MODELS, docker/okvis_apps.Dockerfile).
+# ---------------------------------------------------------------- services and apps
+# Two kinds of unit, both background processes that hold a GPU share and are off by default:
+#   service  a capability anyone can use: services/<name>/service.json (semantic_memory, llm)
+#   app      a script built on services:   app/<name>/app.json         (follow_me)
+# The manifest is the whole definition, so a new unit needs a folder, not an edit here:
+#   {"run": ["bash", "x.sh"],                       argv; argv[1] is relative to the folder;
+#                                                   "{rig}" becomes the node's rig yaml
+#    "probe": "http://..." | "file:<tap file>",     ready = answers / written in the last 5 s
+#    "up_s": 40,                                    how long a start waits for the probe
+#    "requires": "perception" | "llama-server",     what the image must carry
+#    "needs": [...]  (service)  "services": [...]  (app)}      the services it uses
+# Units belong to NOBODY's process: whoever starts one records its pid in /dev/shm, anyone can
+# see or stop it, and each runs in its own process group so a stop takes its children.
+# Lifecycle: `service start` by hand PINS a service (only `service stop` ends it). `app start`
+# starts the app's services unpinned, then the app under a parent that runs `reconcile` when the
+# app exits, however it exits. reconcile stops every service no running app or pin still needs.
 # Piped over ssh by --robot, this file runs as `python3 -` and __file__ is "<stdin>"; the
 # repo is then where the image keeps it.
 REPO = (Path(__file__).resolve().parent.parent if Path(__file__).is_file()
         else Path(os.environ.get("OKVIS_REPO", "/home/OKVIS2-X")))
-FOLLOW_SRC = REPO / "app" / "follow_me" / "follow_me.py"
-CLIP_SRC = REPO / "app" / "clip_indexer" / "clip_indexer.sh"
-CLIP_PROBE = "http://127.0.0.1:8901/embed?text=ping"
-# The orchestrator LLM (#619): llama-server, OpenAI-compatible on :8911. Its own binary, not the
-# perception layer's python, so it is available wherever llama-server is on PATH.
-LLM_SRC = REPO / "app" / "orchestrator" / "llm_server.sh"
-LLM_PROBE = "http://127.0.0.1:8911/health"
-SERVICES = ("clip", "follow-me", "llm")
-# #567 measured 16 s and 12 s on phantom21; llm is a guess (6.6 GB of weights off NVMe), unmeasured.
-SVC_UP_S = {"clip": 40.0, "follow-me": 30.0, "llm": 90.0}
+UNIT_DIRS = {"service": REPO / "services", "app": REPO / "app"}
+UNIT_FILE = {"service": "service.json", "app": "app.json"}
+FOLLOW_RIG = ""
+# What an app's parent runs once the app has exited (OKVIS_SVC_HERE: act in this pod, never
+# hand it to the agent).
+RECONCILE_CMD = ("OKVIS_SVC_HERE=1 python3 "
+                 + shlex.quote(str(Path(__file__).resolve() if Path(__file__).is_file()
+                                   else REPO / "interface" / "nav_cli.py")) + " reconcile")
+
+
+def units(kind: str) -> dict:
+    """name -> manifest (with "dir") for every unit of this kind on disk."""
+    out = {}
+    for f in sorted(UNIT_DIRS[kind].glob(f"*/{UNIT_FILE[kind]}")):
+        try:
+            out[f.parent.name] = {**json.loads(f.read_text()), "dir": f.parent}
+        except (OSError, ValueError):
+            continue
+    return out
 
 
 def follow_rig() -> str:
@@ -439,88 +457,88 @@ def follow_rig() -> str:
         return ""
 
 
-FOLLOW_RIG = ""
+def _unit(kind: str, name: str) -> dict | None:
+    return units(kind).get(name)
 
 
-def svc_argv(name: str) -> list[str]:
-    if name == "clip":
-        return ["bash", str(CLIP_SRC)]
-    if name == "follow-me":
-        return ["python3", str(FOLLOW_SRC), follow_rig()]
-    if name == "llm":
-        return ["bash", str(LLM_SRC)]
-    raise ValueError(f"unknown service {name!r}")
+def unit_argv(kind: str, name: str) -> list[str]:
+    m = _unit(kind, name)
+    argv = [str(m["dir"] / a) if i == 1 else a for i, a in enumerate(m["run"])]
+    return [follow_rig() if a == "{rig}" else a for a in argv]
 
 
-def svc_available(name: str) -> bool:
-    if name == "llm":
-        import shutil
-        return LLM_SRC.is_file() and shutil.which("llama-server") is not None
-    if not os.environ.get("PERCEPTION_MODELS"):
+def unit_available(kind: str, name: str) -> bool:
+    m = _unit(kind, name)
+    if m is None or not (m["dir"] / m["run"][1]).is_file():
         return False
-    if name == "clip":
-        return CLIP_SRC.is_file()
-    if name == "follow-me":
-        return FOLLOW_SRC.is_file() and bool(follow_rig())
-    return False
+    if "{rig}" in m["run"] and not follow_rig():
+        return False
+    req = m.get("requires")
+    if req == "perception":
+        return bool(os.environ.get("PERCEPTION_MODELS"))
+    if req == "llama-server":
+        import shutil
+        return shutil.which("llama-server") is not None
+    return True
 
 
-def _pidfile(name: str) -> Path:
-    return SHM / f"okvis_svc_{name}.pid"
+def _pidfile(kind: str, name: str) -> Path:
+    return SHM / f"okvis_{kind}_{name}.pid"
 
 
-def svc_pid(name: str) -> int | None:
-    """The service's pid if it is alive AND still the process we started. /dev/shm outlives
-    the pod, so a stale pid file can name an unrelated host process; the cmdline check
-    is what keeps a stop from killing it."""
+def _pinfile(name: str) -> Path:
+    return SHM / f"okvis_service_{name}.pin"
+
+
+def unit_pid(kind: str, name: str) -> int | None:
+    """The unit's pid if it is alive AND still the process we started. /dev/shm outlives the
+    pod, so a stale pid file can name an unrelated host process; the cmdline check is what
+    keeps a stop from killing it."""
+    m = _unit(kind, name)
     try:
-        pid = int(_pidfile(name).read_text().strip())
+        pid = int(_pidfile(kind, name).read_text().strip())
         cmd = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
     except (OSError, ValueError):
         return None
-    src = {"clip": CLIP_SRC, "follow-me": FOLLOW_SRC, "llm": LLM_SRC}[name]
-    return pid if src.name in cmd else None
+    return pid if m is not None and Path(m["run"][1]).name in cmd else None
 
 
-def svc_running(name: str) -> bool:
-    return svc_pid(name) is not None
+def unit_running(kind: str, name: str) -> bool:
+    return unit_pid(kind, name) is not None
 
 
-def svc_up(name: str) -> bool:
-    """Liveness beyond "the pid exists": the thing the service is FOR is answering."""
-    if name in ("clip", "llm"):
+def unit_up(kind: str, name: str) -> bool:
+    """Liveness beyond "the pid exists": the thing the unit is FOR is answering."""
+    probe = (_unit(kind, name) or {}).get("probe")
+    if not probe:
+        return unit_running(kind, name)
+    if probe.startswith("file:"):
         try:
-            return urllib.request.urlopen(CLIP_PROBE if name == "clip" else LLM_PROBE, timeout=2).status < 500
-        except Exception:
+            return time.time() - (VIZ_DIR / probe[5:]).stat().st_mtime < 5.0
+        except OSError:
             return False
-    if name == "follow-me":
-        age = follow_state().get("age")
-        return age is not None and age < 5.0
-    return False
+    try:
+        return urllib.request.urlopen(probe, timeout=2).status < 500
+    except Exception:
+        return False
 
 
-def svc_start(name: str, wait_s: float = 0.0) -> dict:
-    if name not in SERVICES:
-        return {"ok": False, "err": f"unknown service {name!r}"}
-    if not svc_available(name):
-        if name == "llm":
-            return {"ok": False, "err": "no llama-server in this image (needs the ML-deps layer, #619)"}
-        return {"ok": False, "err": f"no {name} in this image (needs the perception layer"
-                                    + (" and the rig" if name == "follow-me" else "") + ")"}
-    pid = svc_pid(name)
-    if pid is None:
-        log = open(SHM / f"{name}.log", "ab")
-        p = subprocess.Popen(svc_argv(name), stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                             start_new_session=True)
-        log.close()
-        _pidfile(name).write_text(f"{p.pid}\n")
-        pid = p.pid
-        # Between fork and exec the child's cmdline is still ours, so svc_pid would not know it
-        # yet; wait for the exec (microseconds, but a 1-in-25 test flake without this).
-        _wait(lambda: svc_pid(name) is not None, 2.0, period=0.01)
-    out = {"ok": True, "svc": name, "pid": pid, "running": True}
+def _spawn(kind: str, name: str, argv: list[str]) -> int:
+    log = open(SHM / f"{name}.log", "ab")
+    p = subprocess.Popen(argv, cwd=str(_unit(kind, name)["dir"]), stdin=subprocess.DEVNULL,
+                         stdout=log, stderr=log, start_new_session=True)
+    log.close()
+    _pidfile(kind, name).write_text(f"{p.pid}\n")
+    # Between fork and exec the child's cmdline is still ours, so unit_pid would not know it
+    # yet; wait for the exec (microseconds, but a 1-in-25 test flake without this).
+    _wait(lambda: unit_pid(kind, name) is not None, 2.0, period=0.01)
+    return p.pid
+
+
+def _await_up(kind: str, name: str, pid: int, wait_s: float) -> dict:
+    out = {"ok": True, kind: name, "pid": pid, "running": True}
     if wait_s > 0:
-        up, waited = _wait(lambda: svc_up(name), wait_s, period=0.5)
+        up, waited = _wait(lambda: unit_up(kind, name), wait_s, period=0.5)
         out.update(up=bool(up), waited_s=waited)
         if not up:
             out.update(ok=False, err=f"{name} started (pid {pid}) but did not answer within {wait_s:.0f} s;"
@@ -528,16 +546,48 @@ def svc_start(name: str, wait_s: float = 0.0) -> dict:
     return out
 
 
-def svc_stop(name: str) -> dict:
-    if name not in SERVICES:
-        return {"ok": False, "err": f"unknown service {name!r}"}
-    pid = svc_pid(name)
+def _missing(kind: str, name: str) -> dict:
+    m = _unit(kind, name)
+    if m is None:
+        return {"ok": False, "err": f"unknown {kind} {name!r}; known: {', '.join(units(kind))}"}
+    why = {"perception": "the perception layer", "llama-server": "llama-server (ML-deps layer, #619)"}
+    return {"ok": False, "err": f"{kind} {name} cannot run in this image (needs "
+                                + why.get(m.get("requires"), "its script")
+                                + (" and the rig" if "{rig}" in m["run"] else "") + ")"}
+
+
+def needs(names) -> list[str]:
+    """The services these services need, transitively, themselves included."""
+    svcs, out, todo = units("service"), [], list(names)
+    while todo:
+        n = todo.pop()
+        if n not in out and n in svcs:
+            out.append(n)
+            todo += svcs[n].get("needs", [])
+    return out
+
+
+def service_start(name: str, wait_s: float = 0.0, pin: bool = True) -> dict:
+    """Start a service and what it needs. By hand (pin) it stays on until `service stop`."""
+    if not unit_available("service", name):
+        return _missing("service", name)
+    if pin:
+        _pinfile(name).touch()
+    for n in reversed(needs([name])):          # what it needs first
+        if not unit_available("service", n):
+            return _missing("service", n)
+        pid = unit_pid("service", n) or _spawn("service", n, unit_argv("service", n))
+    return _await_up("service", name, pid, wait_s)
+
+
+def _kill(kind: str, name: str) -> None:
+    pid = unit_pid(kind, name)
     if pid is not None:
         try:
             os.killpg(pid, signal.SIGTERM)
         except ProcessLookupError:
             pass
-        gone, _ = _wait(lambda: not svc_running(name), 10.0)
+        gone, _ = _wait(lambda: not unit_running(kind, name), 10.0)
         if not gone:
             try:
                 os.killpg(pid, signal.SIGKILL)
@@ -547,14 +597,69 @@ def svc_stop(name: str) -> dict:
             os.waitpid(pid, 0)   # our own child (it is dead or dying): reap it, or it lingers as a zombie
         except ChildProcessError:
             pass                 # someone else's: the kernel reaps it
-    _pidfile(name).unlink(missing_ok=True)
-    return {"ok": True, "svc": name, "running": False}
+    _pidfile(kind, name).unlink(missing_ok=True)
 
 
-def svc_status(name: str) -> dict:
-    pid = svc_pid(name)
-    return {"available": svc_available(name), "running": pid is not None, "pid": pid,
-            "up": svc_up(name) if pid is not None else False}
+def service_stop(name: str) -> dict:
+    """Unpin and stop it, unless a running app still needs it (then it stays, unpinned)."""
+    if _unit("service", name) is None:
+        return _missing("service", name)
+    _pinfile(name).unlink(missing_ok=True)
+    if name in needed():
+        return {"ok": True, "service": name, "running": unit_running("service", name),
+                "kept": "a running app or pinned service needs it"}
+    _kill("service", name)
+    reconcile()
+    return {"ok": True, "service": name, "running": False}
+
+
+def app_start(name: str, wait_s: float = 0.0) -> dict:
+    """Start the app's services (unpinned), then the app under a parent that reconciles when the
+    app exits -- a crash included, which never calls nav-cli itself."""
+    if not unit_available("app", name):
+        return _missing("app", name)
+    for s in _unit("app", name).get("services", []):
+        r = service_start(s, pin=False)
+        if not r["ok"]:
+            return r
+    pid = unit_pid("app", name)
+    if pid is None:
+        parent = '"$@"; rm -f ' + shlex.quote(str(_pidfile("app", name))) + "; " + RECONCILE_CMD + " >/dev/null 2>&1"
+        pid = _spawn("app", name, ["sh", "-c", parent, "sh", *unit_argv("app", name)])
+    return _await_up("app", name, pid, wait_s)
+
+
+def app_stop(name: str) -> dict:
+    if _unit("app", name) is None:
+        return _missing("app", name)
+    _kill("app", name)
+    reconcile()
+    return {"ok": True, "app": name, "running": False}
+
+
+def needed() -> list[str]:
+    """Services something still needs: a running app, or a pin."""
+    want = [s for a, m in units("app").items() if unit_running("app", a) for s in m.get("services", [])]
+    want += [s for s in units("service") if _pinfile(s).exists()]
+    return needs(want)
+
+
+def reconcile() -> dict:
+    """Stop every running service nothing needs. Safe to run at any time, by anyone."""
+    keep = needed()
+    stopped = [s for s in units("service") if s not in keep and unit_running("service", s)]
+    for s in stopped:
+        _kill("service", s)
+    return {"ok": True, "stopped": stopped, "needed": keep}
+
+
+def unit_status(kind: str, name: str) -> dict:
+    pid = unit_pid(kind, name)
+    out = {"available": unit_available(kind, name), "running": pid is not None, "pid": pid,
+           "up": unit_up(kind, name) if pid is not None else False}
+    if kind == "service":
+        out["pinned"] = _pinfile(name).exists()
+    return out
 
 
 # ---------------------------------------------------------------- SLAM lifecycle, via the agent
@@ -1113,7 +1218,8 @@ def status() -> dict:
         "autonomy": autonomy_get(),
         "okvis_mode": okvis_mode(),
         "follow": follow_cmd(),
-        "services": {n: svc_status(n) for n in SERVICES},
+        "services": {n: unit_status("service", n) for n in units("service")},
+        "apps": {n: unit_status("app", n) for n in units("app")},
         "agent": agent_live(),
         "verbose": verbose_get(),
         "record": record_status(),
@@ -1127,8 +1233,11 @@ SCHEMA = [
     {"name": "mode", "args": {"mode": ["explore", "semantic", "patrol", "follow"]},
      "help": "goal source: explore = frontier NBV, patrol = straight-line tour, semantic = stop and await a goal, follow = follow-me"},
     {"name": "verb", "args": {"verb": sorted(CLI_VERBS)}, "help": "a command the node may refuse; waits for its answer"},
-    {"name": "svc", "args": {"action": ["start", "stop", "status"], "svc": list(SERVICES)},
-     "help": "sidecar services: clip = semantic indexer + text encoder, follow-me = person follower, llm = orchestrator llama-server :8911"},
+    {"name": "service", "args": {"action": ["list", "start", "stop", "status"], "name": list(units("service"))},
+     "help": "capabilities anyone can use: semantic_memory = CLIP index + text encoder, llm = orchestrator llama-server :8911. start pins it on until stop"},
+    {"name": "app", "args": {"action": ["list", "start", "stop", "status"], "name": list(units("app"))},
+     "help": "scripts built on services: follow_me = person follower. start brings its services; stop drops the ones nothing else needs"},
+    {"name": "reconcile", "args": {}, "help": "stop every service that no running app and no pin needs; safe at any time"},
     {"name": "follow", "args": {"action": ["prompt", "select", "off"], "value": "TEXT | X Y"},
      "help": "follow-me target: prompt = what to look for (no TEXT = blank; outside follow mode only shown, entering follow mode fills a blank one with person), select = pick the match at image fraction X Y in any mode (default in follow mode: the nearest), off = leave follow mode"},
     {"name": "slam", "args": {"action": ["restart", "stop"], "--mode": list(OKVIS_MODES), "--autonomy": list(AUTONOMY_MODES),
@@ -1211,20 +1320,33 @@ def cmd_verb(a) -> dict:
             "reason": ack["reason"], "waited_s": waited}
 
 
-def cmd_svc(a) -> dict:
+def cmd_unit(a) -> dict:
+    kind = a.cmd
+    if a.action == "list":
+        return {"ok": True, kind + "s": {n: unit_status(kind, n) for n in units(kind)}}
+    if not a.name:
+        return {"ok": False, "err": f"{kind} {a.action} needs a NAME: {', '.join(units(kind))}"}
+    wait = a.timeout if a.timeout is not None else float((_unit(kind, a.name) or {}).get("up_s", 30))
     if not svc_here():
-        wait = a.timeout if a.timeout is not None else SVC_UP_S[a.svc]
-        return agent_ask(SVC_REQUEST, SVC_RESULT, f"{a.action} {a.svc}", wait + 15)
-    if a.action == "start":
-        r = svc_start(a.svc, wait_s=a.timeout if a.timeout is not None else SVC_UP_S[a.svc])
-        if a.svc == "follow-me" and r["ok"]:
-            follow_enter()   # follow-me on = autonomy mode follow, as liveviz's FOLLOW mode button does
+        return agent_ask(SVC_REQUEST, SVC_RESULT, f"{kind} {a.action} {a.name}", wait + 15)
+    if _unit(kind, a.name) is None:
+        return _missing(kind, a.name)
+    if a.action == "status":
+        return {"ok": True, kind: a.name, **unit_status(kind, a.name)}
+    if kind == "service":
+        return service_start(a.name, wait_s=wait) if a.action == "start" else service_stop(a.name)
+    if a.name == "follow_me":   # follow-me on = autonomy mode follow, as liveviz's FOLLOW mode button does
+        if a.action == "stop":
+            return {**follow_off(), "ok": True, "app": "follow_me", "running": unit_running("app", "follow_me")}
+        r = app_start(a.name, wait_s=wait)
+        if r["ok"]:
+            follow_enter()
         return r
-    if a.action == "stop":
-        if a.svc == "follow-me":
-            follow_off()
-        return svc_stop(a.svc)
-    return {"ok": True, "svc": a.svc, **svc_status(a.svc)}
+    return app_start(a.name, wait_s=wait) if a.action == "start" else app_stop(a.name)
+
+
+def cmd_reconcile(a) -> dict:
+    return reconcile()
 
 
 def cmd_follow(a) -> dict:
@@ -1335,14 +1457,16 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--schema", action="store_true", help="print the command tree as JSON tool definitions")
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--timeout", type=float, default=None,
-                        help="seconds to wait for the node's answer (default 2; svc start: per service)")
+                        help="seconds to wait for the node's answer (default 2; service/app start: the unit's up_s)")
     sub = ap.add_subparsers(dest="cmd")
     add = lambda name: sub.add_parser(name, parents=[common])
     p = add("status"); p.add_argument("--watch", action="store_true")
     p = add("autonomy"); p.add_argument("state", choices=["on", "off"])
     p = add("mode"); p.add_argument("mode", choices=["explore", "semantic", "patrol", "follow"])
     p = add("verb"); p.add_argument("verb", choices=sorted(CLI_VERBS))
-    p = add("svc"); p.add_argument("action", choices=["start", "stop", "status"]); p.add_argument("svc", choices=SERVICES)
+    for kind in ("service", "app"):   # NAME unchecked here: --robot validates it on the robot, against its manifests
+        p = add(kind); p.add_argument("action", choices=["list", "start", "stop", "status"]); p.add_argument("name", nargs="?")
+    add("reconcile")
     p = add("follow"); p.add_argument("action", choices=["prompt", "select", "off"]); p.add_argument("value", nargs="*")
     p = add("slam"); p.add_argument("action", choices=["restart", "stop"])
     p.add_argument("--mode", choices=OKVIS_MODES); p.add_argument("--autonomy", choices=AUTONOMY_MODES)
@@ -1388,10 +1512,10 @@ def main(argv: list[str] | None = None) -> int:
     if not a.cmd:
         ap.print_help()
         return 2
-    if a.timeout is None and a.cmd != "svc":
+    if a.timeout is None and a.cmd not in ("service", "app"):
         a.timeout = 2.0
     handler = {"status": cmd_status, "autonomy": cmd_autonomy, "mode": cmd_mode, "verb": cmd_verb,
-               "svc": cmd_svc, "follow": cmd_follow, "slam": cmd_slam, "record": cmd_record,
+               "service": cmd_unit, "app": cmd_unit, "reconcile": cmd_reconcile, "follow": cmd_follow, "slam": cmd_slam, "record": cmd_record,
                "semantic": cmd_semantic, "verbose": cmd_verbose, "pose": cmd_pose, "frame": cmd_frame,
                "depth": cmd_depth, "grid": cmd_grid, "look": cmd_look, "goto": cmd_goto}[a.cmd]
     return _emit(handler(a))
