@@ -408,7 +408,7 @@ def follow_off(viz_dir: Path | None = None) -> dict:
 # The manifest is the whole definition, so a new unit needs a folder, not an edit here:
 #   {"run": ["bash", "x.sh"],                       argv; argv[1] is relative to the folder;
 #                                                   "{rig}" becomes the node's rig yaml
-#    "probe": "http://..." | "file:<tap file>",     ready = answers / written in the last 5 s
+#    "probe": "http://..." | "file:<tap file>" | "shm:<file in /dev/shm>",   ready = answers / written in the last 5 s
 #    "up_s": 40,                                    how long a start waits for the probe
 #    "requires": "perception" | "llama-server",     what the image must carry
 #    "needs": [...]  (service)  "services": [...]  (app)}      the services it uses
@@ -512,11 +512,12 @@ def unit_up(kind: str, name: str) -> bool:
     probe = (_unit(kind, name) or {}).get("probe")
     if not probe:
         return unit_running(kind, name)
-    if probe.startswith("file:"):
-        try:
-            return time.time() - (VIZ_DIR / probe[5:]).stat().st_mtime < 5.0
-        except OSError:
-            return False
+    for prefix, base in (("file:", VIZ_DIR), ("shm:", SHM)):   # a file written in the last 5 s
+        if probe.startswith(prefix):
+            try:
+                return time.time() - (base / probe[len(prefix):]).stat().st_mtime < 5.0
+            except OSError:
+                return False
     try:
         return urllib.request.urlopen(probe, timeout=2).status < 500
     except Exception:
