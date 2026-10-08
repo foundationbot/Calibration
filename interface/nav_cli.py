@@ -411,7 +411,7 @@ def follow_off(viz_dir: Path | None = None) -> dict:
 #    "probe": "http://..." | "file:<tap file>",     ready = answers / written in the last 5 s
 #    "up_s": 40,                                    how long a start waits for the probe
 #    "requires": "perception" | "llama-server",     what the image must carry
-#    "needs": [...]  (service)  "services": [...]  (app)}      the services it uses
+#    "services": [...]}  (apps only)                the services it uses; services never use each other
 # Units belong to NOBODY's process: whoever starts one records its pid in /dev/shm, anyone can
 # see or stop it, and each runs in its own process group so a stop takes its children.
 # Lifecycle: `service start` by hand PINS a service (only `service stop` ends it). `app start`
@@ -556,27 +556,13 @@ def _missing(kind: str, name: str) -> dict:
                                 + (" and the rig" if "{rig}" in m["run"] else "") + ")"}
 
 
-def needs(names) -> list[str]:
-    """The services these services need, transitively, themselves included."""
-    svcs, out, todo = units("service"), [], list(names)
-    while todo:
-        n = todo.pop()
-        if n not in out and n in svcs:
-            out.append(n)
-            todo += svcs[n].get("needs", [])
-    return out
-
-
 def service_start(name: str, wait_s: float = 0.0, pin: bool = True) -> dict:
-    """Start a service and what it needs. By hand (pin) it stays on until `service stop`."""
+    """Start a service. By hand (pin) it stays on until `service stop`."""
     if not unit_available("service", name):
         return _missing("service", name)
     if pin:
         _pinfile(name).touch()
-    for n in reversed(needs([name])):          # what it needs first
-        if not unit_available("service", n):
-            return _missing("service", n)
-        pid = unit_pid("service", n) or _spawn("service", n, unit_argv("service", n))
+    pid = unit_pid("service", name) or _spawn("service", name, unit_argv("service", name))
     return _await_up("service", name, pid, wait_s)
 
 
@@ -607,7 +593,7 @@ def service_stop(name: str) -> dict:
     _pinfile(name).unlink(missing_ok=True)
     if name in needed():
         return {"ok": True, "service": name, "running": unit_running("service", name),
-                "kept": "a running app or pinned service needs it"}
+                "kept": "a running app needs it"}
     _kill("service", name)
     reconcile()
     return {"ok": True, "service": name, "running": False}
@@ -641,7 +627,7 @@ def needed() -> list[str]:
     """Services something still needs: a running app, or a pin."""
     want = [s for a, m in units("app").items() if unit_running("app", a) for s in m.get("services", [])]
     want += [s for s in units("service") if _pinfile(s).exists()]
-    return needs(want)
+    return sorted(set(want))
 
 
 def reconcile() -> dict:
