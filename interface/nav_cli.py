@@ -653,6 +653,14 @@ def reconcile() -> dict:
     return {"ok": True, "stopped": stopped, "needed": keep}
 
 
+def app_started_at(name: str) -> float | None:
+    """When the running app started (its pid file is written at spawn), else None."""
+    try:
+        return _pidfile("app", name).stat().st_mtime if unit_running("app", name) else None
+    except OSError:
+        return None
+
+
 def unit_status(kind: str, name: str) -> dict:
     pid = unit_pid(kind, name)
     out = {"available": unit_available(kind, name), "running": pid is not None, "pid": pid,
