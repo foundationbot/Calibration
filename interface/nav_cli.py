@@ -349,53 +349,26 @@ def follow_state(viz_dir: Path | None = None) -> dict:
     return out
 
 
-def follow_needed(c: dict) -> bool:
-    """follow_me.py runs while the target prompt is set, or while in FOLLOW, else not at all."""
-    return bool(c.get("prompt") or c.get("mode", "off") != "off")
-
-
-def obstacles_needed(c: dict) -> bool:
-    """app/semantic_obstacles runs while the SEMANTIC OBSTACLES list is set."""
-    return bool(str(c.get("obstacles") or "").strip(" ,"))
-
-
-def follow_sync(viz_dir: Path | None = None) -> None:
-    """Start or stop the two apps follow_cmd.json drives to match it: follow_me (follow_needed) and
-    semantic_obstacles (obstacles_needed); a stopped one frees its GPU share. Never writes the mode,
-    a prompt or /nav_goal: obstacles and FOLLOW do not reach into each other through here. A
-    (re)start of follow_me drops a stale click, so in FOLLOW it takes the largest match, as at startup."""
-    c = follow_cmd(viz_dir)
-    for app, need in (("follow_me", follow_needed(c)), ("semantic_obstacles", obstacles_needed(c))):
-        if not unit_available("app", app):
-            continue
-        if need and not unit_running("app", app):
-            if app == "follow_me" and c.get("click"):
-                follow_cmd(viz_dir, click=None)
-            app_start(app)
-        elif not need and unit_running("app", app):
-            app_stop(app)
-
-
 def follow_enter(viz_dir: Path | None = None) -> dict:
-    """Into FOLLOW (the FOLLOW button, mode follow): if FOLLOW was off, STOP on /nav_goal (suspend
-    NBV + drop any held goal, as SEMANTIC does), a blank target becomes the visible "person", and
-    follow_me.py (started if needed) follows the target clicked before, else the nearest match.
-    The robot moves only while ARMED."""
+    """Into FOLLOW (mode follow; app start follow_me does it): if FOLLOW was off, STOP on /nav_goal
+    (suspend NBV + drop any held goal, as SEMANTIC does), a blank target becomes the visible "person",
+    and follow_me.py follows the target clicked before, else the nearest match. Refused while the
+    follow_me app is off: the app's button is its only switch. The robot moves only while ARMED."""
+    if not unit_running("app", "follow_me"):
+        return {"ok": False, "err": "the follow_me app is off: FOLLOW needs it on (nav-cli app start follow_me)"}
     c = follow_cmd(viz_dir)
     if c["mode"] == "off":
         navgoal_push(NAV_STOP)
         follow_cmd(viz_dir, mode="follow", since=time.time(), prompt=c.get("prompt") or "person")
-    follow_sync(viz_dir)
-    return {"ok": True, "running": unit_running("app", "follow_me")}
+    return {"ok": True, "running": True}
 
 
 def follow_leave(viz_dir: Path | None = None) -> dict:
-    """Out of FOLLOW, by any mode change: the target goes back to blank, and follow_me.py stops
-    at once. Sends nothing: the caller's mode does."""
+    """Out of FOLLOW, by any mode change: the target goes back to blank. The app keeps running
+    (its button stops it). Sends nothing: the caller's mode does."""
     c = follow_cmd(viz_dir)
     if c.get("mode", "off") != "off":
         c = follow_cmd(viz_dir, mode="off", prompt="")
-    follow_sync(viz_dir)
     return c
 
 
@@ -607,9 +580,11 @@ def service_stop(name: str) -> dict:
     return {"ok": True, "service": name, "running": False}
 
 
-def app_start(name: str, wait_s: float = 0.0) -> dict:
+def app_start(name: str, wait_s: float = 0.0, viz_dir: Path | None = None) -> dict:
     """Start the app's services (unpinned), then the app under a parent that reconciles when the
-    app exits -- a crash included, which never calls nav-cli itself."""
+    app exits -- a crash included, which never calls nav-cli itself. An app runs from its start
+    until its stop (the console's button), idle while it has nothing to do. follow_me's start
+    also enters FOLLOW (follow_enter): FOLLOW exists exactly while follow_me runs."""
     if not unit_available("app", name):
         return _missing("app", name)
     for s in _unit("app", name).get("services", []):
@@ -620,12 +595,19 @@ def app_start(name: str, wait_s: float = 0.0) -> dict:
     if pid is None:
         parent = '"$@"; rm -f ' + shlex.quote(str(_pidfile("app", name))) + "; " + RECONCILE_CMD + " >/dev/null 2>&1"
         pid = _spawn("app", name, ["sh", "-c", parent, "sh", *unit_argv("app", name)])
+    if name == "follow_me" and unit_running("app", name):
+        if follow_cmd(viz_dir).get("click"):   # a stale click: in FOLLOW it takes the largest match, as at startup
+            follow_cmd(viz_dir, click=None)
+        follow_enter(viz_dir)
     return _await_up("app", name, pid, wait_s)
 
 
-def app_stop(name: str) -> dict:
+def app_stop(name: str, viz_dir: Path | None = None) -> dict:
+    """follow_me's stop leaves FOLLOW first (follow_off: STOP if following, target blank)."""
     if _unit("app", name) is None:
         return _missing("app", name)
+    if name == "follow_me":
+        follow_off(viz_dir)
     _kill("app", name)
     reconcile()
     return {"ok": True, "app": name, "running": False}
@@ -1329,13 +1311,6 @@ def cmd_unit(a) -> dict:
         return {"ok": True, kind: a.name, **unit_status(kind, a.name)}
     if kind == "service":
         return service_start(a.name, wait_s=wait) if a.action == "start" else service_stop(a.name)
-    if a.name == "follow_me":   # follow-me on = autonomy mode follow, as liveviz's FOLLOW mode button does
-        if a.action == "stop":
-            return {**follow_off(), "ok": True, "app": "follow_me", "running": unit_running("app", "follow_me")}
-        r = app_start(a.name, wait_s=wait)
-        if r["ok"]:
-            follow_enter()
-        return r
     return app_start(a.name, wait_s=wait) if a.action == "start" else app_stop(a.name)
 
 
@@ -1349,7 +1324,6 @@ def cmd_follow(a) -> dict:
         return {"ok": True, "follow": follow_off()}
     if a.action == "prompt":
         c = follow_cmd(prompt=" ".join(v)[:80])   # perception only: matches shown, no mode change
-        follow_sync()
         return {"ok": True, "follow": c}
     if a.action == "select":
         try:
