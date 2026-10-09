@@ -391,7 +391,8 @@ def follow_off(viz_dir: Path | None = None) -> dict:
 #    "up_s": 40,                                    how long a start waits for the probe
 #    "requires": "perception" | "llama-server",     what the image must carry
 #    "services": [...],  (apps only)                the services it uses; services never use each other
-#    "label": "FOLLOW ME"}  (apps only)             the console's button for it
+#    "label": "FOLLOW ME",  (apps only)             the console's button for it
+#    "outputs": [...]}  (apps only)                 its tap files: deleted at its start and stop (_app_reset)
 # Units belong to NOBODY's process: whoever starts one records its pid in /dev/shm, anyone can
 # see or stop it, and each runs in its own process group so a stop takes its children.
 # Lifecycle: `service start` by hand PINS a service (only `service stop` ends it). `app start`
@@ -580,6 +581,28 @@ def service_stop(name: str) -> dict:
     return {"ok": True, "service": name, "running": False}
 
 
+def semantic_clear(viz_dir: Path | None = None) -> None:
+    """An EMPTY semantic_pts.bin: dma_live drops every semantic obstacle cell at once (not on its TTL)."""
+    d = VIZ_DIR if viz_dir is None else viz_dir
+    tmp = d / ".semantic_pts.bin.tmp"
+    tmp.write_bytes(struct.pack("<4sId", b"OKSM", 0, time.time()))
+    os.replace(tmp, d / "semantic_pts.bin")
+
+
+def _app_reset(name: str, viz_dir: Path | None = None) -> None:
+    """Nothing from a previous run, at an app's start and at its stop: the tap files its manifest lists
+    as "outputs" are deleted, and the operator inputs it reads from follow_cmd.json go back to blank
+    (follow_me: mode off, no target, no click; semantic_obstacles: no list, and its cells cleared)."""
+    d = VIZ_DIR if viz_dir is None else viz_dir
+    for f in _unit("app", name).get("outputs", []):
+        (d / f).unlink(missing_ok=True)
+    if name == "follow_me":
+        follow_cmd(viz_dir, mode="off", prompt="", click=None)
+    elif name == "semantic_obstacles":
+        follow_cmd(viz_dir, obstacles="", obstacles_t=time.time())
+        semantic_clear(viz_dir)
+
+
 def app_start(name: str, wait_s: float = 0.0, viz_dir: Path | None = None) -> dict:
     """Start the app's services (unpinned), then the app under a parent that reconciles when the
     app exits -- a crash included, which never calls nav-cli itself. An app runs from its start
@@ -593,22 +616,23 @@ def app_start(name: str, wait_s: float = 0.0, viz_dir: Path | None = None) -> di
             return r
     pid = unit_pid("app", name)
     if pid is None:
+        _app_reset(name, viz_dir)   # nothing from a previous run
         parent = '"$@"; rm -f ' + shlex.quote(str(_pidfile("app", name))) + "; " + RECONCILE_CMD + " >/dev/null 2>&1"
         pid = _spawn("app", name, ["sh", "-c", parent, "sh", *unit_argv("app", name)])
     if name == "follow_me" and unit_running("app", name):
-        if follow_cmd(viz_dir).get("click"):   # a stale click: in FOLLOW it takes the largest match, as at startup
-            follow_cmd(viz_dir, click=None)
         follow_enter(viz_dir)
     return _await_up("app", name, pid, wait_s)
 
 
 def app_stop(name: str, viz_dir: Path | None = None) -> dict:
-    """follow_me's stop leaves FOLLOW first (follow_off: STOP if following, target blank)."""
+    """follow_me's stop leaves FOLLOW first (follow_off: STOP if following, target blank). Then, as at
+    its start, nothing of the app is left behind (_app_reset)."""
     if _unit("app", name) is None:
         return _missing("app", name)
     if name == "follow_me":
         follow_off(viz_dir)
     _kill("app", name)
+    _app_reset(name, viz_dir)
     reconcile()
     return {"ok": True, "app": name, "running": False}
 
