@@ -350,24 +350,30 @@ def follow_state(viz_dir: Path | None = None) -> dict:
 
 
 def follow_needed(c: dict) -> bool:
-    """follow_me.py is the shared segmentation backbone: it runs while SEMANTIC OBSTACLES or the
-    target prompt is set, or while in FOLLOW, else not at all."""
-    return bool(c.get("obstacles") or c.get("prompt") or c.get("mode", "off") != "off")
+    """follow_me.py runs while the target prompt is set, or while in FOLLOW, else not at all."""
+    return bool(c.get("prompt") or c.get("mode", "off") != "off")
+
+
+def obstacles_needed(c: dict) -> bool:
+    """app/semantic_obstacles runs while the SEMANTIC OBSTACLES list is set."""
+    return bool(str(c.get("obstacles") or "").strip(" ,"))
 
 
 def follow_sync(viz_dir: Path | None = None) -> None:
-    """Start or stop follow_me.py to match follow_needed. Never writes the mode, a prompt or
-    /nav_goal: obstacles and FOLLOW do not reach into each other through here. A (re)start
-    drops a stale click, so in FOLLOW it takes the largest match, as at startup."""
-    if not unit_available("app", "follow_me"):
-        return
+    """Start or stop the two apps follow_cmd.json drives to match it: follow_me (follow_needed) and
+    semantic_obstacles (obstacles_needed); a stopped one frees its GPU share. Never writes the mode,
+    a prompt or /nav_goal: obstacles and FOLLOW do not reach into each other through here. A
+    (re)start of follow_me drops a stale click, so in FOLLOW it takes the largest match, as at startup."""
     c = follow_cmd(viz_dir)
-    if follow_needed(c) and not unit_running("app", "follow_me"):
-        if c.get("click"):
-            follow_cmd(viz_dir, click=None)
-        app_start("follow_me")
-    elif not follow_needed(c) and unit_running("app", "follow_me"):
-        app_stop("follow_me")   # nothing to segment, not following: free its GPU share
+    for app, need in (("follow_me", follow_needed(c)), ("semantic_obstacles", obstacles_needed(c))):
+        if not unit_available("app", app):
+            continue
+        if need and not unit_running("app", app):
+            if app == "follow_me" and c.get("click"):
+                follow_cmd(viz_dir, click=None)
+            app_start(app)
+        elif not need and unit_running("app", app):
+            app_stop(app)
 
 
 def follow_enter(viz_dir: Path | None = None) -> dict:
@@ -385,7 +391,7 @@ def follow_enter(viz_dir: Path | None = None) -> dict:
 
 def follow_leave(viz_dir: Path | None = None) -> dict:
     """Out of FOLLOW, by any mode change: the target goes back to blank, and follow_me.py stops
-    at once unless SEMANTIC OBSTACLES still need it. Sends nothing: the caller's mode does."""
+    at once. Sends nothing: the caller's mode does."""
     c = follow_cmd(viz_dir)
     if c.get("mode", "off") != "off":
         c = follow_cmd(viz_dir, mode="off", prompt="")
@@ -404,7 +410,7 @@ def follow_off(viz_dir: Path | None = None) -> dict:
 # ---------------------------------------------------------------- services and apps
 # Two kinds of unit, both background processes that hold a GPU share and are off by default:
 #   service  a capability anyone can use: services/<name>/service.json (semantic_memory, llm)
-#   app      a script built on services:   app/<name>/app.json         (follow_me)
+#   app      a script built on services:   app/<name>/app.json         (follow_me, semantic_obstacles)
 # The manifest is the whole definition, so a new unit needs a folder, not an edit here:
 #   {"run": ["bash", "x.sh"],                       argv; argv[1] is relative to the folder;
 #                                                   "{rig}" becomes the node's rig yaml
