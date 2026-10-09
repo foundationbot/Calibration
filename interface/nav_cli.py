@@ -63,7 +63,6 @@ SVC_RESULT = Path("/dev/shm/okvis_svc_result")
 RECORD_REQUEST = Path("/dev/shm/okvis_record_request")
 RECORD_RESULT = Path("/dev/shm/okvis_record_result")
 RECORD_STATE = Path("/dev/shm/okvis_record")
-LIVEVIZ_URL = os.environ.get("OKVIS_LIVEVIZ_URL", "http://127.0.0.1:8899")
 NODE_FRESH_S = 5.0   # status older than this = the node is gone (the ring outlives it, #201)
 
 # ---------------------------------------------------------------- dma::ShmRingBuffer, by hand
@@ -335,6 +334,38 @@ def follow_cmd(viz_dir: Path | None = None, **upd) -> dict:
         tmp.write_text(json.dumps(cur))
         os.replace(tmp, p)
     return cur
+
+
+def app_cmd(name: str, viz_dir: Path | None = None, **upd) -> dict:
+    """An app's operator input, <tap>/<name>_cmd.json: read it, or merge `upd` into it and bump "seq",
+    which is what the app acts on (tmp+rename: it never reads a torn file)."""
+    p = (VIZ_DIR if viz_dir is None else viz_dir) / f"{name}_cmd.json"
+    try:
+        cur = json.loads(p.read_text())
+    except (OSError, json.JSONDecodeError):
+        cur = {"seq": 0}
+    if upd:
+        cur.update(upd, seq=int(cur.get("seq", 0)) + 1)
+        tmp = p.with_name(f".{p.name}.tmp")
+        tmp.write_text(json.dumps(cur))
+        os.replace(tmp, p)
+    return cur
+
+
+def app_state(name: str, viz_dir: Path | None = None) -> dict:
+    """An app's newest output, <tap>/<name>_state.json, and its age: {"state": ... or None, "age": s or None}."""
+    p = (VIZ_DIR if viz_dir is None else viz_dir) / f"{name}_state.json"
+    try:
+        return {"state": json.loads(p.read_text()), "age": time.time() - p.stat().st_mtime}
+    except (OSError, json.JSONDecodeError):
+        return {"state": None, "age": None}
+
+
+def app_ask(name: str, timeout: float, viz_dir: Path | None = None, **upd) -> dict:
+    """app_cmd(**upd), then the app's state once it has answered that command (its "seq"), or {"err"}."""
+    seq = app_cmd(name, viz_dir, **upd)["seq"]
+    st, _ = _wait(lambda: (s := app_state(name, viz_dir)["state"]) and s.get("seq") == seq and s, timeout)
+    return st or {"err": f"{name} did not answer within {timeout} s"}
 
 
 def follow_state(viz_dir: Path | None = None) -> dict:
@@ -827,34 +858,24 @@ def record_stop() -> dict:
 # ---------------------------------------------------------------- semantic query, via liveviz
 # The CLIP index (several MB of frame features) lives in liveviz's memory, and loading it per
 # call would cost seconds, so this one command asks liveviz. It is always up beside the node.
-def _liveviz_get(path: str, timeout: float = 20.0) -> dict:
-    with urllib.request.urlopen(LIVEVIZ_URL + path, timeout=timeout) as r:
-        return json.loads(r.read().decode())
-
-
-def semantic_query(text: str, top: int = 5) -> dict:
-    """Ranked keyframes for `text`: score, image path, camera pose at that keyframe
-    (x y z, quaternion, stamp) and the bearing to the matched grid cell. NOT the object's
-    position: the index stores no depth, so a hit is a camera pose plus a ray."""
-    try:
-        st = _liveviz_get("/semantic/state", timeout=5)
-        r = _liveviz_get("/semantic?text=" + urllib.parse.quote_plus(text) + f"&top={int(top)}")
-    except Exception as e:
-        return {"ok": False, "err": f"liveviz at {LIVEVIZ_URL}: {e}"}
-    if not r.get("ok"):
-        return r
-    images = st.get("images")
+def semantic_query(text: str, top: int = 5, timeout: float = 30.0) -> dict:
+    """Ranked keyframes for `text`, from the goto_object app (which asks semantic_memory): score, image
+    path, camera pose at that keyframe (x y z, quaternion, stamp) and the bearing to the matched grid
+    cell. NOT the object's position: the index stores no depth, so a hit is a camera pose plus a ray."""
+    if not unit_running("app", "goto_object"):
+        return {"ok": False, "err": "the goto_object app is off: nav-cli app start goto_object"}
+    st = app_ask("goto_object", timeout, text=text, top=int(top), drive=False, frame=None)
+    if st.get("err") or not st.get("topk"):
+        return {"ok": False, "err": st.get("err") or "no answer"}
     hits = []
-    for h in r.get("topk", [])[:top]:
-        e = {"score": round(h["score"], 4), "frame": h["i"],
-             "image": str(Path(images) / h["img"]) if images else h["img"],
+    for h in st["topk"][:top]:
+        e = {"score": round(h["score"], 4), "frame": h["i"], "image": h.get("image", h["img"]),
              "pos": [h["x"], h["y"], h["z"]]}
         for k in ("q", "stamp_ns", "bearing", "cell"):
             if k in h:
                 e[k] = h[k]
         hits.append(e)
-    return {"ok": True, "text": text, "n_frames": r.get("n"), "hits": hits}
-
+    return {"ok": True, "text": text, "n_frames": st.get("n"), "hits": hits}
 
 
 # ---------------------------------------------------------------- perception reads, for the agent
@@ -1367,12 +1388,13 @@ def cmd_record(a) -> dict:
 
 
 def cmd_semantic(a) -> dict:
-    r = semantic_query(" ".join(a.text), max(a.top, (a.go or 0) + 1))
-    if r.get("ok") and a.go is not None:
+    text = " ".join(a.text)
+    r = semantic_query(text, max(a.top, (a.go or 0) + 1))
+    if r.get("ok") and a.go is not None:   # the app drives: to where hit N was seen from, facing it
         if a.go >= len(r["hits"]):
             return {"ok": False, "err": f"only {len(r['hits'])} hits, no hit {a.go}", "hits": r["hits"]}
-        g = semantic_go(r["hits"][a.go], " ".join(a.text), a.timeout)
-        return {**g, "hits": r["hits"]}
+        st = app_ask("goto_object", 30.0, text=text, drive=True, frame=r["hits"][a.go]["frame"])
+        return {**(st.get("drive") or {"ok": False, "err": st.get("err") or "no drive"}), "hits": r["hits"]}
     if r.get("ok") and a.save:
         import shutil
         Path(a.save).mkdir(parents=True, exist_ok=True)
