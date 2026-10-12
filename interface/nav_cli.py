@@ -423,7 +423,8 @@ def follow_off(viz_dir: Path | None = None) -> dict:
 #    "requires": "perception" | "llama-server",     what the image must carry
 #    "services": [...],  (apps only)                the services it uses; services never use each other
 #    "label": "FOLLOW ME",  (apps only)             the console's button for it
-#    "outputs": [...]}  (apps only)                 its tap files: deleted at its start and stop (_app_reset)
+#    "outputs": [...],  (apps only)                 its tap files: deleted at its start and stop (_app_reset)
+#    "inset": "follow.jpg"}  (apps only)            a tap file shown over the 3D view while the app runs
 # Units belong to NOBODY's process: whoever starts one records its pid in /dev/shm, anyone can
 # see or stop it, and each runs in its own process group so a stop takes its children.
 # Lifecycle: `service start` by hand PINS a service (only `service stop` ends it). `app start`
