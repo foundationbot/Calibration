@@ -1270,7 +1270,7 @@ SCHEMA = [
     {"name": "follow", "args": {"action": ["prompt", "select", "off"], "value": "TEXT | X Y"},
      "help": "follow-me target: prompt = what to look for (no TEXT = blank; outside follow mode only shown, entering follow mode fills a blank one with person), select = pick the match at image fraction X Y in any mode (default in follow mode: the nearest), off = leave follow mode"},
     {"name": "slam", "args": {"action": ["restart", "stop"], "--mode": list(OKVIS_MODES), "--autonomy": list(AUTONOMY_MODES),
-                              "--follow-standoff": "METRES (follow-me hold distance, default 0.8)", "--app": list(OKVIS_APPS)},
+                              "--follow-standoff": "METRES (follow-me hold distance, default 1.2)", "--app": list(OKVIS_APPS)},
      "help": "restart recreates the node from the newest on-device image (map and trajectory are lost); stop leaves it stopped"},
     {"name": "record", "args": {"action": ["start", "stop", "status"]}, "help": "one session.mcap per start..stop"},
     {"name": "semantic", "args": {"text": "str", "--top": "int", "--go": "hit index, drive to where it was seen from, facing it"},
