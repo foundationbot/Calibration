@@ -8,8 +8,7 @@ Library AND command line. liveviz imports this module; an agent, a shell or a la
     nav-cli verb reset-tracking|clear-goal
     nav-cli service list|start|stop|status [NAME]  nav-cli app list|start|stop|status [NAME]
     nav-cli follow prompt [TEXT] | select X Y | off
-    nav-cli slam restart [--mode M] [--autonomy A] [--follow-standoff M] [--app dma_live|replay] | stop
-    nav-cli record start|stop|status    nav-cli semantic TEXT [--top N] [--save DIR]
+    nav-cli semantic TEXT [--top N] [--save DIR]
     nav-cli verbose on|off              nav-cli --schema
     nav-cli pose | frame cam0|cam1|follow|routegrid [--out P] | depth [--sectors N] [--out P.pgm]
     nav-cli grid [--radius M] [--ascii] | look X Y [Z] [--hold S] | look off
@@ -42,7 +41,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-# ---------------------------------------------------------------- files the node and the agent share
+# ---------------------------------------------------------------- files the node shares
 SHM = Path("/dev/shm")
 AUTONOMY_GATE = Path(os.environ.get("OKVIS_AUTONOMY_GATE", "/dev/shm/okvis_autonomy"))
 NAVGOAL_PATH = Path(os.environ.get("OKVIS_NAV_GOAL_SHM", "/dev/shm/nav_goal"))
@@ -50,19 +49,6 @@ VERBS_PATH = Path(os.environ.get("OKVIS_VERBS_SHM", "/dev/shm/nav_verbs"))
 STATUS_RING_PATH = Path(os.environ.get("OKVIS_STATUS_SHM", "/dev/shm/nav_status"))
 VIZ_DIR = Path(os.environ.get("OKVIS_VIZ_DIR", "/dev/shm/okvis-viz"))
 VERBOSITY_FILE = Path("/dev/shm/okvis_verbosity")
-# The console agent (deployment/okvis-console-agent.sh, the okvis-agent pod): heartbeat, and the
-# request files it consumes. Nothing inside the OKVIS pod can recreate that pod.
-RESTART_AGENT = Path("/dev/shm/okvis_restart_agent")
-RESTART_AGENT_STALE_S = 10.0
-RESTART_REQUEST = Path("/dev/shm/okvis_restart_request")
-STOP_REQUEST = Path("/dev/shm/okvis_stop_request")
-# Services for a client outside the OKVIS pod (the VLM agent pod), the recorder pod, and the
-# recorder's state the agent republishes for `record status`.
-SVC_REQUEST = Path("/dev/shm/okvis_svc_request")
-SVC_RESULT = Path("/dev/shm/okvis_svc_result")
-RECORD_REQUEST = Path("/dev/shm/okvis_record_request")
-RECORD_RESULT = Path("/dev/shm/okvis_record_result")
-RECORD_STATE = Path("/dev/shm/okvis_record")
 NODE_FRESH_S = 5.0   # status older than this = the node is gone (the ring outlives it, #201)
 
 # ---------------------------------------------------------------- dma::ShmRingBuffer, by hand
@@ -437,9 +423,8 @@ REPO = (Path(__file__).resolve().parent.parent if Path(__file__).is_file()
 UNIT_DIRS = {"service": REPO / "services", "app": REPO / "app"}
 UNIT_FILE = {"service": "service.json", "app": "app.json"}
 FOLLOW_RIG = ""
-# What an app's parent runs once the app has exited (OKVIS_SVC_HERE: act in this pod, never
-# hand it to the agent).
-RECONCILE_CMD = ("OKVIS_SVC_HERE=1 python3 "
+# What an app's parent runs once the app has exited.
+RECONCILE_CMD = ("python3 "
                  + shlex.quote(str(Path(__file__).resolve() if Path(__file__).is_file()
                                    else REPO / "interface" / "nav_cli.py")) + " reconcile")
 
@@ -702,104 +687,8 @@ def unit_status(kind: str, name: str) -> dict:
     return out
 
 
-# ---------------------------------------------------------------- SLAM lifecycle, via the agent
-def agent_live() -> bool:
-    """Is the console agent (the okvis-agent pod) watching? Without one, asking for a restart
-    would stop SLAM and nothing would bring it back -- worse than not offering it."""
-    try:
-        return time.time() - RESTART_AGENT.stat().st_mtime < RESTART_AGENT_STALE_S
-    except OSError:
-        return False
-
-
-def agent_why() -> str:
-    """WHY the restart path is unavailable: a STALE heartbeat means the agent pod is behind or
-    being replaced; only a MISSING one means nobody is watching."""
-    try:
-        age = time.time() - RESTART_AGENT.stat().st_mtime
-    except OSError:
-        return ("no console agent -- the okvis-agent pod is not running "
-                "(k0s kubectl -n okvis get pods; runbook §4a)")
-    return (f"console agent is alive but {age:.0f}s behind (its pod restarting?); "
-            "try again in a moment")
-
-
-def agent_ask(request: Path, result: Path, line: str, timeout: float) -> dict:
-    """Hand one request to the agent and wait for its JSON answer. A request nobody takes
-    within 5 s means no agent is running."""
-    result.unlink(missing_ok=True)
-    request.write_text(line + "\n")
-    taken, _ = _wait(lambda: not request.exists(), 5.0)
-    if not taken:
-        request.unlink(missing_ok=True)
-        return {"ok": False, "err": f"nobody took {request.name}: only the k0s agent answers it "
-                                    "and none is running (k0s kubectl -n okvis get pods)"}
-    done, _ = _wait(lambda: result.exists() and result.read_text().strip(), timeout, period=0.2)
-    if not done:
-        return {"ok": False, "err": f"no answer to {line!r} within {timeout:.0f} s"}
-    try:
-        return json.loads(result.read_text())
-    except ValueError as e:
-        return {"ok": False, "err": f"bad answer from the agent: {e}"}
-
-
-def svc_here() -> bool:
-    """Do the services run HERE? Yes inside the OKVIS pod: when the agent execs us there
-    (OKVIS_SVC_HERE, so a request can never bounce back to the agent), and wherever the node's
-    pid from the status ring is visible as dma_live -- i.e. its own PID namespace. Anywhere else
-    (the VLM agent pod, the host) the agent starts them in the OKVIS pod."""
-    if os.environ.get("OKVIS_SVC_HERE"):
-        return True
-    st = status_read()
-    try:
-        return bool(st) and b"okvis2x_app_dma_live" in Path(f"/proc/{st['pid']}/cmdline").read_bytes()
-    except OSError:
-        return False
-
-
-OKVIS_MODES = ("map", "plan", "drive", "calibrate", "depth")
-AUTONOMY_MODES = ("patrol", "explore", "semantic", "follow")
-OKVIS_APPS = ("dma_live", "replay")
-
-
-def slam_restart(mode: str | None = None, autonomy: str | None = None, follow_standoff: float | None = None,
-                 app: str | None = None) -> dict:
-    """Ask the agent to recreate the OKVIS pod from okvis2x:on-device. The request file carries
-    KEY=VALUE overrides, which the agent patches into the ConfigMap okvis-env (they persist)."""
-    if not agent_live():
-        return {"ok": False, "err": agent_why()}
-    if mode is not None and mode not in OKVIS_MODES:
-        return {"ok": False, "err": f"mode must be one of {OKVIS_MODES}"}
-    if autonomy is not None and autonomy not in AUTONOMY_MODES:
-        return {"ok": False, "err": f"autonomy must be one of {AUTONOMY_MODES}"}
-    if app is not None and app not in OKVIS_APPS:
-        return {"ok": False, "err": f"app must be one of {OKVIS_APPS}"}
-    # No OKVIS_APP line = the agent appends OKVIS_APP=dma_live (#648).
-    lines = [f"OKVIS_MODE={mode}" if mode else None, f"OKVIS_AUTONOMY_MODE={autonomy}" if autonomy else None,
-             f"OKVIS_FOLLOW_STANDOFF_M={follow_standoff}" if follow_standoff is not None else None,
-             f"OKVIS_APP={app}" if app else None]
-    body = "\n".join(l for l in lines if l) or str(time.time())
-    try:
-        RESTART_REQUEST.write_text(body + "\n")
-    except OSError as e:
-        return {"ok": False, "err": f"could not ask for a restart: {e}"}
-    return {"ok": True, "requested": "restart", "overrides": [l for l in lines if l]}
-
-
-def slam_stop() -> dict:
-    """Stop the OKVIS pod and LEAVE it stopped (via the agent). Anything running inside it,
-    liveviz included, goes down with it."""
-    if not agent_live():
-        return {"ok": False, "err": agent_why()}
-    try:
-        STOP_REQUEST.write_text(str(time.time()))
-    except OSError as e:
-        return {"ok": False, "err": f"could not ask the agent: {e}"}
-    return {"ok": True, "requested": "stop"}
-
-
 def okvis_mode() -> str | None:
-    """The running node's OKVIS_MODE: our own env inside the OKVIS pod (the ConfigMap's)."""
+    """The running node's OKVIS_MODE: our own env inside the OKVIS pod."""
     return os.environ.get("OKVIS_MODE") or None
 
 
@@ -818,50 +707,6 @@ def verbose_set(on: bool, path: Path | None = None) -> dict:
     except OSError as e:
         return {"ok": False, "err": str(e)}
     return {"ok": True, "verbose": on}
-
-
-# ---------------------------------------------------------------- recording, via the agent
-# A standalone recorder pod, okvis-record (deployment/k0s/record.yaml: one session.mcap of raw
-# sensors + believed-state channels, until stop finalises the file), independent of the SLAM
-# process and recording with okvis2x:on-device, i.e. THE BUILD BEING TESTED. The agent creates
-# and deletes it and republishes its state to RECORD_STATE.
-RECORD_DIR = Path("/data/okvis-recordings")
-
-
-def _record_files(out: dict) -> dict:
-    """Add the session.mcap size and the free disk to a recorder state."""
-    if out.get("name"):
-        try:
-            out["mcap_mb"] = round(os.stat(RECORD_DIR / out["name"] / "session.mcap").st_size / 1e6)
-        except OSError:
-            out["mcap_mb"] = None
-    try:
-        sv = os.statvfs(RECORD_DIR)
-        out["free_gb"] = round(sv.f_bavail * sv.f_frsize / 1e9, 1)
-    except OSError:
-        pass
-    return out
-
-
-def record_status() -> dict:
-    """The recorder pod as the agent last saw it, plus the file it writes."""
-    try:
-        st = json.loads(RECORD_STATE.read_text())
-    except (OSError, ValueError):
-        return {"ok": False, "err": "no recorder state from the agent"}
-    return _record_files({"ok": True, "recording": bool(st.get("recording")), "name": st.get("name"),
-                          "started_at": st.get("started_at")})
-
-
-def record_start(name: str | None = None) -> dict:
-    name = name or "rec-" + time.strftime("%Y%m%d-%H%M%S")
-    if not name.replace("-", "").replace("_", "").replace(".", "").isalnum():
-        return {"ok": False, "err": f"bad recording name {name!r}"}
-    return agent_ask(RECORD_REQUEST, RECORD_RESULT, f"start {name}", 90.0)
-
-
-def record_stop() -> dict:
-    return agent_ask(RECORD_REQUEST, RECORD_RESULT, "stop", 60.0)
 
 
 # ---------------------------------------------------------------- semantic query, via liveviz
@@ -1250,15 +1095,13 @@ def status() -> dict:
         "follow": follow_cmd(),
         "services": {n: unit_status("service", n) for n in units("service")},
         "apps": {n: unit_status("app", n) for n in units("app")},
-        "agent": agent_live(),
         "verbose": verbose_get(),
-        "record": record_status(),
     }
 
 
 # ---------------------------------------------------------------- command line
 SCHEMA = [
-    {"name": "status", "args": {"--watch": "bool"}, "help": "node, autonomy, modes, services, recorder; one JSON"},
+    {"name": "status", "args": {"--watch": "bool"}, "help": "node, autonomy, modes, services; one JSON"},
     {"name": "autonomy", "args": {"state": ["on", "off"]}, "help": "arm or disarm; the robot moves only while armed"},
     {"name": "mode", "args": {"mode": ["explore", "semantic", "patrol", "follow"]},
      "help": "goal source: explore = frontier NBV, patrol = straight-line tour, semantic = stop and await a goal, follow = follow-me"},
@@ -1270,10 +1113,6 @@ SCHEMA = [
     {"name": "reconcile", "args": {}, "help": "stop every service that no running app and no pin needs; safe at any time"},
     {"name": "follow", "args": {"action": ["prompt", "select", "off"], "value": "TEXT | X Y"},
      "help": "follow-me target: prompt = what to look for (no TEXT = blank; outside follow mode only shown, entering follow mode fills a blank one with person), select = pick the match at image fraction X Y in any mode (default in follow mode: the nearest), off = leave follow mode"},
-    {"name": "slam", "args": {"action": ["restart", "stop"], "--mode": list(OKVIS_MODES), "--autonomy": list(AUTONOMY_MODES),
-                              "--follow-standoff": "METRES (follow-me hold distance, default 1.2)", "--app": list(OKVIS_APPS)},
-     "help": "restart recreates the node from the newest on-device image (map and trajectory are lost); stop leaves it stopped"},
-    {"name": "record", "args": {"action": ["start", "stop", "status"]}, "help": "one session.mcap per start..stop"},
     {"name": "semantic", "args": {"text": "str", "--top": "int", "--go": "hit index, drive to where it was seen from, facing it"},
      "help": "where was TEXT seen: ranked keyframes with camera pose and bearing; --go N commits hit N as the goal"},
     {"name": "verbose", "args": {"state": ["on", "off"]}, "help": "node log detail"},
@@ -1357,8 +1196,6 @@ def cmd_unit(a) -> dict:
     if not a.name:
         return {"ok": False, "err": f"{kind} {a.action} needs a NAME: {', '.join(units(kind))}"}
     wait = a.timeout if a.timeout is not None else float((_unit(kind, a.name) or {}).get("up_s", 30))
-    if not svc_here():
-        return agent_ask(SVC_REQUEST, SVC_RESULT, f"{kind} {a.action} {a.name}", wait + 15)
     if _unit(kind, a.name) is None:
         return _missing(kind, a.name)
     if a.action == "status":
@@ -1386,14 +1223,6 @@ def cmd_follow(a) -> dict:
             return {"ok": False, "err": "select needs X Y as image fractions in [0,1]"}
         return {"ok": True, "follow": follow_cmd(click=[x, y])}   # picks a target; never the mode
     return {"ok": False, "err": "unknown follow action"}
-
-
-def cmd_slam(a) -> dict:
-    return slam_restart(a.mode, a.autonomy, a.follow_standoff, a.app) if a.action == "restart" else slam_stop()
-
-
-def cmd_record(a) -> dict:
-    return {"start": record_start, "stop": record_stop, "status": record_status}[a.action]()
 
 
 def cmd_semantic(a) -> dict:
@@ -1491,10 +1320,6 @@ def build_parser() -> argparse.ArgumentParser:
         p = add(kind); p.add_argument("action", choices=["list", "start", "stop", "status"]); p.add_argument("name", nargs="?")
     add("reconcile")
     p = add("follow"); p.add_argument("action", choices=["prompt", "select", "off"]); p.add_argument("value", nargs="*")
-    p = add("slam"); p.add_argument("action", choices=["restart", "stop"])
-    p.add_argument("--mode", choices=OKVIS_MODES); p.add_argument("--autonomy", choices=AUTONOMY_MODES)
-    p.add_argument("--follow-standoff", type=float); p.add_argument("--app", choices=OKVIS_APPS)
-    p = add("record"); p.add_argument("action", choices=["start", "stop", "status"])
     p = add("semantic"); p.add_argument("text", nargs="+"); p.add_argument("--top", type=int, default=5)
     p.add_argument("--save", metavar="DIR", help="copy the hit images here")
     p.add_argument("--go", type=int, metavar="N", help="commit hit N (0 = best) as the goal: drive to where it was seen from, facing it")
@@ -1509,13 +1334,20 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+# Where --robot finds OKVIS: the PKO DaemonSet okvis2x (manifests/base/okvis2x).
+OKVIS_NS = "positronic"
+OKVIS_POD_LABEL = "app.kubernetes.io/name=okvis2x"
+
+
 def run_remote(host: str, argv: list[str]) -> int:
-    """Run THIS file on the robot: inside the OKVIS pod when it is up (the services and their
-    paths live there), else on the host (the rings and request files are the same /dev/shm, so
-    `slam restart` still works). stdout and the exit code come straight back."""
+    """Run THIS file on the robot: inside the running OKVIS pod when there is one (the services
+    and their paths live there), else on the host (the rings are the same /dev/shm). The pod is
+    the DaemonSet okvis2x's in namespace positronic, named okvis2x-<hash>, so it is found by its
+    label. stdout and the exit code come straight back."""
     args = " ".join(shlex.quote(a) for a in argv)
-    script = (f"if k0s kubectl -n okvis get pod okvis2x -o jsonpath='{{.status.phase}}' 2>/dev/null | grep -q Running; "
-              f"then exec k0s kubectl -n okvis exec -i okvis2x -- python3 - {args}; "
+    script = (f"pod=$(k0s kubectl -n {OKVIS_NS} get pod -l {OKVIS_POD_LABEL} --field-selector=status.phase=Running "
+              f"-o jsonpath='{{.items[0].metadata.name}}' 2>/dev/null); "
+              f"if [ -n \"$pod\" ]; then exec k0s kubectl -n {OKVIS_NS} exec -i \"$pod\" -c okvis2x -- python3 - {args}; "
               f"else exec python3 - {args}; fi")
     with open(__file__, "rb") as src:
         return subprocess.run(["ssh", host, script], stdin=src).returncode
@@ -1538,7 +1370,7 @@ def main(argv: list[str] | None = None) -> int:
     if a.timeout is None and a.cmd not in ("service", "app"):
         a.timeout = 2.0
     handler = {"status": cmd_status, "autonomy": cmd_autonomy, "mode": cmd_mode, "verb": cmd_verb,
-               "service": cmd_unit, "app": cmd_unit, "reconcile": cmd_reconcile, "follow": cmd_follow, "slam": cmd_slam, "record": cmd_record,
+               "service": cmd_unit, "app": cmd_unit, "reconcile": cmd_reconcile, "follow": cmd_follow,
                "semantic": cmd_semantic, "verbose": cmd_verbose, "pose": cmd_pose, "frame": cmd_frame,
                "depth": cmd_depth, "grid": cmd_grid, "look": cmd_look, "goto": cmd_goto}[a.cmd]
     return _emit(handler(a))
