@@ -46,8 +46,8 @@ from pathlib import Path
 SHM = Path("/dev/shm")
 AUTONOMY_GATE = Path(os.environ.get("OKVIS_AUTONOMY_GATE", "/dev/shm/okvis_autonomy"))
 NAVGOAL_PATH = Path(os.environ.get("OKVIS_NAV_GOAL_SHM", "/dev/shm/nav_goal"))
-VERBS_PATH = Path(os.environ.get("OKVIS_VERBS_SHM", "/dev/shm/okvis_verbs"))
-STATUS_RING_PATH = Path(os.environ.get("OKVIS_STATUS_SHM", "/dev/shm/okvis_status"))
+VERBS_PATH = Path(os.environ.get("OKVIS_VERBS_SHM", "/dev/shm/nav_verbs"))
+STATUS_RING_PATH = Path(os.environ.get("OKVIS_STATUS_SHM", "/dev/shm/nav_status"))
 VIZ_DIR = Path(os.environ.get("OKVIS_VIZ_DIR", "/dev/shm/okvis-viz"))
 VERBOSITY_FILE = Path("/dev/shm/okvis_verbosity")
 # The console agent (deployment/okvis-console-agent.sh, the okvis-agent pod): heartbeat, and the
@@ -73,7 +73,7 @@ def ring_push(path: Path, fmt: str, fields, stamp_ns=None) -> dict:
     """Push one record onto a dma::ShmRingBuffer, following its push() exactly.
     stamp_ns: record timestamp (ns); default is the push time.
 
-    Shared by /nav_goal and /okvis_verbs: both mirror the same 192-byte DMA_QUEU header and
+    Shared by /nav_goal and /nav_verbs: both mirror the same 192-byte DMA_QUEU header and
     slot geometry, and two copies of those offsets are how they drift apart.
 
     Write order is the writer's whole contract: payload, then the slot's sequence, then head.
@@ -155,7 +155,7 @@ def ring_read_latest(path: Path, payload: int) -> tuple[bytes, int] | None:
         mm.close()
 
 
-# ---------------------------------------------------------------- /okvis_status (#205)
+# ---------------------------------------------------------------- /nav_status (#205)
 # The node publishes its state as ONE struct at ~20 Hz (StatusDMAPublisher.hpp documents
 # every byte offset mirrored here). Reading THIS instead of inferring state from log prose
 # is the fix for the 2026-08-31 false alarm. Liveness comes from the header's last_write_ns
@@ -256,9 +256,9 @@ def follow_target_push(capture_ns: int, flags: int, xyz, similarity: float = mat
                      (1, flags, *xyz, similarity, depth_ns, edge), stamp_ns=capture_ns)
 
 
-# ---------------------------------------------------------------- /okvis_verbs (#204)
+# ---------------------------------------------------------------- /nav_verbs (#204)
 # Console -> node commands the node is allowed to REFUSE. The answer comes back as
-# last_verb_seq / last_verb_accepted / last_verb_reason in /okvis_status -- there is
+# last_verb_seq / last_verb_accepted / last_verb_reason in /nav_status -- there is
 # deliberately no second reply channel. A verb supersedes nothing, so the node drains this
 # ring in order, and the ring's sequence IS the verb's sequence: the node echoes it.
 VERB_STRUCT = "<qIHH2d64s"   # OkvisVerbData, 96 bytes, as VerbDMA.hpp documents
