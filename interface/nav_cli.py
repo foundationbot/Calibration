@@ -300,6 +300,30 @@ def autonomy_set(on: bool) -> dict:
     return {"ok": True, "autonomy": autonomy_get()}
 
 
+# ---------------------------------------------------------------- tap demand
+_want_viz_t = 0.0
+
+
+def want_viz(viz_dir: Path | None = None, when=None) -> None:
+    """Keep the app writing its viz taps: touch <tap>/.want_viz, at most once a second.
+
+    dma_live writes rgbd.bin, the camera JPEGs and the map taps only while this marker is under
+    10 s old (okvis::viztap::setDemandGated), so a robot nobody watches pays nothing for them.
+    Call it every loop from a reader that is ACTIVE; `when` (a callable) is asked only when a
+    touch is due, so a reader can make it conditional without paying for the check every loop."""
+    global _want_viz_t
+    now = time.monotonic()
+    if now - _want_viz_t < 1.0:
+        return
+    _want_viz_t = now
+    if when is not None and not when():
+        return
+    try:
+        ((VIZ_DIR if viz_dir is None else viz_dir) / ".want_viz").touch()
+    except OSError:
+        pass
+
+
 # ---------------------------------------------------------------- follow-me intent file
 # app/follow_me/follow_me.py reads the operator's intent from follow_cmd.json in the tap dir:
 # the mode and the last click (a new click bumps
