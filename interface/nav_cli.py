@@ -208,12 +208,12 @@ def _wait(pred, timeout: float, period: float = 0.1):
 # ---------------------------------------------------------------- /nav_goal: the mode ring
 # A goal supersedes the previous goal, so this ring is read latest-wins. GO with a
 # coordinate is deliberately NOT sent from here (only follow_me.py does, in follow mode).
-NAV_STOP, NAV_EXPLORE, NAV_PATROL = 2, 3, 4   # okvis::NavCommand (mirrored by hand, see test)
+NAV_GO, NAV_STOP, NAV_EXPLORE, NAV_PATROL = 1, 2, 3, 4   # okvis::NavCommand (mirrored by hand, see test)
 NAV_FOLLOW = 10                              # lean follow; sent only by app/follow_me/follow_me.py
 NAV_STRUCT = "<qIHHfffI"                     # NavGoalData, 32 bytes, as its header documents
 NAV_MODES = {"semantic": NAV_STOP, "explore": NAV_EXPLORE, "patrol": NAV_PATROL}
-NAV_NAMES = {NAV_STOP: "SEMANTIC (stop + await a goal)", NAV_EXPLORE: "EXPLORE (resume NBV)",
-             NAV_PATROL: "PATROL (straight-line tour)"}
+NAV_NAMES = {NAV_GO: "GO (operator goal)", NAV_STOP: "SEMANTIC (stop + await a goal)",
+             NAV_EXPLORE: "EXPLORE (resume NBV)", NAV_PATROL: "PATROL (straight-line tour)"}
 
 
 def navgoal_push(command: int, path: Path | None = None) -> dict:
@@ -225,6 +225,18 @@ def navgoal_push(command: int, path: Path | None = None) -> dict:
     if not r.get("ok"):
         return r
     return {"ok": True, "command": command, "name": NAV_NAMES.get(command, str(command)), "seq": r["seq"]}
+
+
+def navgoal_go(x: float, y: float, yaw_rad: float = math.nan, path: Path | None = None) -> dict:
+    """GO to (x, y) in the SLAM world frame on the /nav_goal ring: the node commits it as the operator goal
+    (dma_live's kNavCmdGo branch). format_version 1, so the arrival radius and yaw tolerance are the app's
+    defaults; yaw NaN = keep the heading the robot has when the goal lands. No log, offset or pose file:
+    this works wherever the node runs. The node answers no verb for it; the goal shows on /nav_status
+    (goal, goal_dist, goals_issued)."""
+    r = ring_push(path or NAVGOAL_PATH, NAV_STRUCT, (1, NAV_GO, float(x), float(y), float(yaw_rad), 0))
+    if not r.get("ok"):
+        return r
+    return {"ok": True, "command": NAV_GO, "name": NAV_NAMES[NAV_GO], "seq": r["seq"], "goal": [x, y]}
 
 
 # /follow_target: follow-me's target measurement in the OKVIS cam0 frame, one per camera frame
@@ -1025,7 +1037,9 @@ LIVE_LOGS = (Path("/work/live.log"), Path("/data/okvis-perf/live.log"))
 def camera_yaw_offset_deg() -> float | None:
     """The yaw of the semantic camera's optical axis in the body frame, as the node derived it
     from T_SC at startup (its "[semantic-goal] pose-index ingress armed ... cam_yaw_deg=" line).
-    Read, never guessed: a wrong constant turns every goal by that constant."""
+    Read, never guessed: a wrong constant turns every goal by that constant. Without that log file
+    (a pod with no /work), the same value computed from the node's rig yaml by the node's own
+    formula (camera_yaw_offset_from_rig)."""
     import re
     for p in LIVE_LOGS:
         try:
@@ -1040,7 +1054,105 @@ def camera_yaw_offset_deg() -> float | None:
                         break
         except OSError:
             continue
-    return None
+    rig = follow_rig()
+    return camera_yaw_offset_from_rig(rig) if rig else None
+
+
+def _leading_number(s: str, cast):
+    """C's strtod / atoi on a string: the longest numeric prefix, 0 when there is none."""
+    import re
+    m = re.match(r"\s*[-+]?(\d+\.?\d*([eE][-+]?\d+)?|\.\d+([eE][-+]?\d+)?)" if cast is float else r"\s*[-+]?\d+", s)
+    return cast(m.group(0)) if m else cast(0)
+
+
+def rig_cameras(path) -> list[dict]:
+    """The `cameras:` entries of an OKVIS rig yaml (OpenCV FileStorage YAML, flow or block style):
+    [{"T_SC": 16 floats row-major or None, "camera_type": str or None}], in file order. Stdlib only: the
+    okvis2x image's python has neither cv2 nor PyYAML. [] when the file cannot be read."""
+    import re
+    try:
+        lines = Path(path).read_text().splitlines()
+    except (OSError, UnicodeDecodeError):
+        return []
+    lines = [ln.split("#", 1)[0] for ln in lines]   # no '#' inside a rig yaml's values
+    try:
+        start = next(i for i, ln in enumerate(lines) if re.match(r"cameras\s*:", ln))
+    except StopIteration:
+        return []
+    body = []
+    for ln in lines[start + 1:]:
+        if ln[:1] not in ("", " ", "\t", "-") and ln.strip():   # the next top-level key
+            break
+        body.append(ln)
+    out = []
+    for item in re.split(r"(?m)^\s*-\s", "\n".join(body))[1:]:
+        m = re.search(r"T_SC\s*:\s*\[([^\]]*)\]", item)
+        t = re.search(r"camera_type\s*:\s*([^,}\s]+)", item)
+        try:
+            T = [float(v) for v in m.group(1).replace("\n", " ").split(",") if v.strip()] if m else None
+        except ValueError:
+            T = None
+        out.append({"T_SC": T if T and len(T) == 16 else None, "camera_type": t.group(1) if t else None})
+    return out
+
+
+def _quat_from_matrix(m) -> tuple[float, float, float, float]:
+    """Eigen's Quaternion<double>(Matrix3d) (Shepperd's method, quaternionbase_assign_impl), as (w, x, y, z).
+    Like Eigen it assumes nothing about orthonormality; the caller normalizes."""
+    import math as _m
+    t = m[0][0] + m[1][1] + m[2][2]
+    if t > 0:
+        t = _m.sqrt(t + 1.0)
+        w = 0.5 * t
+        t = 0.5 / t
+        return w, (m[2][1] - m[1][2]) * t, (m[0][2] - m[2][0]) * t, (m[1][0] - m[0][1]) * t
+    i = 0
+    if m[1][1] > m[0][0]:
+        i = 1
+    if m[2][2] > m[i][i]:
+        i = 2
+    j, k = (i + 1) % 3, (i + 2) % 3
+    t = _m.sqrt(m[i][i] - m[j][j] - m[k][k] + 1.0)
+    q = [0.0, 0.0, 0.0]
+    q[i] = 0.5 * t
+    t = 0.5 / t
+    w = (m[k][j] - m[j][k]) * t
+    q[j] = (m[j][i] + m[i][j]) * t
+    q[k] = (m[k][i] + m[i][k]) * t
+    return w, q[0], q[1], q[2]
+
+
+def camera_yaw_offset_from_rig(path, env=None) -> float | None:
+    """The semantic camera's yaw in the body frame [deg], computed from the rig yaml EXACTLY as dma_live
+    computes the value its "[semantic-goal] pose-index ingress armed ... cam_yaw_deg=" line prints
+    (okvis2x_app_dma_live.cpp, the OKVIS_SEMANTIC_GOAL_POSE block):
+      - the camera: the first colour one (ViParametersReader: camera_type not starting with "gray"; no
+        camera_type = colour, the CameraType default), or OKVIS_SEMANTIC_POSE_CAM_INDEX (atoi);
+      - its T_SC as the node holds it: ViParametersReader builds Transformation(r, q.normalized()) with
+        q = Eigen::Quaterniond(R) of the yaml's rotation, so R is re-orthonormalized through that quaternion;
+      - the optical axis is camera +z; in the IMU/body frame S it is R_SC * z (R's third column), and the
+        offset is atan2(axis.y, axis.x);
+      - an index with no camera: 0 ("assumed body +x"); OKVIS_SEMANTIC_POSE_CAM_YAW_DEG (strtod) overrides.
+    None when the rig cannot be read or names no camera."""
+    import math as _m
+    env = os.environ if env is None else env
+    if env.get("OKVIS_SEMANTIC_POSE_CAM_YAW_DEG") is not None:
+        return float(_leading_number(env["OKVIS_SEMANTIC_POSE_CAM_YAW_DEG"], float))
+    cams = rig_cameras(path)
+    if not cams:
+        return None
+    idx = next((i for i, c in enumerate(cams) if not (c["camera_type"] or "").startswith("gray")), -1)
+    if env.get("OKVIS_SEMANTIC_POSE_CAM_INDEX") is not None:
+        idx = _leading_number(env["OKVIS_SEMANTIC_POSE_CAM_INDEX"], int)
+    if not 0 <= idx < len(cams) or cams[idx]["T_SC"] is None:
+        return 0.0
+    T = cams[idx]["T_SC"]
+    w, x, y, z = _quat_from_matrix([T[0:3], T[4:7], T[8:11]])
+    n = _m.sqrt(w * w + x * x + y * y + z * z)
+    w, x, y, z = w / n, x / n, y / n, z / n
+    # Eigen toRotationMatrix, third column: (2xz + 2wy, 2yz - 2wx, 1 - 2xx - 2yy)
+    ax, ay = 2 * x * z + 2 * w * y, 2 * y * z - 2 * w * x
+    return _m.degrees(_m.atan2(ay, ax))
 
 
 def goal_request(ts_ns: int, p, q, bearing_deg: float, score: float, comment: str,
@@ -1074,8 +1186,8 @@ def goto(x: float, y: float, yaw_deg: float | None, timeout: float = 2.0) -> dic
         return e
     off = camera_yaw_offset_deg()
     if off is None:
-        return {"ok": False, "err": "camera yaw offset not found in the node log (no 'pose-index ingress armed' "
-                                    "line): is OKVIS_SEMANTIC_GOAL_POSE set for this run?"}
+        return {"ok": False, "err": "camera yaw offset not found: no 'pose-index ingress armed' line in the node "
+                                    "log and no readable rig yaml (is OKVIS_SEMANTIC_GOAL_POSE set for this run?)"}
     if yaw_deg is None:
         got = grid_read()
         if got is None:
