@@ -633,52 +633,36 @@ def frame_read(name: str, out: str | None = None, viz_dir: Path | None = None) -
     return r
 
 
-# --- /okvis_depth_{meta,frames}: metric stereo depth (#510), DepthDMAPublisher.hpp by hand.
-DEPTH_META_PATH = Path("/dev/shm/okvis_depth_meta")
-DEPTH_POOL_PATH = Path("/dev/shm/okvis_depth_frames")
-DEPTH_STRUCT = "<IIqqQIIHHB3x4f16f"
-DEPTH_KEYS = ("format_version", "seq", "stamp_ns", "publish_ns", "frame_seq", "pool_slot", "bytes",
-              "width", "height", "has_sigma", "fx", "fy", "cx", "cy")
-POOL_MAGIC = 0x4652414D45504F4F  # "FRAMEPOO"
+# --- /okvis_depth_{meta,frames}: metric stereo depth (#510), read through DMA.common's dma_ipc
+# (okvis_frames.FrameRing: DepthFrameMetaQueue + OkvisFramePool, AI-1184). No offsets here: the wire is
+# dma_common/okvis_frame_ipc.hpp's. Without the binding, depth_read() raises RuntimeError naming why.
+DEPTH_META_NAME = "/okvis_depth_meta"     # dma_ipc.OKVIS_DEPTH_META_QUEUE_NAME
+DEPTH_POOL_NAME = "/okvis_depth_frames"   # dma_ipc.OKVIS_DEPTH_FRAMES_POOL_NAME
+_depth_rings: dict = {}
 
 
-def depth_read(meta_path: Path | None = None, pool_path: Path | None = None) -> dict | None:
-    """The newest depth frame: {"age_s", "meta", "depth": float32 LE bytes, "sigma": the same or
-    None}; None if absent/torn.
-    The pool slot is copied between two checks of its sequence against the meta's frame_seq,
-    since the producer zeroes it before rewriting the slot."""
-    got = ring_read_latest(meta_path or DEPTH_META_PATH, struct.calcsize(DEPTH_STRUCT))
+def depth_read(meta_name: str | None = None, pool_name: str | None = None) -> dict | None:
+    """The newest depth frame: {"age_s", "meta" (okvis_frames.meta_dict), "depth": float32 LE bytes,
+    "sigma": the same or None}; None if absent, or if its pool slot was recycled / rewritten while
+    copied (DMA.common's seqlock read)."""
+    import okvis_frames
+    key = (meta_name or DEPTH_META_NAME, pool_name or DEPTH_POOL_NAME)
+    ring = _depth_rings.get(key)
+    if ring is None:
+        ring = _depth_rings[key] = okvis_frames.FrameRing("depth", *key)
+    newest = ring.newest()
+    if newest is None or newest[0].format_version < 1:
+        return None
+    m = newest[0]
+    try:
+        got = ring.pixels(m)
+    except ValueError:   # bytes do not match the geometry: not a frame this reader knows
+        return None
     if got is None:
         return None
-    raw, last_write_ns = got
-    f = struct.unpack(DEPTH_STRUCT, raw)
-    meta = dict(zip(DEPTH_KEYS, f[:14]))
-    meta["has_sigma"] = bool(meta["has_sigma"])
-    meta["T_SC"] = list(f[14:30])
-    n = meta["width"] * meta["height"] * 4
-    if meta["format_version"] < 1 or meta["bytes"] != n * (2 if meta["has_sigma"] else 1):
-        return None
-    try:
-        with open(pool_path or DEPTH_POOL_PATH, "rb") as fh:
-            mm = mmap.mmap(fh.fileno(), 0, prot=mmap.PROT_READ)
-    except (OSError, ValueError):
-        return None
-    try:
-        magic, _ver, num_slots, _max, stride = struct.unpack_from("<5Q", mm, 0)
-        slot = meta["pool_slot"]
-        if magic != POOL_MAGIC or slot >= num_slots or meta["bytes"] > stride - 64:
-            return None
-        off = 64 + slot * stride
-        s1 = struct.unpack_from("<Q", mm, off)[0]
-        data = bytes(mm[off + 64: off + 64 + meta["bytes"]])
-        if s1 != meta["frame_seq"] or struct.unpack_from("<Q", mm, off)[0] != s1:
-            return None
-    except (struct.error, ValueError):
-        return None
-    finally:
-        mm.close()
-    return {"age_s": round(max(0.0, (time.monotonic_ns() - last_write_ns) / 1e9), 2),
-            "meta": meta, "depth": data[:n], "sigma": data[n:] or None}
+    age = ring.age_s()
+    return {"age_s": round(age, 2) if age is not None else None, "meta": okvis_frames.meta_dict(m),
+            "depth": got[0].tobytes(), "sigma": None if got[1] is None else got[1].tobytes()}
 
 
 def depth_sectors(d: dict, sectors: int = 9, band: float = 1 / 3, min_m: float = 0.3) -> dict:
@@ -1118,7 +1102,7 @@ def cmd_frame(a) -> dict:
 def cmd_depth(a) -> dict:
     d = depth_read()
     if d is None:
-        return {"ok": False, "err": f"{DEPTH_META_PATH}: no depth frame (ring absent, torn, or never written)"}
+        return {"ok": False, "err": f"{DEPTH_META_NAME}: no depth frame (ring absent, torn, or never written)"}
     r = {"ok": True, "age_s": d["age_s"], "stamp_ns": d["meta"]["stamp_ns"],
          "size": [d["meta"]["width"], d["meta"]["height"]], **depth_sectors(d, a.sectors)}
     if a.out:
