@@ -20,28 +20,28 @@ Every command prints one JSON object. Exit 0 = done/accepted, 1 = the node refus
 COMMANDS GO THROUGH THE NAV API (interface/nav_api.py, 127.0.0.1:8897; env NAV_API_URL): it is the
 one writer of every operator-command ring (/nav_verbs, /nav_goal, /nav_pose_goal, /nav_look,
 /follow_cmd, /goto_object_cmd), so this file writes no ring and no command file
-(nav-commands-to-dma-rings plan, 2026-10-17). What it still does itself is READ: /nav_status,
-/route_grid and the depth ring by hand (stdlib, below), /goto_object_state through dma_ipc
-(interface/nav_rings.py).
+(nav-commands-to-dma-rings plan, 2026-10-17). What it still does itself is READ, and only through
+DMA.common's dma_ipc (SOF-1559: no hand-written mmap): /nav_status and /route_grid
+(interface/nav_rings.py, strict readers), the depth ring (interface/okvis_frames.py),
+/goto_object_state. Without the binding a read raises RuntimeError naming why, and the command line
+answers {"ok": false, "err": <why>} with exit 2.
 
 The service/app start-stop helpers (pidfiles in /dev/shm) are a BENCH tool: on a robot the
 perception apps are k0s Deployments started through the AI API server, and the nav API judges an
 app running by its state ring (interface/ring_fresh.py), never by a pidfile.
 
-Stdlib only for everything but the semantic query: it runs inside the OKVIS image, on the robot
-host, and on a laptop (--robot pipes this very file over ssh, so the version you run is the one in
-your checkout).
+Stdlib only for everything but the semantic query and the ring reads (dma_ipc, which the OKVIS image
+ships): it runs inside the OKVIS image, and on a laptop as --robot (which pipes this very file over
+ssh into the OKVIS pod, so the version you run is the one in your checkout).
 """
 from __future__ import annotations
 
 import argparse
 import json
 import math
-import mmap
 import os
 import shlex
 import signal
-import struct
 import subprocess
 import sys
 import time
@@ -52,7 +52,9 @@ from pathlib import Path
 
 # ---------------------------------------------------------------- what the node shares
 SHM = Path("/dev/shm")
-STATUS_RING_PATH = Path(os.environ.get("OKVIS_STATUS_SHM", "/dev/shm/nav_status"))
+# The shm queue name of the node's status ring (DMA.common NAV_STATUS_QUEUE_NAME). OKVIS_STATUS_SHM may
+# still name it as its /dev/shm path.
+STATUS_RING_NAME = "/" + Path(os.environ.get("OKVIS_STATUS_SHM", "/nav_status")).name
 VIZ_DIR = Path(os.environ.get("OKVIS_VIZ_DIR", "/dev/shm/okvis-viz"))
 VERBOSITY_FILE = Path("/dev/shm/okvis_verbosity")
 NODE_FRESH_S = 5.0   # status older than this = the node is gone (the ring outlives it, #201)
@@ -94,91 +96,88 @@ def api(path: str, body: dict | None = None, timeout: float = 10.0) -> dict:
     return out
 
 
-# ---------------------------------------------------------------- dma::ShmRingBuffer, by hand
-SHM_MAGIC = 0x444D415F51554555          # "DMA_QUEU"
+# ---------------------------------------------------------------- the node's rings, through DMA.common
+def _interface_import(mod: str):
+    """A sibling module of interface/. Piped over ssh by --robot this file is "<stdin>", so interface/ is
+    where the image keeps the repo (REPO, below)."""
+    d = str(Path(__file__).resolve().parent) if Path(__file__).is_file() else str(REPO / "interface")
+    if d not in sys.path:
+        sys.path.insert(0, d)
+    import importlib
+    return importlib.import_module(mod)
 
 
-def ring_read_latest(path: Path, payload: int) -> tuple[bytes, int] | None:
-    """The newest slot's payload and the ring's last_write_ns; None if absent/invalid/torn.
+_readers: dict = {}
 
-    Reader half of dma::ShmRingBuffer. Protocol: take head, step back one slot, check that
-    slot's sequence == head, copy the payload, re-check the sequence — a torn or lapped read
-    returns None and the next poll gets a clean one.
-    """
-    try:
-        with open(path, "rb") as fh:
-            mm = mmap.mmap(fh.fileno(), 0, prot=mmap.PROT_READ)
-    except (OSError, ValueError):
-        return None
-    try:
-        if struct.unpack_from("<Q", mm, 0)[0] != SHM_MAGIC:
-            return None
-        slot_size, capacity = struct.unpack_from("<QQ", mm, 16)
-        if capacity == 0 or (capacity & (capacity - 1)) != 0:
-            return None
-        header_size = len(mm) - capacity * slot_size
-        if header_size < 80 or slot_size < 8 + payload:
-            return None
-        head, = struct.unpack_from("<Q", mm, 64)
-        if head == 0:
-            return None  # created but never written
-        last_write_ns, = struct.unpack_from("<q", mm, 72)
-        off = header_size + ((head - 1) & (capacity - 1)) * slot_size
-        seq1, = struct.unpack_from("<Q", mm, off)
-        raw = bytes(mm[off + 8: off + 8 + payload])
-        seq2, = struct.unpack_from("<Q", mm, off)
-        if seq1 != head or seq2 != seq1:
-            return None
-        return raw, last_write_ns
-    except (struct.error, ValueError):
-        return None
-    finally:
-        mm.close()
+
+def ring_reader(ring: str, name: str):
+    """The strict nav_rings.Reader of `ring` on queue `name`, one per (ring, name): it keeps its queue, consumer
+    and header view across polls. RuntimeError (nav_rings.RingError) naming why when this image's dma_ipc
+    cannot read it."""
+    key = (ring, name)
+    r = _readers.get(key)
+    if r is None:
+        nav_rings = _interface_import("nav_rings")
+        r = _readers[key] = nav_rings.Reader(ring, name=name, strict=True)
+    return r
 
 
 # ---------------------------------------------------------------- /nav_status (#205)
-# The node publishes its state as ONE struct at ~20 Hz (StatusDMAPublisher.hpp documents
-# every byte offset mirrored here). Reading THIS instead of inferring state from log prose
-# is the fix for the 2026-08-31 false alarm. Liveness comes from the header's last_write_ns
-# (CLOCK_MONOTONIC, comparable here because console and node share the kernel).
-STATUS_VERSION = 3
-STATUS_STRUCT = "<IIqqii3f4f4fI4BIB3x64s2B50s"   # OkvisStatusData v3, 208 bytes
+# The node publishes its state as ONE NavStatusData at ~100 Hz (DMA.common nav_ipc_types.h, written by
+# StatusDMAPublisher.hpp), read here through dma_ipc.NavStatusQueue: no offsets in this file. Reading THIS
+# instead of inferring state from log prose is the fix for the 2026-08-31 false alarm. Liveness comes from
+# the ring header's last_write_ns (CLOCK_MONOTONIC, comparable here because console and node share the
+# kernel).
+STATUS_VERSION = 3   # NAV_STATUS_FORMAT_VERSION this reader knows: node, console and recorder ship in one image
 
 
-def status_read(path: Path | None = None) -> dict | None:
-    """The newest OkvisStatusData, decoded; None if absent/invalid/torn/wrong version."""
-    got = ring_read_latest(path or STATUS_RING_PATH, struct.calcsize(STATUS_STRUCT))
-    if got is None:
+def status_dict(m, age_s: float | None) -> dict | None:
+    """One NavStatusData as the dict every caller uses; None for another format version."""
+    if m is None or int(m.format_version) != STATUS_VERSION:
         return None
-    raw, last_write_ns = got
-    try:
-        (ver, seq, stamp_ns, pose_stamp_ns, pid, fsm,
-         px, py, pz, qx, qy, qz, qw, gx, gy, gz, gdist,
-         goals_issued, goal_valid, armed, pyield, semantic,
-         verb_seq, verb_ok, reason, dmode, dfrozen, dlabel) = struct.unpack(STATUS_STRUCT, raw)
-    except struct.error:
-        return None
-    if ver != STATUS_VERSION:
-        return None
-    age_s = max(0.0, (time.monotonic_ns() - last_write_ns) / 1e9)
+    pose_stamp_ns, stamp_ns = int(m.pose_stamp_ns), int(m.stamp_ns)
+    p = [float(m.px), float(m.py), float(m.pz)]
+    q = [float(m.qx), float(m.qy), float(m.qz), float(m.qw)]
+    verb_seq = int(m.last_verb_seq)
     return {
-        "age_s": round(age_s, 2), "seq": seq, "pid": pid,
+        "age_s": round(age_s, 2) if age_s is not None else None, "seq": int(m.seq), "pid": int(m.pid),
         "pose_age_s": (round((stamp_ns - pose_stamp_ns) / 1e9, 1) if pose_stamp_ns > 0 else None),
-        "pos": [round(px, 2), round(py, 2), round(pz, 2)],
-        "fsm": fsm,
-        "goal": ([round(gx, 2), round(gy, 2), round(gz, 2)] if goal_valid else None),
-        "goal_dist": (round(gdist, 2) if gdist >= 0 else None),
-        "goals_issued": goals_issued,
-        "armed": bool(armed), "yield": bool(pyield), "semantic": bool(semantic),
-        "verb": ({"seq": verb_seq, "ok": bool(verb_ok),
-                  "reason": reason.split(b"\0", 1)[0].decode(errors="replace")}
+        "pos": [round(v, 2) for v in p],
+        "fsm": int(m.fsm_state),
+        "goal": ([round(float(m.goal_x), 2), round(float(m.goal_y), 2), round(float(m.goal_z), 2)]
+                 if int(m.goal_valid) else None),
+        "goal_dist": (round(float(m.goal_dist_m), 2) if float(m.goal_dist_m) >= 0 else None),
+        "goals_issued": int(m.goals_issued),
+        "armed": bool(m.autonomy_armed), "yield": bool(m.pad_yield), "semantic": bool(m.semantic_mode),
+        "verb": ({"seq": verb_seq, "ok": bool(m.last_verb_accepted), "reason": str(m.last_verb_reason)}
                  if verb_seq > 0 else None),
-        "debug": {"mode": bool(dmode), "frozen": bool(dfrozen),
-                  "label": dlabel.split(b"\0", 1)[0].decode(errors="replace")},
+        "debug": {"mode": bool(m.debug_mode), "frozen": bool(m.debug_frozen), "label": str(m.debug_label)},
         # The full SLAM pose T_WS, unrounded: the depth cloud is placed with it.
-        "pose": ({"stamp_ns": pose_stamp_ns, "p": [px, py, pz], "q": [qx, qy, qz, qw]}
-                 if pose_stamp_ns > 0 else None),
+        "pose": ({"stamp_ns": pose_stamp_ns, "p": p, "q": q} if pose_stamp_ns > 0 else None),
     }
+
+
+def status_read(name: str | None = None) -> dict | None:
+    """The newest NavStatusData, as status_dict; None if the ring is absent, never written, or another
+    version. RuntimeError naming why when this image's dma_ipc cannot read /nav_status."""
+    r = ring_reader("nav_status", name or STATUS_RING_NAME)
+    m = r.latest()
+    if m is None:
+        return None
+    age = r.age_s()
+    return status_dict(m, 0.0 if age is None else age)
+
+
+def status_poses(name: str | None = None) -> dict:
+    """Every SLAM pose the /nav_status ring still holds, {pose_stamp_ns: {"stamp_ns", "p", "q"}}. The node
+    republishes its newest state at every tick, so one stamp appears in several records; any is the same pose."""
+    out: dict = {}
+    for m in ring_reader("nav_status", name or STATUS_RING_NAME).records():
+        if int(m.format_version) == STATUS_VERSION and int(m.pose_stamp_ns) > 0:
+            t = int(m.pose_stamp_ns)
+            out[t] = {"stamp_ns": t, "p": [float(m.px), float(m.py), float(m.pz)],
+                      "q": [float(m.qx), float(m.qy), float(m.qz), float(m.qw)]}
+    return out
 
 
 def node_fresh(st: dict | None = None) -> dict | None:
@@ -709,30 +708,29 @@ def depth_write_pgm(d: dict, out: str) -> dict:
     return {"path": out, "format": "pgm16-mm"}
 
 
-# --- /route_grid: the 2D traversability map the planner drives on, decoded by interface/route_grid_mcap.
-ROUTEGRID_RING_PATH = Path(os.environ.get("OKVIS_ROUTEGRID_SHM", "/dev/shm/route_grid"))
+# --- /route_grid: the 2D traversability map the planner drives on, read through dma_ipc.RouteGridQueue
+# (DMA.common nav_ipc_types.h RouteGridData) and handed on as interface/route_grid_mcap's RouteGrid.
+ROUTEGRID_RING_NAME = "/" + Path(os.environ.get("OKVIS_ROUTEGRID_SHM", "/route_grid")).name
 
 
 def _route_grid_mcap():
-    sys.path.insert(0, str(REPO / "interface"))
-    import route_grid_mcap
-    return route_grid_mcap
+    return _interface_import("route_grid_mcap")
 
 
-def grid_read(path: Path | None = None):
-    """The newest RouteGrid on the ring and its age in seconds, or None. (RouteGrid has
-    __slots__, so the age rides beside it.)"""
-    rg = _route_grid_mcap()
-    for n in (rg.RECORD_SIZE, rg.RECORD_SIZE_V2, rg.RECORD_SIZE_V1):
-        got = ring_read_latest(path or ROUTEGRID_RING_PATH, n)
-        if got is None:
-            continue
-        try:
-            g = rg.decode(got[0][:n])
-        except ValueError:
-            continue
-        return g, round(max(0.0, (time.monotonic_ns() - got[1]) / 1e9), 2)
-    return None
+def grid_read(name: str | None = None):
+    """The newest RouteGrid on the ring and its age in seconds, or None (absent, never written, or a record
+    this reader does not know). (RouteGrid has __slots__, so the age rides beside it.) RuntimeError naming
+    why when this image's dma_ipc cannot read /route_grid."""
+    r = ring_reader("route_grid", name or ROUTEGRID_RING_NAME)
+    m = r.latest()
+    if m is None:
+        return None
+    try:
+        g = _route_grid_mcap().from_record(m)
+    except ValueError:
+        return None
+    age = r.age_s()
+    return g, round(age, 2) if age is not None else 0.0
 
 
 COMPASS = ("+x", "+x+y", "+y", "-x+y", "-x", "-x-y", "-y", "+x-y")
@@ -1000,8 +998,8 @@ def _need_node() -> dict | None:
     if node_fresh(st):
         return None
     if st is None:
-        return {"ok": False, "err": f"{STATUS_RING_PATH}: no status ring (node never ran here)"}
-    return {"ok": False, "err": f"{STATUS_RING_PATH}: node not fresh (age {st['age_s']} s)"}
+        return {"ok": False, "err": f"{STATUS_RING_NAME}: no status ring (node never ran here)"}
+    return {"ok": False, "err": f"{STATUS_RING_NAME}: node not fresh (age {st['age_s']} s)"}
 
 
 def cmd_autonomy(a) -> dict:
@@ -1113,7 +1111,7 @@ def cmd_depth(a) -> dict:
 def cmd_grid(a) -> dict:
     got = grid_read()
     if got is None:
-        return {"ok": False, "err": f"{ROUTEGRID_RING_PATH}: no route grid (ring absent or never written)"}
+        return {"ok": False, "err": f"{ROUTEGRID_RING_NAME}: no route grid (ring absent or never written)"}
     return {"ok": True, **grid_summary(got[0], a.radius, a.ascii, got[1])}
 
 
@@ -1202,7 +1200,10 @@ def main(argv: list[str] | None = None) -> int:
                "service": cmd_unit, "app": cmd_unit, "reconcile": cmd_reconcile, "follow": cmd_follow,
                "semantic": cmd_semantic, "verbose": cmd_verbose, "pose": cmd_pose, "frame": cmd_frame,
                "depth": cmd_depth, "grid": cmd_grid, "look": cmd_look, "goto": cmd_goto}[a.cmd]
-    return _emit(handler(a))
+    try:
+        return _emit(handler(a))
+    except RuntimeError as e:   # a ring this image's dma_ipc cannot read (nav_rings.RingError, okvis_frames)
+        return _emit({"ok": False, "err": str(e)})
 
 
 if __name__ == "__main__":
