@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """nav-cli: the one command surface for the OKVIS node, its services and its apps (#610).
 
-Library AND command line. liveviz imports this module; an agent, a shell or a laptop runs it:
+Library AND command line. An agent, a shell or a laptop runs it:
 
     nav-cli status                      nav-cli --robot phantom21 status
     nav-cli autonomy on|off             nav-cli mode explore|semantic|patrol|follow
@@ -15,14 +15,22 @@ Library AND command line. liveviz imports this module; an agent, a shell or a la
     nav-cli goto X Y [YAW_DEG] | semantic TEXT --go 0      # pose goals; the robot moves only while armed
 
 Every command prints one JSON object. Exit 0 = done/accepted, 1 = the node refused,
-2 = transport (ring missing, node not fresh, service did not come up, timeout).
+2 = transport (nav API or ring missing, node not fresh, service did not come up, timeout).
 
-Wire formats are mirrored BY HAND from the C++ headers (StatusDMAPublisher.hpp, VerbDMA.hpp,
-NavGoalDMA) -- this file is the one copy of them on the Python side. test_nav_cli.py pins
-them against the headers.
+COMMANDS GO THROUGH THE NAV API (interface/nav_api.py, 127.0.0.1:8897; env NAV_API_URL): it is the
+one writer of every operator-command ring (/nav_verbs, /nav_goal, /nav_pose_goal, /nav_look,
+/follow_cmd, /goto_object_cmd), so this file writes no ring and no command file
+(nav-commands-to-dma-rings plan, 2026-10-17). What it still does itself is READ: /nav_status,
+/route_grid and the depth ring by hand (stdlib, below), /goto_object_state through dma_ipc
+(interface/nav_rings.py).
 
-Stdlib only: it runs inside the OKVIS image, on the robot host, and on a laptop (--robot
-pipes this very file over ssh, so the version you run is the one in your checkout).
+The service/app start-stop helpers (pidfiles in /dev/shm) are a BENCH tool: on a robot the
+perception apps are k0s Deployments started through the AI API server, and the nav API judges an
+app running by its state ring (interface/ring_fresh.py), never by a pidfile.
+
+Stdlib only for everything but the semantic query: it runs inside the OKVIS image, on the robot
+host, and on a laptop (--robot pipes this very file over ssh, so the version you run is the one in
+your checkout).
 """
 from __future__ import annotations
 
@@ -37,70 +45,57 @@ import struct
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
-# ---------------------------------------------------------------- files the node shares
+# ---------------------------------------------------------------- what the node shares
 SHM = Path("/dev/shm")
-AUTONOMY_GATE = Path(os.environ.get("OKVIS_AUTONOMY_GATE", "/dev/shm/okvis_autonomy"))
-NAVGOAL_PATH = Path(os.environ.get("OKVIS_NAV_GOAL_SHM", "/dev/shm/nav_goal"))
-VERBS_PATH = Path(os.environ.get("OKVIS_VERBS_SHM", "/dev/shm/nav_verbs"))
 STATUS_RING_PATH = Path(os.environ.get("OKVIS_STATUS_SHM", "/dev/shm/nav_status"))
 VIZ_DIR = Path(os.environ.get("OKVIS_VIZ_DIR", "/dev/shm/okvis-viz"))
 VERBOSITY_FILE = Path("/dev/shm/okvis_verbosity")
 NODE_FRESH_S = 5.0   # status older than this = the node is gone (the ring outlives it, #201)
+NAV_API_URL = os.environ.get("NAV_API_URL", "http://127.0.0.1:8897")
+
+
+# ---------------------------------------------------------------- the nav API: every command goes here
+def api(path: str, body: dict | None = None, timeout: float = 10.0) -> dict:
+    """One call to the nav API: POST `body` as JSON (GET when None). Returns its answer plus "http" (the
+    status code) and, when not ok, "err" (its reason) and "refused" (a rule or the node said no: 409/410),
+    so _emit's exit codes hold: 0 ok, 1 refused, 2 transport (no API, 503, timeout)."""
+    url = NAV_API_URL.rstrip("/") + path
+    data = None if body is None else json.dumps(body).encode()
+    headers = {"Content-Type": "application/json"}
+    try:   # inside a span (goto_object's command, a traced tool): the nav API continues its trace
+        sys.path.insert(0, str(Path(__file__).resolve().parent) if Path(__file__).is_file() else str(REPO / "interface"))
+        import okvis_otel
+        headers.update(okvis_otel.headers_for_current())
+    except Exception:  # noqa: BLE001 -- piped over ssh (no sibling modules), or no OTel: untraced
+        pass
+    req = urllib.request.Request(url, data=data, method="GET" if body is None else "POST", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            code, raw = r.status, r.read()
+    except urllib.error.HTTPError as e:
+        code, raw = e.code, e.read()
+    except (urllib.error.URLError, OSError) as e:
+        return {"ok": False, "http": None, "err": f"nav API at {NAV_API_URL}: {getattr(e, 'reason', e)}"}
+    try:
+        out = json.loads(raw or b"{}")
+    except ValueError:
+        out = {"ok": False, "reason": f"not JSON: {raw[:120]!r}"}
+    if not isinstance(out, dict):
+        out = {"ok": False, "reason": f"not a JSON object: {raw[:120]!r}"}
+    out["http"] = code
+    if not out.get("ok"):
+        out.setdefault("err", out.get("reason") or f"HTTP {code}")
+        out["refused"] = code in (400, 404, 409, 410)
+    return out
+
 
 # ---------------------------------------------------------------- dma::ShmRingBuffer, by hand
 SHM_MAGIC = 0x444D415F51554555          # "DMA_QUEU"
-
-
-def ring_push(path: Path, fmt: str, fields, stamp_ns=None) -> dict:
-    """Push one record onto a dma::ShmRingBuffer, following its push() exactly.
-    stamp_ns: record timestamp (ns); default is the push time.
-
-    Shared by /nav_goal and /nav_verbs: both mirror the same 192-byte DMA_QUEU header and
-    slot geometry, and two copies of those offsets are how they drift apart.
-
-    Write order is the writer's whole contract: payload, then the slot's sequence, then head.
-    A reader takes head, steps back one slot and checks that slot's sequence, so publishing
-    head before the slot is filled would hand it a stale or half-written record. msync
-    between the steps because Python gives us no release ordering of its own.
-
-    `fields` are the values for `fmt` EXCLUDING the leading timestamp_ns and sequence, which
-    this function stamps itself -- the ring's sequence and the record's must agree.
-    """
-    try:
-        with open(path, "r+b") as fh:
-            mm = mmap.mmap(fh.fileno(), 0)
-    except OSError as e:
-        return {"ok": False, "err": f"{path}: {e}"}
-    try:
-        magic, _version = struct.unpack_from("<QQ", mm, 0)
-        slot_size, capacity = struct.unpack_from("<QQ", mm, 16)
-        if magic != SHM_MAGIC:
-            return {"ok": False, "err": f"bad magic 0x{magic:016x} — not a dma_common ring"}
-        if capacity == 0 or (capacity & (capacity - 1)) != 0:
-            # push() indexes with `head & (Capacity - 1)`, which is only modulo for a power
-            # of two. Refuse rather than write to a slot the reader never looks at.
-            return {"ok": False, "err": f"capacity {capacity} is not a power of two"}
-        header_size = len(mm) - capacity * slot_size
-        if header_size < 72 or slot_size < 8 + struct.calcsize(fmt):
-            return {"ok": False, "err": f"unexpected geometry: header {header_size}, slot {slot_size}"}
-        head = struct.unpack_from("<Q", mm, 64)[0]
-        off = header_size + (head & (capacity - 1)) * slot_size
-        struct.pack_into(fmt, mm, off + 8, time.time_ns() if stamp_ns is None else stamp_ns, (head + 1) & 0xFFFFFFFF, *fields)
-        mm.flush()
-        struct.pack_into("<Q", mm, off, head + 1)              # slot sequence marks it valid
-        mm.flush()
-        struct.pack_into("<Q", mm, 64, head + 1)               # publish
-        struct.pack_into("<q", mm, 72, time.monotonic_ns())    # last_write_ns, a recency hint
-        mm.flush()
-    except (struct.error, ValueError) as e:
-        return {"ok": False, "err": str(e)}
-    finally:
-        mm.close()
-    return {"ok": True, "seq": head + 1}
 
 
 def ring_read_latest(path: Path, payload: int) -> tuple[bytes, int] | None:
@@ -205,111 +200,33 @@ def _wait(pred, timeout: float, period: float = 0.1):
         time.sleep(period)
 
 
-# ---------------------------------------------------------------- /nav_goal: the mode ring
-# A goal supersedes the previous goal, so this ring is read latest-wins. GO with a
-# coordinate is deliberately NOT sent from here (only follow_me.py does, in follow mode).
+# ---------------------------------------------------------------- /nav_goal: wire values
+# A goal supersedes the previous goal, so this ring is read latest-wins. Its one writer is the nav API
+# (operator: GO, STOP, EXPLORE, PATROL); follow_me's FOLLOW / STOP go on /follow_goal, its own ring.
 NAV_GO, NAV_STOP, NAV_EXPLORE, NAV_PATROL = 1, 2, 3, 4   # okvis::NavCommand (mirrored by hand, see test)
 NAV_FOLLOW = 10                              # lean follow; sent only by app/follow_me/follow_me.py
-NAV_STRUCT = "<qIHHfffI"                     # NavGoalData, 32 bytes, as its header documents
 NAV_MODES = {"semantic": NAV_STOP, "explore": NAV_EXPLORE, "patrol": NAV_PATROL}
 NAV_NAMES = {NAV_GO: "GO (operator goal)", NAV_STOP: "SEMANTIC (stop + await a goal)",
              NAV_EXPLORE: "EXPLORE (resume NBV)", NAV_PATROL: "PATROL (straight-line tour)"}
-
-
-def navgoal_push(command: int, path: Path | None = None) -> dict:
-    """Push one positionless command onto the /nav_goal ring."""
-    r = ring_push(path or NAVGOAL_PATH, NAV_STRUCT,
-                  (1, command,          # format_version, command
-                   0.0, 0.0, 0.0,       # goal x, y, yaw — unused by STOP/EXPLORE/PATROL
-                   0))                  # reserved
-    if not r.get("ok"):
-        return r
-    return {"ok": True, "command": command, "name": NAV_NAMES.get(command, str(command)), "seq": r["seq"]}
-
-
-def navgoal_go(x: float, y: float, yaw_rad: float = math.nan, path: Path | None = None) -> dict:
-    """GO to (x, y) in the SLAM world frame on the /nav_goal ring: the node commits it as the operator goal
-    (dma_live's kNavCmdGo branch). format_version 1, so the arrival radius and yaw tolerance are the app's
-    defaults; yaw NaN = keep the heading the robot has when the goal lands. No log, offset or pose file:
-    this works wherever the node runs. The node answers no verb for it; the goal shows on /nav_status
-    (goal, goal_dist, goals_issued)."""
-    r = ring_push(path or NAVGOAL_PATH, NAV_STRUCT, (1, NAV_GO, float(x), float(y), float(yaw_rad), 0))
-    if not r.get("ok"):
-        return r
-    return {"ok": True, "command": NAV_GO, "name": NAV_NAMES[NAV_GO], "seq": r["seq"], "goal": [x, y]}
-
-
-# /follow_target: follow-me's target measurement in the OKVIS cam0 frame, one per camera frame
-# (okvis::FollowTargetData in NavCommandDMA.hpp). No SLAM pose: the app maps it to the pelvis
-# with the neck FK at the capture stamp.
-FOLLOWTARGET_PATH = Path("/dev/shm/follow_target")
-FT_STRUCT = "<qIHHffffqb7x"             # FollowTargetData, 48 bytes, as its header documents
-FT_TARGET_VALID, FT_RANGE_VALID, FT_LOST = 1, 2, 4  # okvis::FollowTargetFlag
-
-
-def follow_target_push(capture_ns: int, flags: int, xyz, similarity: float = math.nan,
-                       depth_ns: int = 0, edge: int = 0) -> dict:
-    """Push one measurement: xyz in OKVIS cam0 [m], a unit ray unless FT_RANGE_VALID."""
-    return ring_push(FOLLOWTARGET_PATH, FT_STRUCT,
-                     (1, flags, *xyz, similarity, depth_ns, edge), stamp_ns=capture_ns)
+FT_TARGET_VALID, FT_RANGE_VALID, FT_LOST = 1, 2, 4  # okvis::FollowTargetFlag (/follow_target)
 
 
 # ---------------------------------------------------------------- /nav_verbs (#204)
-# Console -> node commands the node is allowed to REFUSE. The answer comes back as
-# last_verb_seq / last_verb_accepted / last_verb_reason in /nav_status -- there is
-# deliberately no second reply channel. A verb supersedes nothing, so the node drains this
-# ring in order, and the ring's sequence IS the verb's sequence: the node echoes it.
-VERB_STRUCT = "<qIHH2d64s"   # OkvisVerbData, 96 bytes, as VerbDMA.hpp documents
+# Console -> node commands the node is allowed to REFUSE. The answer comes back on /nav_acks
+# (kind verb, req_seq = the verb's seq; also /nav_status.last_verb_* for older readers). A verb
+# supersedes nothing, so the node drains this ring in order. Its one writer is the nav API.
 # WIRE FORMAT, shared with okvis_dma/include/okvis/VerbDMA.hpp: a console and a node from
 # different builds share this ring, so a renumber turns one verb into another with nothing
 # erroring. The test pins these against the header.
 VERB_RESET_TRACKING, VERB_CLEAR_SEMANTIC_GOAL = 1, 2
 VERB_ARM, VERB_DISARM, VERB_REC_START, VERB_REC_STOP = 3, 4, 5, 6
 VERB_GS_STREAM_ON, VERB_GS_STREAM_OFF = 7, 8
-VERB_SEMANTIC_GOAL = 9   # "a pose request is waiting in the goal file"; the seq is what the file never had
+VERB_SEMANTIC_GOAL = 9   # retired: pose goals come on /nav_pose_goal; the node refuses it (append-only)
 VERB_NAMES = {VERB_RESET_TRACKING: "RESET_TRACKING", VERB_CLEAR_SEMANTIC_GOAL: "CLEAR_SEMANTIC_GOAL",
               VERB_ARM: "ARM", VERB_DISARM: "DISARM", VERB_REC_START: "REC_START", VERB_REC_STOP: "REC_STOP",
               VERB_GS_STREAM_ON: "GS_STREAM_ON", VERB_GS_STREAM_OFF: "GS_STREAM_OFF",
               VERB_SEMANTIC_GOAL: "SEMANTIC_GOAL"}
 CLI_VERBS = {"reset-tracking": VERB_RESET_TRACKING, "clear-goal": VERB_CLEAR_SEMANTIC_GOAL}
-
-
-def verb_push(verb: int, arg0: float = 0.0, arg1: float = 0.0, text: str = "",
-              path: Path | None = None) -> dict:
-    """Send one verb. The returned seq is what the ACK will carry. The node treats
-    last_verb_seq == 0 as "no verb yet" and ring_push stamps head+1, so the first verb on a
-    fresh ring is seq 1 and never collides with that sentinel."""
-    r = ring_push(path or VERBS_PATH, VERB_STRUCT,
-                  (1, verb, float(arg0), float(arg1), text.encode()[:63]))   # 63 + NUL
-    name = VERB_NAMES.get(verb, f"verb {verb}")
-    if not r.get("ok"):
-        return r
-    return {"ok": True, "verb": verb, "name": name, "seq": r["seq"]}
-
-
-def verb_wait(seq: int, timeout: float) -> dict | None:
-    """The node's ACK for verb `seq` from the status ring, or None on timeout."""
-    def acked():
-        st = status_read()
-        v = st and st.get("verb")
-        return v if v and v["seq"] == seq else None
-    return _wait(acked, timeout)
-
-
-# ---------------------------------------------------------------- autonomy gate
-def autonomy_get() -> bool:
-    return AUTONOMY_GATE.exists()
-
-
-def autonomy_set(on: bool) -> dict:
-    try:
-        if on:
-            AUTONOMY_GATE.touch()
-        else:
-            AUTONOMY_GATE.unlink(missing_ok=True)
-    except OSError as e:
-        return {"ok": False, "err": str(e)}
-    return {"ok": True, "autonomy": autonomy_get()}
 
 
 # ---------------------------------------------------------------- tap demand
@@ -336,101 +253,16 @@ def want_viz(viz_dir: Path | None = None, when=None) -> None:
         pass
 
 
-# ---------------------------------------------------------------- follow-me intent file
-# app/follow_me/follow_me.py reads the operator's intent from follow_cmd.json in the tap dir:
-# the mode and the last click (a new click bumps
-# seq, which is how follow_me.py tells a fresh pick from the same one). It writes follow.jpg
-# and follow_state.json back.
-def follow_cmd(viz_dir: Path | None = None, **upd) -> dict:
-    d = VIZ_DIR if viz_dir is None else viz_dir
-    p = d / "follow_cmd.json"
+# ---------------------------------------------------------------- app state, read off the apps' rings
+def goto_object_state() -> dict | None:
+    """goto_object's newest answer on /goto_object_state (nav_rings.goto_state_dict), or None. Needs
+    dma_ipc (interface/nav_rings.py); without it, None."""
     try:
-        cur = json.loads(p.read_text())
-    except (OSError, json.JSONDecodeError):
-        cur = {"seq": 0, "mode": "off", "click": None}
-    if upd:
-        if "click" in upd:
-            cur["seq"] = int(cur.get("seq", 0)) + 1
-        cur.update(upd)
-        tmp = p.with_name(".follow_cmd.json.tmp")
-        tmp.write_text(json.dumps(cur))
-        os.replace(tmp, p)
-    return cur
-
-
-def app_cmd(name: str, viz_dir: Path | None = None, **upd) -> dict:
-    """An app's operator input, <tap>/<name>_cmd.json: read it, or merge `upd` into it and bump "seq",
-    which is what the app acts on (tmp+rename: it never reads a torn file)."""
-    p = (VIZ_DIR if viz_dir is None else viz_dir) / f"{name}_cmd.json"
-    try:
-        cur = json.loads(p.read_text())
-    except (OSError, json.JSONDecodeError):
-        cur = {"seq": 0}
-    if upd:
-        cur.update(upd, seq=int(cur.get("seq", 0)) + 1)
-        tmp = p.with_name(f".{p.name}.tmp")
-        tmp.write_text(json.dumps(cur))
-        os.replace(tmp, p)
-    return cur
-
-
-def app_state(name: str, viz_dir: Path | None = None) -> dict:
-    """An app's newest output, <tap>/<name>_state.json, and its age: {"state": ... or None, "age": s or None}."""
-    p = (VIZ_DIR if viz_dir is None else viz_dir) / f"{name}_state.json"
-    try:
-        return {"state": json.loads(p.read_text()), "age": time.time() - p.stat().st_mtime}
-    except (OSError, json.JSONDecodeError):
-        return {"state": None, "age": None}
-
-
-def app_ask(name: str, timeout: float, viz_dir: Path | None = None, **upd) -> dict:
-    """app_cmd(**upd), then the app's state once it has answered that command (its "seq"), or {"err"}."""
-    seq = app_cmd(name, viz_dir, **upd)["seq"]
-    st, _ = _wait(lambda: (s := app_state(name, viz_dir)["state"]) and s.get("seq") == seq and s, timeout)
-    return st or {"err": f"{name} did not answer within {timeout} s"}
-
-
-def follow_state(viz_dir: Path | None = None) -> dict:
-    d = VIZ_DIR if viz_dir is None else viz_dir
-    out = {"cmd": follow_cmd(d), "state": None, "age": None}
-    p = d / "follow_state.json"
-    try:
-        out["state"] = json.loads(p.read_text())
-        out["age"] = time.time() - p.stat().st_mtime
-    except (OSError, json.JSONDecodeError):
-        pass
-    return out
-
-
-def follow_enter(viz_dir: Path | None = None) -> dict:
-    """Into FOLLOW (mode follow; app start follow_me does it): if FOLLOW was off, STOP on /nav_goal
-    (suspend NBV + drop any held goal, as SEMANTIC does), a blank target becomes the visible "person",
-    and follow_me.py follows the target clicked before, else the nearest match. Refused while the
-    follow_me app is off: the app's button is its only switch. The robot moves only while ARMED."""
-    if not unit_running("app", "follow_me"):
-        return {"ok": False, "err": "the follow_me app is off: FOLLOW needs it on (nav-cli app start follow_me)"}
-    c = follow_cmd(viz_dir)
-    if c["mode"] == "off":
-        navgoal_push(NAV_STOP)
-        follow_cmd(viz_dir, mode="follow", since=time.time(), prompt=c.get("prompt") or "person")
-    return {"ok": True, "running": True}
-
-
-def follow_leave(viz_dir: Path | None = None) -> dict:
-    """Out of FOLLOW, by any mode change: the target goes back to blank. The app keeps running
-    (its button stops it). Sends nothing: the caller's mode does."""
-    c = follow_cmd(viz_dir)
-    if c.get("mode", "off") != "off":
-        c = follow_cmd(viz_dir, mode="off", prompt="")
-    return c
-
-
-def follow_off(viz_dir: Path | None = None) -> dict:
-    """Leave FOLLOW. If following, STOP first: follow_me.py sends its own STOP on "off", but a
-    following robot must not coast on the app's 1.5 s dead man if it does not."""
-    if follow_cmd(viz_dir).get("mode") == "follow":
-        navgoal_push(NAV_STOP)
-    return follow_leave(viz_dir)
+        sys.path.insert(0, str(Path(__file__).resolve().parent) if Path(__file__).is_file() else str(REPO / "interface"))
+        import nav_rings
+        return nav_rings.goto_state_dict(nav_rings.Reader("goto_object_state").latest())
+    except Exception:  # noqa: BLE001 -- no binding, no ring: no state
+        return None
 
 
 # ---------------------------------------------------------------- services and apps
@@ -440,7 +272,8 @@ def follow_off(viz_dir: Path | None = None) -> dict:
 # The manifest is the whole definition, so a new unit needs a folder, not an edit here:
 #   {"run": ["bash", "x.sh"],                       argv; argv[1] is relative to the folder;
 #                                                   "{rig}" becomes the node's rig yaml
-#    "probe": "http://..." | "file:<tap file>" | "shm:<file in /dev/shm>",   ready = answers / written in the last 5 s
+#    "probe": "http://..." | "ring:/<ring>" | "file:<tap file>" | "shm:<file in /dev/shm>",
+#                                                   ready = answers / pushed / written in the last 5 s
 #    "up_s": 40,                                    how long a start waits for the probe
 #    "requires": "perception" | "llama-server",     what the image must carry
 #    "services": [...],  (apps only)                the services it uses; services never use each other
@@ -546,6 +379,10 @@ def unit_up(kind: str, name: str) -> bool:
     probe = (_unit(kind, name) or {}).get("probe")
     if not probe:
         return unit_running(kind, name)
+    if probe.startswith("ring:"):   # a DMA ring pushed in the last 5 s (interface/ring_fresh.py)
+        sys.path.insert(0, str(REPO / "interface"))
+        import ring_fresh
+        return ring_fresh.fresh(probe[len("ring:"):], 5.0, SHM)
     for prefix, base in (("file:", VIZ_DIR), ("shm:", SHM)):   # a file written in the last 5 s
         if probe.startswith(prefix):
             try:
@@ -634,33 +471,26 @@ def service_stop(name: str) -> dict:
     return {"ok": True, "service": name, "running": False}
 
 
-def semantic_clear(viz_dir: Path | None = None) -> None:
-    """An EMPTY semantic_pts.bin: dma_live drops every semantic obstacle cell at once (not on its TTL)."""
-    d = VIZ_DIR if viz_dir is None else viz_dir
-    tmp = d / ".semantic_pts.bin.tmp"
-    tmp.write_bytes(struct.pack("<4sId", b"OKSM", 0, time.time()))
-    os.replace(tmp, d / "semantic_pts.bin")
-
-
 def _app_reset(name: str, viz_dir: Path | None = None) -> None:
     """Nothing from a previous run, at an app's start and at its stop: the tap files its manifest lists
-    as "outputs" are deleted, and the operator inputs it reads from follow_cmd.json go back to blank
-    (follow_me: mode off, no target, no click; semantic_obstacles: no list, and its cells cleared)."""
+    as "outputs" are deleted, and the operator inputs it reads go back to blank through the nav API
+    (follow_me: out of FOLLOW; semantic_obstacles: no list, which has the app clear its cells).
+    Best effort: with no nav API there is nothing to reset."""
     d = VIZ_DIR if viz_dir is None else viz_dir
     for f in _unit("app", name).get("outputs", []):
         (d / f).unlink(missing_ok=True)
     if name == "follow_me":
-        follow_cmd(viz_dir, mode="off", prompt="", click=None)
+        api("/follow", {"mode": "off"}, timeout=3.0)
     elif name == "semantic_obstacles":
-        follow_cmd(viz_dir, obstacles="", obstacles_t=time.time())
-        semantic_clear(viz_dir)
+        api("/follow/obstacles", {"text": ""}, timeout=3.0)
 
 
 def app_start(name: str, wait_s: float = 0.0, viz_dir: Path | None = None) -> dict:
-    """Start the app's services (unpinned), then the app under a parent that reconciles when the
-    app exits -- a crash included, which never calls nav-cli itself. An app runs from its start
-    until its stop (the console's button), idle while it has nothing to do. follow_me's start
-    also enters FOLLOW (follow_enter): FOLLOW exists exactly while follow_me runs."""
+    """BENCH TOOL. Start the app's services (unpinned), then the app under a parent that reconciles when
+    the app exits -- a crash included, which never calls nav-cli itself. An app runs from its start
+    until its stop, idle while it has nothing to do. On a robot the apps are k0s Deployments (the AI
+    API server starts them); this is for a bench box without one. Entering FOLLOW is the nav API's
+    (POST /follow {"mode": "follow"}), once follow_me's /follow_state is live."""
     if not unit_available("app", name):
         return _missing("app", name)
     for s in _unit("app", name).get("services", []):
@@ -672,18 +502,16 @@ def app_start(name: str, wait_s: float = 0.0, viz_dir: Path | None = None) -> di
         _app_reset(name, viz_dir)   # nothing from a previous run
         parent = '"$@"; rm -f ' + shlex.quote(str(_pidfile("app", name))) + "; " + RECONCILE_CMD + " >/dev/null 2>&1"
         pid = _spawn("app", name, ["sh", "-c", parent, "sh", *unit_argv("app", name)])
-    if name == "follow_me" and unit_running("app", name):
-        follow_enter(viz_dir)
     return _await_up("app", name, pid, wait_s)
 
 
 def app_stop(name: str, viz_dir: Path | None = None) -> dict:
-    """follow_me's stop leaves FOLLOW first (follow_off: STOP if following, target blank). Then, as at
-    its start, nothing of the app is left behind (_app_reset)."""
+    """BENCH TOOL. follow_me's stop leaves FOLLOW first (the nav API: STOP if following, target blank).
+    Then, as at its start, nothing of the app is left behind (_app_reset)."""
     if _unit("app", name) is None:
         return _missing("app", name)
     if name == "follow_me":
-        follow_off(viz_dir)
+        api("/follow", {"mode": "off"}, timeout=3.0)
     _kill("app", name)
     _app_reset(name, viz_dir)
     reconcile()
@@ -745,27 +573,34 @@ def verbose_set(on: bool, path: Path | None = None) -> dict:
     return {"ok": True, "verbose": on}
 
 
-# ---------------------------------------------------------------- semantic query, via liveviz
-# The CLIP index (several MB of frame features) lives in liveviz's memory, and loading it per
-# call would cost seconds, so this one command asks liveviz. It is always up beside the node.
+# ---------------------------------------------------------------- semantic query, through goto_object
+def goto_ask(text: str, top: int = 5, drive: bool = False, frame: int | None = None,
+             timeout: float = 30.0) -> dict:
+    """POST /goto_object/cmd, then goto_object's answer to it on /goto_object_state (answered_seq ==
+    the command's seq), or {"ok": False, "err"}."""
+    r = api("/goto_object/cmd", {"text": text, "top": int(top), "drive": bool(drive), "frame": frame})
+    if not r.get("ok"):
+        return r
+    seq = r["seq"]
+    st, waited = _wait(lambda: (s := goto_object_state()) and s.get("answered_seq") == seq and s, timeout, 0.1)
+    if not st:
+        return {"ok": False, "seq": seq, "waited_s": waited,
+                "err": f"goto_object did not answer seq {seq} on /goto_object_state within {timeout} s"}
+    return {**st, "ok": not st.get("err"), "waited_s": waited}
+
+
 def semantic_query(text: str, top: int = 5, timeout: float = 30.0) -> dict:
-    """Ranked keyframes for `text`, from the goto_object app (which asks semantic_memory): score, image
-    path, camera pose at that keyframe (x y z, quaternion, stamp) and the bearing to the matched grid
-    cell. NOT the object's position: the index stores no depth, so a hit is a camera pose plus a ray."""
-    if not unit_running("app", "goto_object"):
-        return {"ok": False, "err": "the goto_object app is off: nav-cli app start goto_object"}
-    st = app_ask("goto_object", timeout, text=text, top=int(top), drive=False, frame=None)
-    if st.get("err") or not st.get("topk"):
-        return {"ok": False, "err": st.get("err") or "no answer"}
-    hits = []
-    for h in st["topk"][:top]:
-        e = {"score": round(h["score"], 4), "frame": h["i"], "image": h.get("image", h["img"]),
-             "pos": [h["x"], h["y"], h["z"]]}
-        for k in ("q", "stamp_ns", "bearing", "cell"):
-            if k in h:
-                e[k] = h[k]
-        hits.append(e)
-    return {"ok": True, "text": text, "n_frames": st.get("n"), "hits": hits}
+    """Ranked keyframes for `text`, from the goto_object app (which asks semantic_memory): score, the camera
+    position at that keyframe, its stamp and the bearing to the matched grid cell. NOT the object's
+    position: the index stores no depth, so a hit is a camera pose plus a ray. The thumbnails are
+    goto_object's taps, <tap dir>/goto_hit<k>.jpg, where it writes them."""
+    st = goto_ask(text, top, False, None, timeout)
+    if not st.get("ok") or not st.get("hits"):
+        return {"ok": False, "err": st.get("err") or "no hits", **({"seq": st["seq"]} if "seq" in st else {})}
+    hits = [{"score": round(h["score"], 4), "frame": h["frame"], "pos": [h["x"], h["y"], h["z"]],
+             "bearing": h["bearing_deg"], "stamp_ns": h["stamp_ns"], "image": str(VIZ_DIR / f"goto_hit{k}.jpg")}
+            for k, h in enumerate(st["hits"][:top])]
+    return {"ok": True, "text": text, "seq": st.get("answered_seq"), "hits": hits}
 
 
 # ---------------------------------------------------------------- perception reads, for the agent
@@ -991,46 +826,9 @@ def pose() -> dict:
     return r
 
 
-# --- look_at.txt: the gaze target. The node points the head at "x y z" (world) while the file
-# is younger than 1 s and the robot is idle in a latched mode (semantic/follow); a stopped
-# writer releases the head. So a one-shot write is a glance, and --hold rewrites it.
-def look_at(x: float, y: float, z: float = 0.0, hold_s: float = 0.0, viz_dir: Path | None = None) -> dict:
-    d = VIZ_DIR if viz_dir is None else viz_dir
-    p = d / "look_at.txt"
-    t0 = time.monotonic()
-    n = 0
-    while True:
-        tmp = p.with_name(".look_at.txt.tmp")
-        tmp.write_text("%.4f %.4f %.4f\n" % (x, y, z))
-        os.replace(tmp, p)
-        n += 1
-        if time.monotonic() - t0 >= hold_s:
-            break
-        time.sleep(0.2)
-    return {"ok": True, "look_at": [x, y, z], "writes": n, "held_s": round(time.monotonic() - t0, 1),
-            "note": "the head follows only while the robot is idle in semantic/follow mode; the file ages out after 1 s"}
-
-
-def look_off(viz_dir: Path | None = None) -> dict:
-    p = (VIZ_DIR if viz_dir is None else viz_dir) / "look_at.txt"
-    p.unlink(missing_ok=True)
-    return {"ok": True, "look_at": None}
-
-
-
-# ---------------------------------------------------------------- pose goals: goto, and drive to a semantic hit
-# The node's pose-goal ingress (SemanticPoseGoal.hpp): a request FILE with one line
-#     <ts_ns> <x> <y> <z> <qx> <qy> <qz> <qw> <bearing_deg> [score]
-# plus verb SEMANTIC_GOAL to say "a request is waiting"; the ACK comes back on the status ring.
-# The goal is the pose itself, facing yaw(q) + camera_yaw_offset + bearing. With ts != 0 the node
-# re-resolves the pose from the trajectory as it stands now (loop closure moves old poses), so a
-# semantic hit is sent with ITS timestamp; a raw goto sends ts 0 and is driven to as written.
-# The robot still only moves while ARMED; committing a goal puts it on the ledger either way.
-def goal_file() -> Path:
-    """OKVIS_SEMANTIC_GOAL_POSE inside the pod (/output/goal.txt); the same file on the host."""
-    return Path(os.environ.get("OKVIS_SEMANTIC_GOAL_POSE") or "/data/okvis/goal.txt")
-
-
+# ---------------------------------------------------------------- pose goals: the camera yaw offset
+# A pose goal (/nav_pose_goal, written by the nav API) faces yaw(q) + camera_yaw_offset + bearing; the
+# nav API's GO with a heading needs the offset to cancel it. The robot still only moves while ARMED.
 LIVE_LOGS = (Path("/work/live.log"), Path("/data/okvis-perf/live.log"))
 
 
@@ -1125,7 +923,7 @@ def _quat_from_matrix(m) -> tuple[float, float, float, float]:
 def camera_yaw_offset_from_rig(path, env=None) -> float | None:
     """The semantic camera's yaw in the body frame [deg], computed from the rig yaml EXACTLY as dma_live
     computes the value its "[semantic-goal] pose-index ingress armed ... cam_yaw_deg=" line prints
-    (okvis2x_app_dma_live.cpp, the OKVIS_SEMANTIC_GOAL_POSE block):
+    (okvis2x_app_dma_live.cpp, the pose-goal ingress block):
       - the camera: the first colour one (ViParametersReader: camera_type not starting with "gray"; no
         camera_type = colour, the CameraType default), or OKVIS_SEMANTIC_POSE_CAM_INDEX (atoi);
       - its T_SC as the node holds it: ViParametersReader builds Transformation(r, q.normalized()) with
@@ -1155,82 +953,22 @@ def camera_yaw_offset_from_rig(path, env=None) -> float | None:
     return _m.degrees(_m.atan2(ay, ax))
 
 
-def goal_request(ts_ns: int, p, q, bearing_deg: float, score: float, comment: str,
-                 timeout: float = 2.0) -> dict:
-    """Write the request file (tmp+rename: the node polls it and must never see a torn line),
-    ring the verb, and return the node's answer."""
-    path = goal_file()
-    line = "%d %.6f %.6f %.6f %.9f %.9f %.9f %.9f %.3f %.6f\n" % (ts_ns, *p, *q, bearing_deg, score)
-    try:
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text("# " + comment + "\n" + line)
-        os.replace(tmp, path)
-    except OSError as e:
-        return {"ok": False, "err": f"{path}: {e}"}
-    r = verb_push(VERB_SEMANTIC_GOAL)
-    if not r["ok"]:
-        return r
-    ack, waited = verb_wait(r["seq"], timeout)
-    if ack is None:
-        return {**r, "ok": False, "waited_s": waited, "err": f"no ACK for seq {r['seq']} within {timeout} s"}
-    return {**r, "ok": ack["ok"], "refused": not ack["ok"], "accepted": ack["ok"], "reason": ack["reason"],
-            "waited_s": waited, "request": line.strip(), "file": str(path)}
-
-
-def goto(x: float, y: float, yaw_deg: float | None, timeout: float = 2.0) -> dict:
-    """Drive to (x, y) facing yaw_deg (world frame; omitted = keep the current heading). Written
-    with the heading as the pose's quaternion and bearing = -camera_yaw_offset, so the node's
-    yaw(q) + offset + bearing comes out as the yaw asked for."""
-    import math
-    if (e := _need_node()):
-        return e
-    off = camera_yaw_offset_deg()
-    if off is None:
-        return {"ok": False, "err": "camera yaw offset not found: no 'pose-index ingress armed' line in the node "
-                                    "log and no readable rig yaml (is OKVIS_SEMANTIC_GOAL_POSE set for this run?)"}
-    if yaw_deg is None:
-        got = grid_read()
-        if got is None:
-            return {"ok": False, "err": "no yaw given and no route grid to take the current heading from"}
-        yaw_deg = math.degrees(got[0].robot_yaw)
-    st = status_read()
-    z = st["pos"][2] if st else 0.0
-    h = math.radians(yaw_deg) / 2
-    q = (0.0, 0.0, math.sin(h), math.cos(h))
-    r = goal_request(0, (x, y, z), q, -off, 0.0, "nav-cli goto x=%.2f y=%.2f yaw=%.1f" % (x, y, yaw_deg), timeout)
-    r.update(goal={"x": x, "y": y, "yaw_deg": round(yaw_deg, 1)}, armed=bool(st and st["armed"]))
-    if r.get("ok") and not r["armed"]:
-        r["note"] = "goal committed; the robot moves only after `nav-cli autonomy on`"
-    return r
-
-
-def semantic_go(hit: dict, text: str, timeout: float = 2.0) -> dict:
-    """Drive to where a semantic hit was seen from, facing the matched cell: the hit's own
-    timestamp, pose, quaternion and bearing, so the node re-resolves the pose against the
-    current trajectory (SemanticPoseGoal P1.3), exactly as liveviz's DRIVE button does."""
-    if (e := _need_node()):
-        return e
-    if "q" not in hit or "stamp_ns" not in hit:
-        return {"ok": False, "err": "this hit has no pose quaternion/stamp (flat index); cannot drive to it"}
-    r = goal_request(int(hit["stamp_ns"]), hit["pos"], hit["q"], float(hit.get("bearing", 0.0)),
-                     float(hit.get("score", 0.0)),
-                     "nav-cli semantic goal for %r (frame %s, %s)" % (text, hit.get("frame"), hit.get("image")), timeout)
-    st = status_read()
-    r.update(hit={k: hit[k] for k in ("frame", "score", "pos", "bearing") if k in hit}, armed=bool(st and st["armed"]))
-    return r
-
-
 # ---------------------------------------------------------------- status, all in one
 def status() -> dict:
+    """The node (its status ring, read here) and the nav API's view of follow and the apps (their state
+    rings), in one JSON. "autonomy" is the node's armed flag; an app falls back to its bench pidfile
+    status when the nav API does not answer."""
     st = status_read()
+    nav = api("/status", timeout=3.0)
+    napps = (nav.get("apps") or {}) if nav.get("ok") else {}
     return {
         "ok": True,
         "node": {"fresh": bool(node_fresh(st)), **(st or {})} if st else {"fresh": False},
-        "autonomy": autonomy_get(),
+        "autonomy": bool(st and st["armed"]),
         "okvis_mode": okvis_mode(),
-        "follow": follow_cmd(),
+        "follow": nav.get("follow") if nav.get("ok") else {"err": nav.get("err")},
         "services": {n: unit_status("service", n) for n in units("service")},
-        "apps": {n: unit_status("app", n) for n in units("app")},
+        "apps": {n: napps.get(n) or unit_status("app", n) for n in units("app")},
         "verbose": verbose_get(),
     }
 
@@ -1245,7 +983,7 @@ SCHEMA = [
     {"name": "service", "args": {"action": ["list", "start", "stop", "status"], "name": list(units("service"))},
      "help": "capabilities anyone can use: semantic_memory = CLIP index + text encoder, llm = orchestrator llama-server :8911. start pins it on until stop"},
     {"name": "app", "args": {"action": ["list", "start", "stop", "status"], "name": list(units("app"))},
-     "help": "scripts built on services: follow_me = person follower. start brings its services; stop drops the ones nothing else needs"},
+     "help": "BENCH ONLY (robots start apps through the AI API server): scripts built on services, follow_me = person follower. start brings its services; stop drops the ones nothing else needs"},
     {"name": "reconcile", "args": {}, "help": "stop every service that no running app and no pin needs; safe at any time"},
     {"name": "follow", "args": {"action": ["prompt", "select", "off"], "value": "TEXT | X Y"},
      "help": "follow-me target: prompt = what to look for (no TEXT = blank; outside follow mode only shown, entering follow mode fills a blank one with person), select = pick the match at image fraction X Y in any mode (default in follow mode: the nearest), off = leave follow mode"},
@@ -1260,7 +998,7 @@ SCHEMA = [
     {"name": "grid", "args": {"--radius": "metres", "--ascii": "bool"},
      "help": "traversability map: robot cell + heading, goal, nearest blocked cell on 8 compass rays, ASCII map"},
     {"name": "look", "args": {"xyz": "X Y [Z] | off", "--hold": "seconds"},
-     "help": "point the head at a world point (idle in semantic/follow mode only); --hold keeps it there"},
+     "help": "point the head at a world point (idle in semantic/follow mode only); --hold S keeps it there S seconds (one push, released after)"},
     {"name": "goto", "args": {"x": "metres", "y": "metres", "yaw_deg": "optional, world frame"},
      "help": "commit a pose goal: drive to x y and face yaw_deg (default: keep heading); moves only while armed; waits for the node's answer"},
 ]
@@ -1283,46 +1021,17 @@ def _need_node() -> dict | None:
 
 
 def cmd_autonomy(a) -> dict:
-    if (e := _need_node()):
-        return e
-    r = autonomy_set(a.state == "on")
-    if not r["ok"]:
-        return r
-    want = a.state == "on"
-    got, waited = _wait(lambda: (s := node_fresh()) and s["armed"] == want and s, a.timeout)
-    return {**r, "armed": bool(got and got["armed"]), "waited_s": waited} if got else \
-        {"ok": False, "err": f"gate set but status.armed did not follow within {a.timeout} s", "waited_s": waited}
+    return api("/autonomy", {"on": a.state == "on"})
 
 
 def cmd_mode(a) -> dict:
-    if (e := _need_node()):
-        return e
     if a.mode == "follow":
-        return follow_enter()
-    follow_off()   # any other mode ends follow-me
-    r = navgoal_push(NAV_MODES[a.mode])
-    if not r["ok"]:
-        return r
-    # The node echoes the mode as a [nav-cmd] log line and in status.semantic for STOP; the
-    # ring's own head advancing past our seq is what says it was consumed.
-    want_sem = a.mode == "semantic"
-    got, waited = _wait(lambda: (s := node_fresh()) and s["semantic"] == want_sem and s, a.timeout)
-    return {**r, "mode": a.mode, "waited_s": waited} if got else \
-        {**r, "ok": False, "mode": a.mode, "waited_s": waited,
-         "err": f"sent, but status did not reflect {a.mode} within {a.timeout} s"}
+        return api("/follow", {"mode": "follow"})
+    return api("/mode", {"mode": a.mode})   # the nav API ends FOLLOW first
 
 
 def cmd_verb(a) -> dict:
-    if (e := _need_node()):
-        return e
-    r = verb_push(CLI_VERBS[a.verb])
-    if not r["ok"]:
-        return r
-    ack, waited = verb_wait(r["seq"], a.timeout)
-    if ack is None:
-        return {**r, "ok": False, "waited_s": waited, "err": f"no ACK for seq {r['seq']} within {a.timeout} s"}
-    return {**r, "ok": ack["ok"], "refused": not ack["ok"], "accepted": ack["ok"],
-            "reason": ack["reason"], "waited_s": waited}
+    return api("/verb", {"verb": a.verb})
 
 
 def cmd_unit(a) -> dict:
@@ -1348,27 +1057,27 @@ def cmd_reconcile(a) -> dict:
 def cmd_follow(a) -> dict:
     v = a.value
     if a.action == "off":
-        return {"ok": True, "follow": follow_off()}
-    if a.action == "prompt":
-        c = follow_cmd(prompt=" ".join(v)[:80])   # perception only: matches shown, no mode change
-        return {"ok": True, "follow": c}
+        return api("/follow", {"mode": "off"})
+    if a.action == "prompt":   # perception only: matches shown, no mode change
+        return api("/follow/prompt", {"text": " ".join(v)[:79]})
     if a.action == "select":
         try:
             x, y = float(v[0]), float(v[1])
         except (IndexError, ValueError):
             return {"ok": False, "err": "select needs X Y as image fractions in [0,1]"}
-        return {"ok": True, "follow": follow_cmd(click=[x, y])}   # picks a target; never the mode
+        return api("/follow/select", {"x": x, "y": y})   # picks a target; never the mode
     return {"ok": False, "err": "unknown follow action"}
 
 
 def cmd_semantic(a) -> dict:
     text = " ".join(a.text)
-    r = semantic_query(text, max(a.top, (a.go or 0) + 1))
+    r = semantic_query(text, min(5, max(a.top, (a.go or 0) + 1)))
     if r.get("ok") and a.go is not None:   # the app drives: to where hit N was seen from, facing it
         if a.go >= len(r["hits"]):
             return {"ok": False, "err": f"only {len(r['hits'])} hits, no hit {a.go}", "hits": r["hits"]}
-        st = app_ask("goto_object", 30.0, text=text, drive=True, frame=r["hits"][a.go]["frame"])
-        return {**(st.get("drive") or {"ok": False, "err": st.get("err") or "no drive"}), "hits": r["hits"]}
+        st = goto_ask(text, 5, True, r["hits"][a.go]["frame"])
+        d = st.get("drive") or {"ok": False, "reason": st.get("err") or "no drive"}
+        return {"ok": bool(d.get("ok")), "refused": not d.get("ok"), "reason": d.get("reason"), "hits": r["hits"]}
     if r.get("ok") and a.save:
         import shutil
         Path(a.save).mkdir(parents=True, exist_ok=True)
@@ -1425,18 +1134,18 @@ def cmd_grid(a) -> dict:
 
 
 def cmd_goto(a) -> dict:
-    return goto(a.x, a.y, a.yaw_deg, a.timeout)
+    return api("/goal", {"cmd": "go", "x": a.x, "y": a.y, "yaw_deg": a.yaw_deg})
 
 
 def cmd_look(a) -> dict:
     if a.xyz and a.xyz[0] == "off":
-        return look_off()
+        return api("/look", {"off": True})
     try:
         x, y = float(a.xyz[0]), float(a.xyz[1])
         z = float(a.xyz[2]) if len(a.xyz) > 2 else 0.0
     except (IndexError, ValueError):
         return {"ok": False, "err": "look needs X Y [Z] in the world frame, or off"}
-    return look_at(x, y, z, a.hold)
+    return api("/look", {"x": x, "y": y, "z": z, "hold_s": a.hold})
 
 
 def build_parser() -> argparse.ArgumentParser:
