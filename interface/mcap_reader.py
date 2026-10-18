@@ -3,8 +3,8 @@
 
 Reads the files okvis2x_app_record --mcap writes. Deliberately NOT a general
 MCAP implementation — it supports exactly what the house recorder produces and
-what liveviz needs to consume, with zero dependencies (the same constraint as
-the rest of liveviz: stdlib only, agent-inspectable):
+what the tools here need to consume, with zero dependencies (stdlib only,
+agent-inspectable):
 
   - uncompressed chunks (the recorder compiles compression out on purpose;
     a compressed chunk raises with a message saying which file/compression)

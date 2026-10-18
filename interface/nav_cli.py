@@ -230,30 +230,6 @@ VERB_NAMES = {VERB_RESET_TRACKING: "RESET_TRACKING", VERB_CLEAR_SEMANTIC_GOAL: "
 CLI_VERBS = {"reset-tracking": VERB_RESET_TRACKING, "clear-goal": VERB_CLEAR_SEMANTIC_GOAL}
 
 
-# ---------------------------------------------------------------- tap demand
-_want_viz_t = 0.0
-
-
-def want_viz(viz_dir: Path | None = None, when=None) -> None:
-    """Keep the app writing its viz taps: touch <tap>/.want_viz, at most once a second.
-
-    dma_live writes rgbd.bin, the camera JPEGs and the map taps only while this marker is under
-    10 s old (okvis::viztap::setDemandGated), so a robot nobody watches pays nothing for them.
-    Call it every loop from a reader that is ACTIVE; `when` (a callable) is asked only when a
-    touch is due, so a reader can make it conditional without paying for the check every loop."""
-    global _want_viz_t
-    now = time.monotonic()
-    if now - _want_viz_t < 1.0:
-        return
-    _want_viz_t = now
-    if when is not None and not when():
-        return
-    try:
-        ((VIZ_DIR if viz_dir is None else viz_dir) / ".want_viz").touch()
-    except OSError:
-        pass
-
-
 # ---------------------------------------------------------------- app state, read off the apps' rings
 def goto_object_state() -> dict | None:
     """goto_object's newest answer on /goto_object_state (nav_rings.goto_state_dict), or None. Needs
@@ -280,14 +256,12 @@ _app_readers: dict = {}
 # The manifest is the whole definition, so a new unit needs a folder, not an edit here:
 #   {"run": ["bash", "x.sh"],                       argv; argv[1] is relative to the folder;
 #                                                   "{rig}" becomes the node's rig yaml
-#    "probe": "http://..." | "ring:/<ring>" | "file:<tap file>" | "shm:<file in /dev/shm>",
+#    "probe": "http://..." | "ring:/<ring>" | "shm:<file in /dev/shm>",
 #                                                   ready = answers / pushed / written in the last 5 s
 #    "up_s": 40,                                    how long a start waits for the probe
 #    "requires": "perception" | "llama-server",     what the image must carry
 #    "services": [...],  (apps only)                the services it uses; services never use each other
-#    "label": "FOLLOW ME",  (apps only)             the console's button for it
-#    "outputs": [...],  (apps only)                 its tap files: deleted at its start and stop (_app_reset)
-#    "inset": "follow.jpg"}  (apps only)            a tap file shown over the 3D view while the app runs
+#    "label": "FOLLOW ME"}  (apps only)             the console's button for it
 # Units belong to NOBODY's process: whoever starts one records its pid in /dev/shm, anyone can
 # see or stop it, and each runs in its own process group so a stop takes its children.
 # Lifecycle: `service start` by hand PINS a service (only `service stop` ends it). `app start`
@@ -318,7 +292,7 @@ def units(kind: str) -> dict:
 
 
 def follow_rig() -> str:
-    """The node's rig yaml, which follow_me.py needs: liveviz sets FOLLOW_RIG from its
+    """The node's rig yaml, which follow_me.py needs: the nav API sets FOLLOW_RIG from its
     --follow-rig; anyone else reads it off the running node's own command line (argv[1] of
     the pid the status ring names). Not an env var: the entrypoint's exports never reach a
     `kubectl exec`, which is how --robot runs."""
@@ -391,12 +365,11 @@ def unit_up(kind: str, name: str) -> bool:
         sys.path.insert(0, str(REPO / "interface"))
         import ring_fresh
         return ring_fresh.fresh(probe[len("ring:"):], 5.0, SHM)
-    for prefix, base in (("file:", VIZ_DIR), ("shm:", SHM)):   # a file written in the last 5 s
-        if probe.startswith(prefix):
-            try:
-                return time.time() - (base / probe[len(prefix):]).stat().st_mtime < 5.0
-            except OSError:
-                return False
+    if probe.startswith("shm:"):   # a file in /dev/shm written in the last 5 s
+        try:
+            return time.time() - (SHM / probe[len("shm:"):]).stat().st_mtime < 5.0
+        except OSError:
+            return False
     try:
         return urllib.request.urlopen(probe, timeout=2).status < 500
     except Exception:
@@ -479,21 +452,17 @@ def service_stop(name: str) -> dict:
     return {"ok": True, "service": name, "running": False}
 
 
-def _app_reset(name: str, viz_dir: Path | None = None) -> None:
-    """Nothing from a previous run, at an app's start and at its stop: the tap files its manifest lists
-    as "outputs" are deleted, and the operator inputs it reads go back to blank through the nav API
-    (follow_me: out of FOLLOW; semantic_obstacles: no list, which has the app clear its cells).
-    Best effort: with no nav API there is nothing to reset."""
-    d = VIZ_DIR if viz_dir is None else viz_dir
-    for f in _unit("app", name).get("outputs", []):
-        (d / f).unlink(missing_ok=True)
+def _app_reset(name: str) -> None:
+    """Nothing from a previous run, at an app's start and at its stop: the operator inputs it reads go
+    back to blank through the nav API (follow_me: out of FOLLOW; semantic_obstacles: no list, which has
+    the app clear its cells). Best effort: with no nav API there is nothing to reset."""
     if name == "follow_me":
         api("/follow", {"mode": "off"}, timeout=3.0)
     elif name == "semantic_obstacles":
         api("/follow/obstacles", {"text": ""}, timeout=3.0)
 
 
-def app_start(name: str, wait_s: float = 0.0, viz_dir: Path | None = None) -> dict:
+def app_start(name: str, wait_s: float = 0.0) -> dict:
     """BENCH TOOL. Start the app's services (unpinned), then the app under a parent that reconciles when
     the app exits -- a crash included, which never calls nav-cli itself. An app runs from its start
     until its stop, idle while it has nothing to do. On a robot the apps are k0s Deployments (the AI
@@ -507,13 +476,13 @@ def app_start(name: str, wait_s: float = 0.0, viz_dir: Path | None = None) -> di
             return r
     pid = unit_pid("app", name)
     if pid is None:
-        _app_reset(name, viz_dir)   # nothing from a previous run
+        _app_reset(name)   # nothing from a previous run
         parent = '"$@"; rm -f ' + shlex.quote(str(_pidfile("app", name))) + "; " + RECONCILE_CMD + " >/dev/null 2>&1"
         pid = _spawn("app", name, ["sh", "-c", parent, "sh", *unit_argv("app", name)])
     return _await_up("app", name, pid, wait_s)
 
 
-def app_stop(name: str, viz_dir: Path | None = None) -> dict:
+def app_stop(name: str) -> dict:
     """BENCH TOOL. follow_me's stop leaves FOLLOW first (the nav API: STOP if following, target blank).
     Then, as at its start, nothing of the app is left behind (_app_reset)."""
     if _unit("app", name) is None:
@@ -521,7 +490,7 @@ def app_stop(name: str, viz_dir: Path | None = None) -> dict:
     if name == "follow_me":
         api("/follow", {"mode": "off"}, timeout=3.0)
     _kill("app", name)
-    _app_reset(name, viz_dir)
+    _app_reset(name)
     reconcile()
     return {"ok": True, "app": name, "running": False}
 
@@ -600,8 +569,9 @@ def goto_ask(text: str, top: int = 5, drive: bool = False, frame: int | None = N
 def semantic_query(text: str, top: int = 5, timeout: float = 30.0) -> dict:
     """Ranked keyframes for `text`, from the goto_object app (which asks semantic_memory): score, the camera
     position at that keyframe, its stamp and the bearing to the matched grid cell. NOT the object's
-    position: the index stores no depth, so a hit is a camera pose plus a ray. The thumbnails are
-    goto_object's taps, <tap dir>/goto_hit<k>.jpg, where it writes them."""
+    position: the index stores no depth, so a hit is a camera pose plus a ray. "image" names goto_object's
+    old thumbnail tap, <tap dir>/goto_hit<k>.jpg, which it no longer writes (AI-1184): --save then
+    reports a save_err per hit until this is repointed."""
     st = goto_ask(text, top, False, None, timeout)
     if not st.get("ok") or not st.get("hits"):
         return {"ok": False, "err": st.get("err") or "no hits", **({"seq": st["seq"]} if "seq" in st else {})}
