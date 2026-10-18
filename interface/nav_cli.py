@@ -24,7 +24,9 @@ one writer of every operator-command ring (/nav_verbs, /nav_goal, /nav_pose_goal
 DMA.common's dma_ipc (SOF-1559: no hand-written mmap): /nav_status and /route_grid
 (interface/nav_rings.py, strict readers), the depth ring (interface/okvis_frames.py),
 /goto_object_state. Without the binding a read raises RuntimeError naming why, and the command line
-answers {"ok": false, "err": <why>} with exit 2.
+answers {"ok": false, "err": <why>} with exit 2. A ring that is not there (yet) is not that: its reader is
+DMA.common's pending reader, which reads nothing and says why (attach_state, e.g. "pending: /dev/shm/nav_status
+missing"), and that reason is what the command line answers as {"ok": false, "err": ...}.
 
 The service/app start-stop helpers (pidfiles in /dev/shm) are a BENCH tool: on a robot the
 perception apps are k0s Deployments started through the AI API server, and the nav API judges an
@@ -255,13 +257,20 @@ def want_viz(viz_dir: Path | None = None, when=None) -> None:
 # ---------------------------------------------------------------- app state, read off the apps' rings
 def goto_object_state() -> dict | None:
     """goto_object's newest answer on /goto_object_state (nav_rings.goto_state_dict), or None. Needs
-    dma_ipc (interface/nav_rings.py); without it, None."""
+    dma_ipc (interface/nav_rings.py); without it, None. One (pending) reader per channel, kept across polls."""
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parent) if Path(__file__).is_file() else str(REPO / "interface"))
         import nav_rings
-        return nav_rings.goto_state_dict(nav_rings.Reader("goto_object_state").latest())
+        key = ("goto_object_state", nav_rings.channel("goto_object_state"))
+        r = _app_readers.get(key)
+        if r is None:
+            r = _app_readers[key] = nav_rings.Reader(key[0], name=key[1])
+        return nav_rings.goto_state_dict(r.latest())
     except Exception:  # noqa: BLE001 -- no binding, no ring: no state
         return None
+
+
+_app_readers: dict = {}
 
 
 # ---------------------------------------------------------------- services and apps
@@ -793,7 +802,9 @@ def pose() -> dict:
     frame, 90 deg off the robot's heading)."""
     st = status_read()
     if not node_fresh(st):
-        return {"ok": False, "err": "node not fresh"}
+        why = (f"age {st['age_s']} s" if st is not None
+               else _ring_why("nav_status", STATUS_RING_NAME, "never written, or another format version"))
+        return {"ok": False, "err": f"node not fresh ({STATUS_RING_NAME}: {why})"}
     got = grid_read()
     g = got[0] if got else None
     r = {"ok": True, "x": st["pos"][0], "y": st["pos"][1], "z": st["pos"][2], "pose_age_s": st["pose_age_s"],
@@ -993,12 +1004,20 @@ def _emit(r: dict) -> int:
     return 1 if r.get("refused") else 2
 
 
+def _ring_why(ring: str, name: str, empty: str) -> str:
+    """Why `ring` gave nothing: its reader's attach state when it has no segment (DMA.common's "pending: /dev/shm/x
+    missing", "rejected: ..."), else `empty`."""
+    r = ring_reader(ring, name)
+    return empty if r.attached else r.attach_state
+
+
 def _need_node() -> dict | None:
     st = status_read()
     if node_fresh(st):
         return None
     if st is None:
-        return {"ok": False, "err": f"{STATUS_RING_NAME}: no status ring (node never ran here)"}
+        why = _ring_why("nav_status", STATUS_RING_NAME, "never written, or another format version")
+        return {"ok": False, "err": f"{STATUS_RING_NAME}: no node status ({why}; node never ran here?)"}
     return {"ok": False, "err": f"{STATUS_RING_NAME}: node not fresh (age {st['age_s']} s)"}
 
 
@@ -1100,7 +1119,9 @@ def cmd_frame(a) -> dict:
 def cmd_depth(a) -> dict:
     d = depth_read()
     if d is None:
-        return {"ok": False, "err": f"{DEPTH_META_NAME}: no depth frame (ring absent, torn, or never written)"}
+        ring = _depth_rings.get((DEPTH_META_NAME, DEPTH_POOL_NAME))
+        why = ring.attach_state if ring is not None and not ring.attached else "torn, or never written"
+        return {"ok": False, "err": f"{DEPTH_META_NAME}: no depth frame ({why})"}
     r = {"ok": True, "age_s": d["age_s"], "stamp_ns": d["meta"]["stamp_ns"],
          "size": [d["meta"]["width"], d["meta"]["height"]], **depth_sectors(d, a.sectors)}
     if a.out:
@@ -1111,7 +1132,8 @@ def cmd_depth(a) -> dict:
 def cmd_grid(a) -> dict:
     got = grid_read()
     if got is None:
-        return {"ok": False, "err": f"{ROUTEGRID_RING_NAME}: no route grid (ring absent or never written)"}
+        why = _ring_why("route_grid", ROUTEGRID_RING_NAME, "never written, or a record this reader does not know")
+        return {"ok": False, "err": f"{ROUTEGRID_RING_NAME}: no route grid ({why})"}
     return {"ok": True, **grid_summary(got[0], a.radius, a.ascii, got[1])}
 
 
