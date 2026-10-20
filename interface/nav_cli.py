@@ -259,8 +259,9 @@ _app_readers: dict = {}
 # The manifest is the whole definition, so a new unit needs a folder, not an edit here:
 #   {"run": ["bash", "x.sh"],                       argv; argv[1] is relative to the folder;
 #                                                   "{rig}" becomes the node's rig yaml
-#    "probe": "http://..." | "ring:/<ring>" | "shm:<file in /dev/shm>",
-#                                                   ready = answers / pushed / written in the last 5 s
+#    "probe": "http://..." | "ring:/<ring>" | "rpc:<service>",
+#                                                   ready = answers / pushed / beat in the last 5 s
+#                                                   (rpc: the DMA.common rpc heartbeat, interface/shm_rpc.py)
 #    "up_s": 40,                                    how long a start waits for the probe
 #    "requires": "perception" | "llama-server",     what the image must carry
 #    "services": [...],  (apps only)                the services it uses; services never use each other
@@ -368,11 +369,10 @@ def unit_up(kind: str, name: str) -> bool:
         sys.path.insert(0, str(REPO / "interface"))
         import ring_fresh
         return ring_fresh.fresh(probe[len("ring:"):], 5.0, SHM)
-    if probe.startswith("shm:"):   # a file in /dev/shm written in the last 5 s
-        try:
-            return time.time() - (SHM / probe[len("shm:"):]).stat().st_mtime < 5.0
-        except OSError:
-            return False
+    if probe.startswith("rpc:"):   # an ML service's DMA.common rpc heartbeat in the last 5 s (interface/shm_rpc.py)
+        sys.path.insert(0, str(REPO / "interface"))
+        import shm_rpc
+        return shm_rpc.alive(probe[len("rpc:"):], 5.0) == ""
     try:
         return urllib.request.urlopen(probe, timeout=2).status < 500
     except Exception:
