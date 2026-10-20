@@ -616,14 +616,15 @@ _rgb_rings: dict = {}
 
 def png_rgb8(px) -> bytes:
     """An (h, w, 3) uint8 array as PNG, with the standard library only (this image has numpy, no codecs)."""
-    import struct
     import zlib
     h, w = int(px.shape[0]), int(px.shape[1])
     raw = b"".join(b"\x00" + px[r].tobytes() for r in range(h))   # filter 0 per row
+    u32 = lambda v: int(v).to_bytes(4, "big")   # PNG's big-endian lengths and CRCs (no struct: see the test)
 
     def chunk(tag: bytes, body: bytes) -> bytes:
-        return struct.pack(">I", len(body)) + tag + body + struct.pack(">I", zlib.crc32(tag + body) & 0xFFFFFFFF)
-    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+        return u32(len(body)) + tag + body + u32(zlib.crc32(tag + body) & 0xFFFFFFFF)
+    ihdr = u32(w) + u32(h) + bytes((8, 2, 0, 0, 0))   # 8-bit, truecolour, deflate, no filter, no interlace
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr)
             + chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
 
 
