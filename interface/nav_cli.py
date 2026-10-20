@@ -10,7 +10,7 @@ Library AND command line. An agent, a shell or a laptop runs it:
     nav-cli follow prompt [TEXT] | select X Y | off
     nav-cli semantic TEXT [--top N] [--save DIR]
     nav-cli verbose on|off              nav-cli --schema
-    nav-cli pose | frame cam0|cam1|follow|routegrid [--out P] | depth [--sectors N] [--out P.pgm]
+    nav-cli pose | frame rgb [--out P.png] | depth [--sectors N] [--out P.pgm]
     nav-cli grid [--radius M] [--ascii] | look X Y [Z] [--hold S] | look off
     nav-cli goto X Y [YAW_DEG] | semantic TEXT --go 0      # pose goals; the robot moves only while armed
 
@@ -57,7 +57,10 @@ SHM = Path("/dev/shm")
 # The shm queue name of the node's status ring (DMA.common NAV_STATUS_QUEUE_NAME). OKVIS_STATUS_SHM may
 # still name it as its /dev/shm path.
 STATUS_RING_NAME = "/" + Path(os.environ.get("OKVIS_STATUS_SHM", "/nav_status")).name
-VIZ_DIR = Path(os.environ.get("OKVIS_VIZ_DIR", "/dev/shm/okvis-viz"))
+# semantic_memory's keyframe dataset (robot_frame_sampler: data/<pose_stamp_ns>.jpg). /work is its path in the
+# perception pods (PKO okvis-perception), the host path is the same hostPath seen from the robot.
+SEMANTIC_FRAMES_DIRS = [Path(p) for p in os.environ.get(
+    "OKVIS_SEMANTIC_FRAMES_DIR", "/work/semantic-frames/data:/data/okvis-perf/perception/semantic-frames/data").split(":")]
 VERBOSITY_FILE = Path("/dev/shm/okvis_verbosity")
 NODE_FRESH_S = 5.0   # status older than this = the node is gone (the ring outlives it, #201)
 NAV_API_URL = os.environ.get("NAV_API_URL", "http://127.0.0.1:8897")
@@ -569,42 +572,90 @@ def goto_ask(text: str, top: int = 5, drive: bool = False, frame: int | None = N
 def semantic_query(text: str, top: int = 5, timeout: float = 30.0) -> dict:
     """Ranked keyframes for `text`, from the goto_object app (which asks semantic_memory): score, the camera
     position at that keyframe, its stamp and the bearing to the matched grid cell. NOT the object's
-    position: the index stores no depth, so a hit is a camera pose plus a ray. "image" names goto_object's
-    old thumbnail tap, <tap dir>/goto_hit<k>.jpg, which it no longer writes (AI-1184): --save then
-    reports a save_err per hit until this is repointed."""
+    position: the index stores no depth, so a hit is a camera pose plus a ray. "image" is the hit's keyframe
+    in semantic_memory's dataset (<frames dir>/<stamp_ns>.jpg, the name robot_frame_sampler gives it), None
+    when the hit carries no stamp or the dataset is not on this machine."""
     st = goto_ask(text, top, False, None, timeout)
     if not st.get("ok") or not st.get("hits"):
         return {"ok": False, "err": st.get("err") or "no hits", **({"seq": st["seq"]} if "seq" in st else {})}
     hits = [{"score": round(h["score"], 4), "frame": h["frame"], "pos": [h["x"], h["y"], h["z"]],
-             "bearing": h["bearing_deg"], "stamp_ns": h["stamp_ns"], "image": str(VIZ_DIR / f"goto_hit{k}.jpg")}
-            for k, h in enumerate(st["hits"][:top])]
+             "bearing": h["bearing_deg"], "stamp_ns": h["stamp_ns"], "image": keyframe_image(h["stamp_ns"])}
+            for h in st["hits"][:top]]
     return {"ok": True, "text": text, "seq": st.get("answered_seq"), "hits": hits}
 
 
+def keyframe_image(stamp_ns: int) -> str | None:
+    """semantic_memory's keyframe image for a hit stamped `stamp_ns`, in the first frames dir that has it."""
+    if not stamp_ns:
+        return None
+    for d in SEMANTIC_FRAMES_DIRS:
+        p = d / f"{int(stamp_ns)}.jpg"
+        if p.is_file():
+            return str(p)
+    return None
+
+
 # ---------------------------------------------------------------- perception reads, for the agent
-# What the node already publishes, read back as numbers an LLM can use: the camera taps as
-# files, the metric depth ring as nearest-return per bearing sector, the route grid as a map
-# around the robot, and the pose with the grid's yaw (the status yaw is the IMU frame, 90 deg
+# What the node already publishes, read back as numbers an LLM can use: the rectified camera image
+# off its RGB ring, the metric depth ring as nearest-return per bearing sector, the route grid as a
+# map around the robot, and the pose with the grid's yaw (the status yaw is the IMU frame, 90 deg
 # off the heading). Everything here is read-only.
-FRAMES = {"cam0": "rect_cam0.jpg", "cam1": "rect_cam1.jpg", "follow": "follow.jpg",
-          "routegrid": "routegrid.jpg", "feat0": "feat_rgb0.jpg", "feat1": "feat_rgb1.jpg"}
+FRAMES = {"rgb": "rgb", "cam0": "rgb"}   # cam0 = the rgb ring: the rectified cam0 image beside each depth frame
+# Frames that came from liveviz's file taps, retired with it (AI-1184), and where to look instead.
+FRAMES_GONE = {
+    "cam1": "the second camera's rectified tap is gone with liveviz; mcap-viewer shows the raw camera rings",
+    "follow": "follow-me's view is on /follow_view; mcap-viewer's Nav tab and the WBC console show it",
+    "routegrid": "use `nav-cli grid` (the route grid as numbers / ASCII)",
+    "feat0": "feature tracks are on /feature_tracks; mcap-viewer draws them",
+    "feat1": "feature tracks are on /feature_tracks; mcap-viewer draws them",
+}
+RGB_META_NAME = "/okvis_rgb_meta"     # dma_ipc.OKVIS_RGB_META_QUEUE_NAME
+RGB_POOL_NAME = "/okvis_rgb_frames"   # dma_ipc.OKVIS_RGB_FRAMES_POOL_NAME
+_rgb_rings: dict = {}
 
 
-def frame_read(name: str, out: str | None = None, viz_dir: Path | None = None) -> dict:
-    """Copy one camera tap to `out` (a path, or "-" for base64 inline). The taps are JPEGs the
-    node writes tmp+rename, so a read never sees a torn file."""
+def png_rgb8(px) -> bytes:
+    """An (h, w, 3) uint8 array as PNG, with the standard library only (this image has numpy, no codecs)."""
+    import struct
+    import zlib
+    h, w = int(px.shape[0]), int(px.shape[1])
+    raw = b"".join(b"\x00" + px[r].tobytes() for r in range(h))   # filter 0 per row
+
+    def chunk(tag: bytes, body: bytes) -> bytes:
+        return struct.pack(">I", len(body)) + tag + body + struct.pack(">I", zlib.crc32(tag + body) & 0xFFFFFFFF)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
+
+
+def frame_read(name: str, out: str | None = None) -> dict:
+    """The newest rectified camera image off OKVIS's RGB ring (/okvis_rgb_{meta,frames}, read through DMA.common's
+    dma_ipc: okvis_frames.FrameRing("rgb")), as PNG to `out` (a path, or "-" for base64 inline)."""
+    if name in FRAMES_GONE:
+        return {"ok": False, "err": f"frame {name}: {FRAMES_GONE[name]}"}
     if name not in FRAMES:
         return {"ok": False, "err": f"frame must be one of {sorted(FRAMES)}"}
-    p = (VIZ_DIR if viz_dir is None else viz_dir) / FRAMES[name]
+    import okvis_frames
+    key = (RGB_META_NAME, RGB_POOL_NAME)
+    ring = _rgb_rings.get(key)
+    if ring is None:
+        ring = _rgb_rings[key] = okvis_frames.FrameRing("rgb", *key)
+    newest = ring.newest()
+    why = ring.attach_state if not ring.attached else "never written"
+    if newest is None or newest[0].format_version < 1:
+        return {"ok": False, "err": f"{RGB_META_NAME}: no RGB frame ({why})"}
     try:
-        data = p.read_bytes()
-        age = time.time() - p.stat().st_mtime
-    except OSError as e:
-        return {"ok": False, "err": f"{p}: {e}"}
-    r = {"ok": True, "frame": name, "bytes": len(data), "age_s": round(age, 2), "source": str(p)}
+        px = ring.pixels(newest[0])
+    except ValueError as e:   # bytes do not match the geometry: not a frame this reader knows
+        return {"ok": False, "err": f"{RGB_META_NAME}: {e}"}
+    if px is None:
+        return {"ok": False, "err": f"{RGB_META_NAME}: frame recycled while read; retry"}
+    data = png_rgb8(px)
+    age = ring.age_s()
+    r = {"ok": True, "frame": name, "format": "png", "size": [int(px.shape[1]), int(px.shape[0])], "bytes": len(data),
+         "age_s": round(age, 2) if age is not None else None, "source": RGB_META_NAME}
     if out == "-":
         import base64
-        r["jpeg_b64"] = base64.b64encode(data).decode()
+        r["png_b64"] = base64.b64encode(data).decode()
     elif out:
         Path(out).write_bytes(data)
         r["path"] = out
@@ -955,7 +1006,7 @@ SCHEMA = [
     {"name": "verbose", "args": {"state": ["on", "off"]}, "help": "node log detail"},
     {"name": "pose", "args": {}, "help": "where the robot is: x y z, heading yaw_deg, current goal and distance"},
     {"name": "frame", "args": {"frame": sorted(FRAMES), "--out": "PATH or - for base64"},
-     "help": "latest camera image (JPEG): cam0/cam1 rectified, follow = follow-me view, routegrid = map picture"},
+     "help": "latest rectified camera image (PNG) off OKVIS's RGB ring; rgb and cam0 are the same image"},
     {"name": "depth", "args": {"--sectors": "int", "--out": "PATH.pgm"},
      "help": "metric depth: nearest obstacle per bearing sector (m, left to right), field of view, valid fraction"},
     {"name": "grid", "args": {"--radius": "metres", "--ascii": "bool"},
@@ -1053,6 +1104,11 @@ def cmd_semantic(a) -> dict:
         import shutil
         Path(a.save).mkdir(parents=True, exist_ok=True)
         for h in r["hits"]:
+            if not h["image"]:
+                h["saved"] = None
+                h["save_err"] = (f"keyframe {h['stamp_ns']}.jpg not found in "
+                                 f"{':'.join(str(d) for d in SEMANTIC_FRAMES_DIRS)} (run where the dataset is)")
+                continue
             try:
                 shutil.copy2(h["image"], a.save)
                 h["saved"] = str(Path(a.save) / Path(h["image"]).name)
@@ -1144,7 +1200,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--go", type=int, metavar="N", help="commit hit N (0 = best) as the goal: drive to where it was seen from, facing it")
     p = add("verbose"); p.add_argument("state", choices=["on", "off"])
     add("pose")
-    p = add("frame"); p.add_argument("frame", choices=sorted(FRAMES)); p.add_argument("--out", metavar="PATH", help="write the JPEG here; - = base64 in the JSON")
+    p = add("frame"); p.add_argument("frame", choices=sorted({**FRAMES, **FRAMES_GONE})); p.add_argument("--out", metavar="PATH", help="write the PNG here; - = base64 in the JSON")
     p = add("depth"); p.add_argument("--sectors", type=int, default=9); p.add_argument("--out", metavar="PATH.pgm", help="also write a 16-bit PGM in mm")
     p = add("grid"); p.add_argument("--radius", type=float, default=4.0, help="metres around the robot for the rays and the ASCII map"); p.add_argument("--ascii", action="store_true")
     p = add("look"); p.add_argument("xyz", nargs="+"); p.add_argument("--hold", type=float, default=0.0)
