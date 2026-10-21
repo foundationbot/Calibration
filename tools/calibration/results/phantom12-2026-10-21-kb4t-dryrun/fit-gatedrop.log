@@ -1,0 +1,9 @@
+rig config: /o/rig-gatedrop.yaml  (phantom12; pinhole-equi 1280x800; board aprilgrid 7x5 tags, 100 mm, pitch 120 mm)
+/o/fita-fit-corners.npz: 1777 pairs in 218 holds with >= 12 corners in both cameras
+  stereo pose alone from the nominal start: nfev 9, success True
+  attempt 1: nfev 170 success True rms 0.3911 px, kept 423487 (702 s)
+quality gate: 60 of 216 holds above 0.6 px: 6 (0.71 px), 8 (0.74 px), 12 (0.74 px), 22 (0.65 px), 26 (0.72 px), 1006 (0.93 px), 1008 (0.63 px), 1018 (0.95 px), 2000 (0.65 px), 2004 (0.97 px), 2012 (0.86 px), 3020 (0.66 px), 3022 (0.69 px), 4006 (0.67 px), 4010 (0.73 px), 4026 (0.80 px), 5006 (0.94 px), 5008 (0.92 px), 5018 (1.02 px), 6006 (0.76 px), 6014 (0.68 px), 6016 (0.60 px), 7010 (0.70 px), 7024 (0.60 px), 7026 (0.83 px), 8000 (0.75 px), 8006 (0.92 px), 8010 (0.85 px), 8024 (0.62 px), 8026 (0.80 px), 8028 (0.63 px), 9000 (0.61 px), 9004 (0.77 px), 9006 (0.66 px), 9010 (0.63 px), 9016 (0.72 px), 10000 (0.78 px), 10006 (0.92 px), 10014 (0.76 px), 10016 (0.60 px), 11006 (0.65 px), 11012 (0.60 px), 11014 (0.72 px), 11018 (0.66 px), 11020 (0.63 px), 11024 (0.65 px), 11026 (1.15 px), 12012 (1.15 px), 12018 (1.70 px), 12020 (1.44 px), 12024 (0.76 px), 12028 (0.60 px), 13002 (0.98 px), 13004 (0.80 px), 13014 (1.29 px), 14006 (0.85 px), 14018 (1.69 px), 1000016 (0.61 px), 1000024 (0.77 px), 1010024 (0.71 px)
+  attempt 1: nfev 167 success True rms 0.3130 px, kept 290270 (452 s)
+converged: rms 0.313 px over 1180 pairs, baseline 44.25 mm -> /o/fit-gatedrop.json
+fit exit 0
+done

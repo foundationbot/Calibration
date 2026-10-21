@@ -1,0 +1,26 @@
+rig config: /t/tools/calibration/config/rig-phantom12.yaml  (phantom12; pinhole-equi 1280x800; board aprilgrid 7x5 tags, 100 mm, pitch 120 mm)
+/t/tools/calibration/results/phantom12-2026-10-20-lens/fit-a-kb4t.json:KB4T@all@800 reading /o/fit-gatedrop.json's scene at 1.0 m depth, largest |difference| per image cell:
+| cell | largest difference (%) | grid points |
+|---|---|---|
+| top-left | 18.62 | 60 |
+| top | 1.62 | 68 |
+| top-right | 9.31 | 60 |
+| left | 8.38 | 94 |
+| centre | 0.21 | 44 |
+| right | 4.37 | 94 |
+| bottom-left | 2.75 | 70 |
+| bottom | 0.38 | 80 |
+| bottom-right | 2.70 | 70 |
+rig config: /t/tools/calibration/config/rig-phantom12.yaml  (phantom12; pinhole-equi 1280x800; board aprilgrid 7x5 tags, 100 mm, pitch 120 mm)
+/t/tools/calibration/results/phantom12-2026-10-20-lens/fit-a-kb4t.json:KB4T@all@800 reading /o/fit-gatedrop.json's scene at 1.0 m depth, largest |difference| per image cell (points within 450 px of the principal point):
+| cell | largest difference (%) | grid points |
+|---|---|---|
+| top-left | 1.88 | 17 |
+| top | 1.62 | 68 |
+| top-right | 0.66 | 19 |
+| left | 1.14 | 59 |
+| centre | 0.21 | 44 |
+| right | 0.27 | 59 |
+| bottom-left | 0.81 | 18 |
+| bottom | 0.37 | 78 |
+| bottom-right | 0.37 | 19 |

@@ -1,0 +1,44 @@
+rig config: /w/config/rig-phantom12.yaml  (phantom12; pinhole-equi 1280x800; board aprilgrid 7x5 tags, 100 mm, pitch 120 mm)
+holds: 17 (want >= 20), neck-pose cells 6/9 (want >= 8); yaw reached from left/right 4/3 (want >= 4 each), pitch from below/above 3/3 (want >= 2); 12 stops too short to count; yaw -42..+37, pitch -28..+28 deg
+drift within holds (sag plus tremor): median 0.66 deg, max 2.94 deg (hold 14)
+sweeps step 82 can use: pitch-only 2.2 s, yaw-only 2.6 s (want >= 3.0 s each; > 0.3 rad/s = 17 deg/s, the other joint under 20% of it)
+joints: 438 Hz, longest gap 2632 ms; holds with a gap while the neck moved: 3 (312 ms, 0.07 deg), 6 (134 ms, 0.09 deg), 6 (324 ms, 0.14 deg), 6 (300 ms, 0.07 deg), 6 (718 ms, 0.38 deg), 10 (316 ms, 0.26 deg), 10 (276 ms, 0.20 deg), 11 (260 ms, 0.34 deg), 13 (142 ms, 0.10 deg), 13 (346 ms, 0.10 deg), 14 (370 ms, 0.46 deg), 14 (120 ms, 0.11 deg), 14 (332 ms, 0.62 deg), 16 (206 ms, 0.24 deg), 16 (92 ms, 0.13 deg)
+IMU: 498.5 Hz, longest gap 618.0 ms
+IMU is the head's: step 82's fit leaves 0.023 rad/s (want < 0.15; the wrong IMU leaves ~0.5)
+camera cam1: 12.1 fps, covers 98% of the take; holds without frames 0, board (>= 8 tags inside 450 px) in 16/17 with frames
+camera cam2: 12.3 fps, covers 98% of the take; holds without frames 0, board (>= 8 tags inside 450 px) in 16/17 with frames
+board in the torso frame through the encoders and the config (camera 0, 15 holds): spread 14.8 mm / 0.65 deg rms (beyond 40 mm or 2.0 deg: the robot or the board moved)
+encoder signs (camera 0, board in the image per rad): NeckYaw +601 px (as the URDF), NeckPitch -532 px (as the URDF)
+torso: 6 segment(s) copied to /w/takes/tbs-neck-A3-dmarec
+torso IMU stream: 500.0 Hz, longest gap 3.0 ms
+torso (IMU 9): tilt > 0.1 in 10 holds (max 0.40 deg); yaw > max(0.1, 3 sigma) in 0 (max 2.67; the robot rocked during the holds, rate scatter 6.4e-04 rad/s, so yaw's sigma is large); rotation during a hold > 0.1 in 11 (max 0.35); reference group 12% of the holds
+after dropping 7 holds: 10 left, 5/9 cells, sides {'yaw+': 2, 'yaw-': 2, 'pitch+': 2, 'pitch-': 1}
+holds with a board pose step 81 can use (camera 0, >= 20 tags, <= 1.0 px), after the drops: 8 (it needs 20 for a verdict)
+  RETAKE holds: hold each pose still for ~2.5 s (12 stops were too short), cover the grid and reach each pose from both sides (the protocol's snake there and back)
+  RETAKE torso: the torso shifted during the take (only 12% of the holds stood where most did): brace it harder and move the head with fingertip force
+  RETAKE usable-holds: only 8 holds have a board pose step 81 can use (it needs 20): keep the whole board in view and the head still in each hold, and hold more poses
+  WARN   sweeps: step 82 will not measure the joint axes (its R_BS still fits): nod and turn one joint at a time, faster than ~20 deg/s; a short separate take will do
+  WARN   joints: the recorder fell behind (gaps in /joints; check the record pod's CPU): those holds are dropped; nothing to do unless too few holds remain
+  WARN   imu: gaps in the head IMU stream: step 82 has fewer samples; nothing to do
+step 81: DROP_HOLDS=3,6,10,11,13,14,16
+QC VERDICT: RETAKE (holds, torso, usable-holds)
+QC-EXIT 1 (RETAKE)
+step 81 leaves out holds: 3,6,10,11,13,14,16 (step 75)
+QC did not pass: the step 81/82 verdicts below are diagnostics, not the decision
+rig config: /w/config/rig-phantom12.yaml  (phantom12; pinhole-equi 1280x800; board aprilgrid 7x5 tags, 100 mm, pitch 120 mm)
+step 81: 17 holds found, 8 used, 80 board images (10 images in /joints gaps left out)
+  camera-in-Head vs config: 1.855 deg (Head x y z: +1.750 +0.264 +0.557), 55.80 mm (+7.58 -29.20 +46.94); ~83.3 mm at 0.85 m. Gate 0.3 deg / 3.0 mm, at 2 sigma
+  1-sigma (clustered by hold): 1.352 0.813 2.469 deg, 7.10 12.00 20.66 mm (total 2.930 deg, 24.93 mm); Jacobian condition 34
+  fit residual: config X 8.96 mm / 0.718 deg -> fitted 4.24 mm / 0.608 deg; board spread in the torso: config 16.19 mm / 0.718 deg -> fitted 10.63 mm / 0.608 deg
+  play (+ = the head stops short of the encoder): yaw +0.27 +- n/a deg over [1, 2] holds, pitch +0.17 +- n/a over [2, 1]; outlier holds []
+  WARNING: large spread after the fit: the head is not where the encoders put it (a hand loading an unpowered neck, 16 Oct), the joints have play, the neck does not move as the URDF says, or the torso or board moved (see play, outlier_holds)
+  WARNING: step 75 said RETAKE for this take: this verdict is a diagnostic, not the decision
+  no verdict possible: the model does not fit; 8 holds < 20
+VERDICT INCONCLUSIVE  -> /w/tbs/tbs-neck-A3-handeye.json
+HANDEYE-EXIT 2 (INCONCLUSIVE)
+step 82: 73648 moving samples (14595 masked at /joints gaps), residual 0.0233 rad/s, joint lag +4 ms, motion eigenvalue ratio 0.50
+  measured vs config R_BS: 0.510 +- 0.471 deg (within-take sigma; gate 1.0, PASS needs angle + 2 sigma inside it; compare takes for the take-to-take part)
+  sweeps: pitch 1090 samples (other joint 0.022 of it), yaw 1335 (0.073); pitch axis 0.733 deg, yaw axis 0.627 deg off the config; angle between the axes 89.836 +- 1.584 over 6 pitch / 4 yaw strokes (+ minus - strokes -0.32; URDF 90.000; torso co-rotation not removed)
+VERDICT INCONCLUSIVE  -> /w/tbs/tbs-neck-A3-gyro.json
+GYRO-EXIT 2 (INCONCLUSIVE)
+RUN-TBS-DONE 00:13:36

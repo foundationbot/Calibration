@@ -1,0 +1,11 @@
+source: phantom12_stereo_dense_thor.yaml, sha256 7dd63554ba77b42314d0b26fe7aacbba36e7119fd6270748c436faa3a7e32046; byte-identical to the repo copy tools/calibration/results/phantom12-2026-10-15/imucam/deploy/phantom12_stereo_dense_thor.yaml: yes
+rig config: <repo>/tools/calibration/config/rig-phantom12.yaml  (phantom12; pinhole-equi 1280x800; board aprilgrid 7x5 tags, 100 mm, pitch 120 mm)
+Fit A: tools/calibration/results/phantom12-2026-10-20-lens/fit-a-kb4t.json:KB4T@all@800, calibration sha256 884658747ef1, baseline 44.43 mm
+step 83 (exit 0): wrote <tmp>/phantom12_stereo_dense_thor-fita.yaml: T_BS from 2 report(s)
+(a) okviscfg: lens pinhole-kb4t, 2 cameras x 10 numbers = Fit A's (largest relative difference 2.9e-16, the 16-digit print; limit 1e-14)
+(b) camera 0's T_SC: the source's text, byte for byte
+(c) inv(T_SC0) T_SC1 - C: largest entry 3.94e-16 (limit 1e-12); baseline 44.4270 mm
+(d) T_BS T_SC0 - X (tools/calibration/results/phantom12-2026-10-20-handeye/T_BC-fita.json): largest entry 1.11e-16 (limit 1e-09); camera 0 in the Head moves 0.495 deg / 13.99 mm against the deployed T_BS
+(e) FileStorage: 178 values in the source, 46 differ (4 added: cameras[0].distortion_coefficients[4], cameras[0].distortion_coefficients[5], cameras[1].distortion_coefficients[4], cameras[1].distortion_coefficients[5]), 136 identical; the changed ones are cameras[0].distortion_coefficients, cameras[0].distortion_type, cameras[0].focal_length, cameras[0].principal_point, cameras[1].T_SC, cameras[1].distortion_coefficients, cameras[1].distortion_type, cameras[1].focal_length, cameras[1].principal_point, imu_parameters.T_BS
+(f) text: 14 source lines replaced by 27, all header comments or lens / camera-1 T_SC / T_BS lines
+wrote tools/calibration/results/phantom12-2026-10-21-okvis-kb4t/phantom12_stereo_dense_thor-fita.yaml (sha256 ccba2f1c28f563696c216c229657b66e14cba4866240c25dd25b55e45c9ef2d6) and tools/calibration/results/phantom12-2026-10-21-okvis-kb4t/candidate.diff

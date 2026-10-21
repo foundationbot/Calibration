@@ -1,0 +1,83 @@
+# =============================================================================
+#  rig-phantom12.yaml — phantom12's head: OAK stereo pair + NeckPitch IMU,
+#  calibrated against an AprilGrid. Use with  --rig config/rig-phantom12.yaml
+#  or  CALIB_RIG=$PWD/config/rig-phantom12.yaml  (40_calibrate.sh: RIG=...).
+#
+#  Sources, all checked on phantom12 on 2026-10-14:
+#    cameras  /etc/phantom/head_camera.json: queue 0 'bottom' socket C,
+#             queue 1 'left' socket B, queue 2 'right' socket D; colour 1280x800.
+#    lens     phantom12's older calibration files are equidistant with
+#             f ~ 567-588 px: the same ~129 deg fisheye class as mk13.
+#    IMU      NeckPitch is index 2 of 17 in /raw_imu_actuals (read-only roster
+#             from /dev/shm/config). The index is not stable: re-read it each
+#             session before recording.
+# =============================================================================
+
+rig_name: phantom12
+okvis_yaml_name: phantom12_stereo.yaml
+
+# ---- calibration board --------------------------------------------------------
+target: /t/tools/calibration/config/target-aprilgrid.yaml
+# true: target-aprilgrid.yaml's pitch was checked with a steel rule on 2026-10-14
+# (720 mm over 6 pitches, 480 mm over 4). The declared size sets the scale of the
+# baseline and of every depth (1 % size error = 1 % depth error).
+target_measured: true
+
+# ---- cameras ------------------------------------------------------------------
+cameras:
+  model: pinhole-equi
+  resolution: [1280, 800]
+  nominal_focal_px: 568.0        # 1280 px over ~129 deg, equidistant
+  # Stereo baseline before calibration, m: only the start of the KB4T fit (step 45), which refines it.
+  # phantom12: 44.83 mm (Kalibr, 15 Oct, results/phantom12-2026-10-15/calib3/), 44.43 mm (Fit A, 20 Oct).
+  nominal_baseline_m: 0.0445
+  # Kalibr order. Sides follow head_camera.json's names; step 60 MEASURES them
+  # from the disparity sign and exits 3 if they are wrong.
+  kalibr:
+    - {record_dir: cam1, dma_queue: 1, side: left}
+    - {record_dir: cam2, dma_queue: 2, side: right}
+  # OKVIS cam0 = kalibr cam0 = physical LEFT on queue 1 (no role swap here,
+  # unlike mk13). The deployed robot.env must then pair OKVIS_DMA_CAMERAS=1,2.
+  okvis_order: [0, 1]
+
+# ---- IMU ----------------------------------------------------------------------
+imu:
+  name: NeckPitch
+  index: 2
+  kalibr_yaml: imu-phantom12-neckpitch.yaml
+  # No fallback IMU-in-Head transform: the only one in this package is
+  # phantom13's IMU mount. Step 70 must find T_BS in phantom12's template.
+  T_BS_default_file: null
+
+# ---- robot access (step 80's live checks only) --------------------------------
+robot:
+  host: root@phantom12
+  # display_imu.py is in OKVIS2-X deployment/; it is not installed on phantom12's
+  # host today. Copy it there (read-only use) before step 80's live checks.
+  display_imu_dir: /path/on/phantom12/to/OKVIS2-X/deployment
+  # a workstation checkout of feat/vio-tuning-ui (tools/vio_tuner exists only there)
+  vio_tuner_tools: /path/to/OKVIS2-X/tools
+  body_axes: {forward: 0, left: 1, up: 2}
+
+# ---- capture / tree building (step 10) ----------------------------------------
+capture:
+  pair_tol_ms: 10
+  calib_pairs: 450
+  heldout_pairs: 25
+
+# ---- acceptance gates -----------------------------------------------------------
+gates:
+  coverage_grid: [16, 10]
+  coverage_min: 0.60
+  reach_min_deg: 60.0
+  epipolar_max_px: 0.5
+  degenerate_disparity_px: 1.0
+  t_sc_range_m: [0.05, 0.40]
+  scale_max_pct: 0.5             # step 65: |triangulated pitch / measured - 1|
+  # KB4T lens steps 06/45/46/66 (calibration.md section 4b; rigcfg.LENS_GATES holds the same defaults)
+  lens_hold_rms_max_px: 0.6      # a hold's rigid-board pixel rms above this: step 45 drops it, step 66 flags it
+  lens_bad_hold_max_frac: 1.0
+  lens_repeat_max_pct: 0.5       # split-half fits differing by more at 1 m: the cell is "unconstrained"
+  lens_pass_pct: 0.5             # step 66: |median depth error| per cell x distance with >= lens_min_holds holds
+  lens_pass_corner_pct: 1.0      # the same in the four corner cells
+  lens_min_holds: 8              # holds an entry needs to be judged; the coverage target per cell (step 06)

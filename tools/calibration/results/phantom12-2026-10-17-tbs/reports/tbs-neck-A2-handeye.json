@@ -1,0 +1,328 @@
+{
+ "model": "pixels",
+ "n_holds": 8,
+ "n_frames": 80,
+ "vs_config": {
+  "rot_head_deg": [
+   -0.29796197156533893,
+   -0.24747939146896175,
+   0.054532258907649414
+  ],
+  "angle_deg": 0.3911536181125292,
+  "trans_head_mm": [
+   29.970373209491807,
+   -4.798258420215671,
+   53.14649798899697
+  ],
+  "dist_mm": 61.20291498513656,
+  "gripper_mm": 67.00578445581424
+ },
+ "sigma_deg": null,
+ "sigma_mm": null,
+ "sigma_stat_deg": 1.3959749539959598,
+ "sigma_stat_mm": 26.542045026714373,
+ "sigma_sys_deg": null,
+ "sigma_sys_mm": null,
+ "gate": {
+  "deg": 0.3,
+  "mm": 3.0,
+  "reach_m": 0.85
+ },
+ "fit": {
+  "rms_px": 1.3175147589044618,
+  "rms_all_px": 3.0149997842481344,
+  "outlier_fraction": 0.252474742320645,
+  "trim_rounds": 5,
+  "trim_converged": false,
+  "n_corners": 7325,
+  "n_outliers": 2474,
+  "n_images": 74,
+  "n_groups": 8,
+  "sigma_rot_head_deg": [
+   0.5827324345451595,
+   0.4323660315133519,
+   1.1925722605806697
+  ],
+  "sigma_trans_head_mm": [
+   11.465810651641815,
+   7.101916378680564,
+   22.859967717629416
+  ],
+  "cond": 99.71022942961982,
+  "converged": true,
+  "iterations": 65,
+  "group_rms_px": {
+   "1": 2.7797136317869073,
+   "10": 1.226474015138934,
+   "11": 1.652150397779296,
+   "13": 1.915092398894516,
+   "3": 1.4189356130206965,
+   "7": 0.8060517997881842,
+   "8": 0.862887797851446,
+   "9": 1.0599936063174296
+  }
+ },
+ "T_BC_measured": [
+  [
+   -0.006910176038040273,
+   -0.4944828301290882,
+   0.8691599278467975,
+   0.17217684437530223
+  ],
+  [
+   -0.9999715528132479,
+   0.006045272501302356,
+   -0.004510902863802689,
+   0.016210304573898365
+  ],
+  [
+   -0.003023744596515589,
+   -0.8691663738248924,
+   -0.4945105373808554,
+   0.0672122243517851
+  ],
+  [
+   0.0,
+   0.0,
+   0.0,
+   1.0
+  ]
+ ],
+ "T_BS_measured": [
+  [
+   -0.0009519341622038514,
+   0.8336789062439423,
+   0.5522486533304133,
+   0.04079476396155751
+  ],
+  [
+   -0.999974367566527,
+   -0.004712535174238947,
+   0.005390382375635486,
+   -0.0503407810406703
+  ],
+  [
+   0.007096339286902122,
+   -0.5522293665644151,
+   0.8336620230480639,
+   0.1355987112667021
+  ],
+  [
+   0.0,
+   0.0,
+   0.0,
+   1.0
+  ]
+ ],
+ "T_TW": [
+  [
+   0.09179478477259645,
+   0.15293593210579784,
+   -0.9839635756263964,
+   1.1283646370459042
+  ],
+  [
+   0.9917638765614397,
+   0.07459345158942601,
+   0.10411642583089817,
+   -0.5463958156216605
+  ],
+  [
+   0.08932038197621861,
+   -0.9854168750589309,
+   -0.14482904305668753,
+   0.7256074837805067
+  ],
+  [
+   0.0,
+   0.0,
+   0.0,
+   1.0
+  ]
+ ],
+ "per_camera": {},
+ "cross_check_holds": 8,
+ "verdict": "INCONCLUSIVE",
+ "verdict_reason": "X - config 0.391 deg / 61.20 mm, X's 1 sigma inf deg / inf mm. KEEP needs inf deg <= 0.3 and inf mm <= 3.0; REPLACE needs 2 sigma inf deg <= 0.3 and inf mm <= 3.0; IMPROVE needs the config outside (-inf deg > 0.3 or -inf mm > 3.0) and each part good to the gate or over 4 sigma (inf deg, inf mm)",
+ "inconclusive_because": [
+  "the model does not fit",
+  "no cross-check between the cameras",
+  "8 holds < 20"
+ ],
+ "warnings": [
+  "pixel rms 1.32 after the fit (3.01 over every corner), 25.2% of the corners cut (limits 1.5 px, 2%): the head is not where the encoders put it (a hand loading an unpowered neck: the 16 Oct takes, rerun 18 Oct, 3.0-6.7 px over every corner, 25-60 % cut), the neck does not move as the URDF says, or the torso or board moved (see fit.group_rms_px, per hold)",
+  "no cross-check between the cameras (8 holds seen by both cameras < 20): X's systematic error is unknown",
+  "step 75 said RETAKE for this take: this verdict is a diagnostic, not the decision"
+ ],
+ "take": "tbs-neck-A2",
+ "T_SC0": [
+  [
+   0.9999310416240093,
+   -0.01174230193306174,
+   0.000174189656446151,
+   -0.06715974055272894
+  ],
+  [
+   0.0006213336777105117,
+   0.06771080251868256,
+   0.9977047966040542,
+   0.1469818711181323
+  ],
+  [
+   -0.011727145483217174,
+   -0.9976358882716628,
+   0.06771342917934854,
+   0.01590309574857512
+  ],
+  [
+   0.0,
+   0.0,
+   0.0,
+   1.0
+  ]
+ ],
+ "n_images_in_joint_gaps": 0,
+ "holds": [
+  {
+   "hold": 0,
+   "yaw": -0.525656,
+   "pitch": 0.495641,
+   "approach": [
+    0,
+    0
+   ],
+   "dropped": true
+  },
+  {
+   "hold": 1,
+   "yaw": -0.285301,
+   "pitch": -0.188131,
+   "approach": [
+    1,
+    0
+   ],
+   "dropped": false
+  },
+  {
+   "hold": 2,
+   "yaw": -0.0824798,
+   "pitch": -0.195801,
+   "approach": [
+    1,
+    0
+   ],
+   "dropped": true
+  },
+  {
+   "hold": 3,
+   "yaw": 0.264392,
+   "pitch": -0.291627,
+   "approach": [
+    1,
+    0
+   ],
+   "dropped": false
+  },
+  {
+   "hold": 4,
+   "yaw": 0.446504,
+   "pitch": -0.397424,
+   "approach": [
+    1,
+    0
+   ],
+   "dropped": true
+  },
+  {
+   "hold": 5,
+   "yaw": 0.516492,
+   "pitch": -0.489175,
+   "approach": [
+    1,
+    0
+   ],
+   "dropped": true
+  },
+  {
+   "hold": 6,
+   "yaw": 0.437923,
+   "pitch": -0.485148,
+   "approach": [
+    -1,
+    0
+   ],
+   "dropped": true
+  },
+  {
+   "hold": 7,
+   "yaw": 0.386775,
+   "pitch": -0.480019,
+   "approach": [
+    -1,
+    0
+   ],
+   "dropped": false
+  },
+  {
+   "hold": 8,
+   "yaw": 0.180454,
+   "pitch": -0.477622,
+   "approach": [
+    -1,
+    0
+   ],
+   "dropped": false
+  },
+  {
+   "hold": 9,
+   "yaw": -0.0390969,
+   "pitch": -0.477958,
+   "approach": [
+    -1,
+    0
+   ],
+   "dropped": false
+  },
+  {
+   "hold": 10,
+   "yaw": -0.655805,
+   "pitch": -0.479444,
+   "approach": [
+    -1,
+    0
+   ],
+   "dropped": false
+  },
+  {
+   "hold": 11,
+   "yaw": 0.509014,
+   "pitch": -0.312671,
+   "approach": [
+    0,
+    1
+   ],
+   "dropped": false
+  },
+  {
+   "hold": 12,
+   "yaw": -0.299059,
+   "pitch": -0.489079,
+   "approach": [
+    0,
+    -1
+   ],
+   "dropped": true
+  },
+  {
+   "hold": 13,
+   "yaw": -0.277056,
+   "pitch": -0.35511899999999996,
+   "approach": [
+    0,
+    -1
+   ],
+   "dropped": false
+  }
+ ],
+ "qc_verdict": "RETAKE"
+}

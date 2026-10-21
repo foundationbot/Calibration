@@ -1,0 +1,198 @@
+%YAML:1.0
+# phantom12_stereo_dense_thor.yaml -- phantom12's okvis_stereo_dense_thor.yaml (sha256 95fce9a8,
+# 2026-08-09) with ONLY its calibration replaced, 2026-10-16. All tuning is the 9 Aug file's.
+# Replaced: per camera T_SC, image_dimension, focal_length, principal_point, distortion
+#   (equidistant), plus dma_queue 1 / 2; camera_parameters.image_delay; imu_parameters.T_BS;
+#   added dma.imu_name NeckPitch.
+# Source: tools/calibration/results/phantom12-2026-10-15/imucam/phantom12_stereo.yaml on the
+#   stereo-depth-eval work branch (Kalibr, 15 Oct): stereo baseline 44.83 mm, held-out row error
+#   0.204 px, scale within +-1 % from 0.4 to 2.1 m; camera-IMU take B, reprojection 0.29 / 0.26 px,
+#   repeatable to 4.4 mm / 0.08 deg; image_delay -0.0056 s.
+# T_BS is phantom21's head-design value, UNVERIFIED on phantom12: heading is consistent (cameras
+#   0.2 deg off the Head's forward axis in azimuth), but with it the cameras look 30 deg down in
+#   the Head frame (phantom21 ~10 deg). Depth and VIO do not depend on it; Head/Pelvis-frame
+#   outputs do. The previous file: okvis_stereo_dense_thor.yaml beside this one, unchanged.
+cameras:
+     - {T_SC:
+        [0.9999310416240091, -0.01174230193306174, 0.0001741896564461527, -0.06715974055272894,
+          0.0006213336777105115, 0.06771080251868256, 0.9977047966040538, 0.1469818711181323,
+          -0.01172714548321717, -0.9976358882716622, 0.06771342917934865, 0.01590309574857512,
+          0, 0, 0, 1],
+        image_dimension: [1280, 800],
+        distortion_coefficients: [-0.01237955833390107, 0.01738601890953348, 0.01164880669217011, -0.02523499765495942],
+        distortion_type: equidistant,
+        focal_length: [562.9142084808391, 561.6780260943772],
+        principal_point: [642.752387266093, 384.2237952142237],
+        cam_model: pinhole,
+        camera_type: rgb+depth, #gray, rgb, gray+depth, rgb+depth
+        mapping: true,
+        mapping_rectification: true,
+        slam_use: okvis, #none, okvis, okvis-depth, okvis-virtual
+        dma_queue: 1} # OKVIS cam0 = DMA queue 1 (left, socket B); OKVIS_DMA_CAMERAS=1,2 agrees
+
+     - {T_SC:
+        [0.9996148717885609, -0.02775070394529625, -8.080642760114247e-05, -0.02233449796698593,
+          0.001791329126282664, 0.06161957175290618, 0.9980981011488548, 0.1472594987832361,
+          -0.02769294565588055, -0.9977138501632263, 0.06164555096169944, 0.01541871475241956,
+          0, 0, 0, 1],
+        image_dimension: [1280, 800],
+        distortion_coefficients: [-0.01206696273086, 0.03146984862246962, -0.06059374788285483, 0.04222150055208412],
+        distortion_type: equidistant,
+        focal_length: [565.3641845975487, 563.7718970072081],
+        principal_point: [641.3470474091959, 383.5724131913916],
+        cam_model: pinhole,
+        mapping_rectification: true,
+        camera_type: rgb, #gray, rgb, gray+depth, rgb+depth
+        slam_use: okvis, #none, okvis, okvis-depth, okvis-virtual
+        dma_queue: 2} # OKVIS cam1 = DMA queue 2 (right, socket D); OKVIS_DMA_CAMERAS=1,2 agrees
+
+# additional camera parameters
+camera_parameters:
+    timestamp_tolerance: 0.005 # [s] stereo frame out-of-sync tolerance
+    sync_cameras: [0, 1] # the cameras that will be synchronised
+    image_delay: -0.0056 # [s] timestamp_camera_correct = timestamp_camera - image_delay
+    online_calibration: # some parameters to set the online
+        do_extrinsics: false # Do we online-calibrate extrinsics?
+        do_extrinsics_final_ba: false # Do we calibrate extrinsics in final BA?
+        sigma_r: 0.01 # T_SCi position prior stdev [m]
+        sigma_alpha: 0.1 # T_SCi orientation prior stdev [rad]
+        sigma_r_final_ba: 0.03 # T_SCi position prior stdev in final BA [m]
+        sigma_alpha_final_ba: 0.3 # T_SCi orientation prior stdev in final BA [rad]
+    deep_stereo_indices: [0, 1] # [left, right] camera indices for the stereo network
+    fov_scale: 1.0 # Divisor for new focal length which is only used when fisheye stereo rectification for dense mapping.
+    stereo_network_type: tensorrt # torch | tensorrt
+    stereo_network_file: s2m2_M_512x320_thor_fp16_pinned.engine # filename in modelDir; extension must match backend
+    stereo_network_width: 512  # rectified-image width fed to the stereo network; must match the engine
+    stereo_network_height: 320 # rectified-image height fed to the stereo network; must match the engine
+
+imu_parameters:
+    use: true
+    a_max: 176.0 # acceleration saturation [m/s^2]
+    g_max: 7.8 # gyro saturation [rad/s]
+    sigma_g_c: 0.0026405873915791738 # gyro noise density [rad/s/sqrt(Hz)]
+    sigma_a_c: 0.010935292495321242 # accelerometer noise density [m/s^2/sqrt(Hz)]
+    sigma_bg: 0.01 # gyro bias prior [rad/s]
+    sigma_ba: 0.1 # accelerometer bias prior [m/s^2]
+    sigma_gw_c: 3.916835278254409e-04 # gyro drift noise density [rad/s^s/sqrt(Hz)]
+    sigma_aw_c: 0.0012028682743073398 # accelerometer drift noise density [m/s^2/sqrt(Hz)]
+    g: 9.81007 # Earth's acceleration due to gravity [m/s^2]
+    g0: [ 0.0, 0.0, 0.0 ] # initial gyro bias [rad/s]
+    a0: [ 0.0, 0.0, 0.0 ] # initial accelerometer bias [m/s^2]
+    s_a: [ 1.0,  1.0, 1.0 ] # scale factor for accelerometer measurements: a_true = s_a * a_meas + b_a
+    # transform Body-Sensor (IMU). Body = the URDF Head link. phantom21's head-design value (CAD
+    # Head->camera combined with phantom21's T_SC); UNVERIFIED on phantom12 (see header).
+    # It replaces an identity that made OKVIS take the IMU's +x as the robot's front.
+    T_BS:
+        [-0.00188426, 0.831282, 0.555847, 0.0110568,
+         -0.999996, -0.00262363, 0.000533834, -0.0457738,
+         0.0019021, -0.555844, 0.831284, 0.0826725,
+         0.0, 0.0, 0.0, 1.0]
+
+# frontend: detection etc.
+frontend_parameters:
+    feature_type: superpoint # brisk | orb | superpoint
+    keyframe_overlap: 0.60
+    use_cnn: false
+    parallelise_detection: true
+    num_matching_threads: 8
+    resize_factor: 0.5  # 1280x800 -> 640x400 for the whole VIO incl. SuperPoint
+    serialize_gpu_inference: 0  # 1 = SuperPoint detect + s2m2 never run on the GPU at once; detect has priority. 0 = off
+
+    brisk:
+        detection_threshold: 38.0
+        absolute_threshold: 50.0
+        matching_threshold: 60.0
+        octaves: 0
+        max_num_keypoints: 500
+        rotation_invariance: true
+        scale_invariance: false
+        vocabulary: small_voc.yml.gz
+        p_dbow: 0.4
+
+    orb:
+        n_features: 1000
+        scale_factor: 1.2
+        n_levels: 4
+        ini_fast_threshold: 20
+        min_fast_threshold: 10
+        ratio_test: 0.6
+        check_orientation: true
+        nms_radius: 4       # greedy spatial NMS on keypoints (px); 0 disables
+        vocabulary: ORBvoc.txt
+        p_dbow: 0.010
+
+    superpoint:
+        # Static fixed-top-K, batch-1 engine. Input size MUST match the VIO
+        # frame size (resize_factor*raw = 0.5*1280x800 = 640x400). Detection is
+        # per-camera (parallelise_detection); batching was removed.
+        # Re-export: export_superpoint_topk.py --width 640 --height 400 --batch 1
+        engine: superpoint_640x400_topk512_thor.engine
+        # lightglue | bruteforce. bruteforce = cuBLAS cosine, no engine,
+        # preferred on Thor. (SuperPoint is the only feature type with a
+        # matcher choice, so it lives here.)
+        matcher: bruteforce
+        score_threshold: 0.2
+        p_dbow: 0.075
+        # Loop-closure distinctiveness floor (sum of per-dim std-dev over the
+        # RANSAC-inlier 256-float descriptors). Rejects an LC when below this
+        # AND inliers < 20. Observed good LCs ~14; these descriptors top out
+        # ~16, so 20 effectively requires >=20 inliers. 0 = off (log-only).
+        lc_distinctiveness: 12.0
+        # Final keypoint cap, applied in C++ AFTER score-threshold + greedy NMS
+        # (post-processing). The engine's 1024 candidates are thinned to at most
+        # this many well-spread points.
+        max_keypoints: 300
+        # C++ greedy NMS radius in pixels, applied to the engine's 1024
+        # candidates. 0 disables. Mirrors BRISK's uniformity-radius selection;
+        # ~0.3 ms for ~1024 candidates at radius=16.
+        nms_radius: 8
+
+
+    # Brute-force (cuBLAS cosine) matcher, used when matcher=bruteforce.
+    # min_cossim is also reused as the loop-closure verification floor.
+    bruteforce:
+        min_cossim: 0.80     # accept a match if cosine >= this
+        max_ratio: 1.0       # Lowe ratio (top1/top2); 1.0 disables
+        cross_check: 1        # 1 = mutual nearest-neighbour check, 0 = off
+
+    lightglue:
+        engine: lightglue.engine
+        min_score: 0.20
+
+# estimator parameters
+estimator_parameters:
+    num_keyframes: 5 # number of keyframes in optimisation window
+    num_loop_closure_frames: 5 # number of loop closure frames in optimisation window
+    num_imu_frames: 3 # number of frames linked by most recent nonlinear IMU error terms
+    do_loop_closures: true # whether to do VI-SLAM or VIO
+    do_final_ba: true # Whether to run a full final BA
+    enforce_realtime: true # whether to limit the time budget for optimisation
+    realtime_min_iterations: 3 # minimum number of iterations always performed
+    realtime_max_iterations: 10 # never do more than these, even if not converged
+    realtime_time_limit: 0.035 # time budget for realtime optimisation [s]
+    realtime_num_threads: 5 # number of threads for the realtime optimisation
+    full_graph_iterations: 15 # don't do more than these for the full (background) optimisation
+    full_graph_num_threads: 3 # number of threads for the full (background) optimisation
+    drift_percentage_heuristic: 10.0 # % allowed drift in loop closures rel. to dist. travelled.
+
+# some options for how and what to output
+output_parameters:
+    display_topview: false # Displays top view of the trajectory. Might become slow for long sequences.
+    display_matches: false  # displays debug video and matches. May be slow.
+    display_overhead: false # debug overhead image. Is slow.
+    enable_submapping: true # Enable volumetric submapping
+    use_rerun: true                     # Connect to a running Rerun viewer for live visualization.
+    rerun_enable_occupancy_grid: false # Stream OccupancyGrid points to Rerun (requires use_rerun).
+    rerun_enable_submap_mesh: false     # Stream submap meshes to Rerun (requires use_rerun).
+    rerun_enable_elevation_grid: true   # Stream the 2.5D elevation grid to Rerun (requires use_rerun + se2 elevation_enable).
+
+
+# Absolute path to directory containing neural-network .pt files
+# (depth-model.pt, depth-model-rgb.pt, fast-scnn.pt, mvs-model.pt, etc.).
+# If omitted, the apps fall back to <executable_dir>/../models/.
+model_dir: /okvis-models
+
+# DMA transport. imu_name picks the head IMU by its RobotConfigData name; without it OKVIS
+# used slot 0, which on phantom12 is RightFoot.
+dma:
+    imu_name: "NeckPitch"

@@ -1,0 +1,34 @@
+START 20:09:28
+SYNC-DIAG-DONE 386
+SYNC-DONE B 20:10:40
+SYNC-DIAG-DONE 378
+SYNC-DONE C 20:11:47
+converting 5029 images with 2 procs ...
+done: 5029/5029 written -> /data/okvis-recordings/tree/imucam-A
+mapping recorded in /data/okvis-recordings/tree/imucam-A/SOURCE.json
+NEXT: step 20 (coverage) before you run any fit
+FILTER-EDGES cam0: kept 1922 dropped 587 (corners beyond 450 px)
+FILTER-EDGES cam1: kept 1873 dropped 647 (corners beyond 450 px)
+FILTER-EDGES-DONE
+TREE-DONE A 20:28:55
+converting 4901 images with 2 procs ...
+done: 4901/4901 written -> /data/okvis-recordings/tree/imucam-B
+mapping recorded in /data/okvis-recordings/tree/imucam-B/SOURCE.json
+NEXT: step 20 (coverage) before you run any fit
+FILTER-EDGES cam0: kept 1641 dropped 808 (corners beyond 450 px)
+FILTER-EDGES cam1: kept 1626 dropped 826 (corners beyond 450 px)
+FILTER-EDGES-DONE
+TREE-DONE B 20:43:39
+converting 4869 images with 2 procs ...
+done: 4869/4869 written -> /data/okvis-recordings/tree/imucam-C
+mapping recorded in /data/okvis-recordings/tree/imucam-C/SOURCE.json
+NEXT: step 20 (coverage) before you run any fit
+FILTER-EDGES cam0: kept 1338 dropped 1090 (corners beyond 450 px)
+FILTER-EDGES cam1: kept 1326 dropped 1115 (corners beyond 450 px)
+FILTER-EDGES-DONE
+TREE-DONE C 20:57:58
+FIT-DONE imucam-C-noedge exit 0 21:20:28
+FIT-DONE imucam-B-noedge exit 0 21:22:49
+FIT-DONE imucam-A-noedge exit 0 21:53:50
+FIT-DONE imucam-B exit 0 21:55:54
+RUN-IMUCAM-ALL-DONE 21:55:54

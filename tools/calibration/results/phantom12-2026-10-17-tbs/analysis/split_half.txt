@@ -1,0 +1,22 @@
+split_half.py on Thor (calib-py:2, the reference package), 18 Oct 2026: each camera's pixel-level fit alone
+on the even and on the odd holds of each take (step 75's drop lists applied).
+
+== tbs-neck-P1
+702 images, holds 45
+  holds even, camera 0: X - config (Head, mm) +0.59 -8.46 +0.85  +- 4.38 mm, 0.677 px
+  holds even, camera 1: X - config (Head, mm) +2.25 -13.36 +2.46  +- 5.07 mm, 0.782 px
+  holds even: camera 0 - camera 1 = -1.66 +4.90 -1.60 mm (5.42), rotation -0.079 +0.061 -0.117 deg
+  holds odd, camera 0: X - config (Head, mm) +0.65 -6.28 +2.32  +- 2.92 mm, 0.635 px
+  holds odd, camera 1: X - config (Head, mm) +2.06 -10.84 +3.58  +- 3.65 mm, 0.764 px
+  holds odd: camera 0 - camera 1 = -1.41 +4.56 -1.26 mm (4.94), rotation -0.076 +0.057 -0.138 deg
+== tbs-neck-P2
+754 images, holds 48
+  holds even, camera 0: X - config (Head, mm) +0.98 -6.54 +2.01  +- 2.79 mm, 0.610 px
+  holds even, camera 1: X - config (Head, mm) +2.34 -11.18 +2.98  +- 3.54 mm, 0.738 px
+  holds even: camera 0 - camera 1 = -1.36 +4.65 -0.98 mm (4.94), rotation -0.073 +0.053 -0.121 deg
+  holds odd, camera 0: X - config (Head, mm) +1.94 -6.67 +5.45  +- 3.06 mm, 0.621 px
+  holds odd, camera 1: X - config (Head, mm) +3.63 -11.56 +7.13  +- 3.98 mm, 0.762 px
+  holds odd: camera 0 - camera 1 = -1.68 +4.89 -1.68 mm (5.44), rotation -0.092 +0.063 -0.165 deg
+
+The difference is the same in all four halves to ~0.5 mm while each camera's own error bar is 3-5 mm:
+a systematic between the two cameras' calibrations, not noise.

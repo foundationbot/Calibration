@@ -1,0 +1,59 @@
+{
+ "T_BC": [
+  [
+   -0.0005471971127844136,
+   -0.5021630754813285,
+   0.8647727714252185,
+   0.1397732921365633
+  ],
+  [
+   -0.999970696132729,
+   0.006878121910041147,
+   0.003361296597368979,
+   0.008919943408781928
+  ],
+  [
+   -0.007635931583286549,
+   -0.8647455909469118,
+   -0.5021521238496669,
+   0.020678374858274225
+  ],
+  [
+   0.0,
+   0.0,
+   0.0,
+   1.0
+  ]
+ ],
+ "what": "camera 0 (Fit A's camera frame) in the Head link; mean of the two takes' step-81 X",
+ "takes": [
+  {
+   "take": "tbs-neck-P1",
+   "verdict": "IMPROVE",
+   "sigma_deg": 0.08375647950687164,
+   "sigma_mm": 2.8019277833804046,
+   "sigma_stat_deg": 0.06339370859161983,
+   "sigma_stat_mm": 2.7183016948066525
+  },
+  {
+   "take": "tbs-neck-P2",
+   "verdict": "IMPROVE",
+   "sigma_deg": 0.0794877045652847,
+   "sigma_mm": 2.5260774377011437,
+   "sigma_stat_deg": 0.05982224992638992,
+   "sigma_stat_mm": 2.42361115645766
+  }
+ ],
+ "vs_other_take": {
+  "angle_deg": 0.03878868877301963,
+  "dist_mm": 2.1557133815431344,
+  "agree_limits": false,
+  "agree_sigma": true,
+  "combined_sigma_deg": 0.087163431984145,
+  "combined_sigma_mm": 3.6418477647610086,
+  "agree": true,
+  "why_not": []
+ },
+ "lens": "Fit A, results/phantom12-2026-10-20-lens/fit-a-kb4t.json KB4T@all@800",
+ "not_yet": "T_BS: computed by step 83 against the config that carries Fit A's lens (FINDINGS.md)"
+}

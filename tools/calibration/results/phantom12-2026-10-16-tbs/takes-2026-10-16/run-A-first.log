@@ -1,0 +1,31 @@
+waiting 56 s for the recorder's segment to close
+[mcap_to_euroc] 4579 frame(s), 150052 IMU sample(s), 2 camera(s) -> /root/calib-work/takes/tbs-neck-A-euroc
+rig config: /w/config/rig-phantom12.yaml  (phantom12; pinhole-equi 1280x800; board aprilgrid 7x5 tags, 100 mm, pitch 120 mm)
+holds: 21 (want >= 20), neck-pose cells 6/9 (want >= 8), reached from {'yaw+': 6, 'yaw-': 1, 'pitch+': 8, 'pitch-': 4}; yaw -0.76..+0.64, pitch -0.49..+0.50 rad
+drift within holds (sag plus tremor): median 0.52 deg, max 1.98 deg (hold 16); step 81 pairs every image with its own angles, so drift costs only through clock offsets
+sweeps: pitch-only 0.0 s, yaw-only 0.0 s (want >= 3.0 s each)
+joints: 489 Hz, longest gap 1078.0 ms
+IMU: 500.0 Hz, longest gap 2.9 ms
+IMU is the head's: step 82's fit leaves 0.037 rad/s (want < 0.15; the wrong IMU leaves ~0.5)
+camera cam1: 14.4 fps, board (>= 8 tags inside 450 px) in 20/21 holds
+camera cam2: 14.1 fps, board (>= 8 tags inside 450 px) in 0/21 holds
+encoder signs (board in the image per rad): NeckYaw +629 px (as the URDF), NeckPitch -567 px (as the URDF)
+torso: 6 segment(s) copied to /w/takes/tbs-neck-A-dmarec
+torso IMU stream: 500.0 Hz, longest gap 2.9 ms
+torso (IMU 9): off in 21/21 holds (tilt > 0.05 deg or yaw > 0.1 deg against most holds, or a turn > 0.05 deg during the hold); step 81: DROP_HOLDS=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20
+QC VERDICT: RETAKE (holds, sweeps, joints, board-cam2, torso)
+QC-EXIT 1
+rig config: /w/config/rig-phantom12.yaml  (phantom12; pinhole-equi 1280x800; board aprilgrid 7x5 tags, 100 mm, pitch 120 mm)
+step 81: 21 holds found, 20 used, 100 board images
+  camera-in-Head vs config: 3.460 deg (Head x y z: -2.781 +0.037 -2.058), 14.17 mm (-11.05 -8.58 +2.28); ~65.5 mm at 0.85 m. Gate 0.3 deg / 3.0 mm
+  1-sigma (clustered by hold): 1.647 0.590 1.209 deg, 14.69 4.75 10.12 mm; Jacobian condition 25
+  board spread in the torso: config 161.15 mm / 6.987 deg -> fitted 159.64 mm / 6.920 deg
+  play (reached from + minus -): yaw -9.471407881819488 deg over [30, 5], pitch 0.10818345408361632 deg over [40, 20]; outlier holds []
+  WARNING: large spread after the fit: the neck does not move as the URDF says, the joints have play, or the torso or board moved (see play, outlier_holds)
+VERDICT REPLACE  -> /w/tbs/tbs-neck-A-handeye.json
+HANDEYE-EXIT 1
+step 82: 1318 moving samples, residual 0.0370 rad/s, joint lag +10 ms
+  measured vs config R_BS: 2.317 deg (gate 1.0); pitch axis nan deg, yaw axis nan deg; angle between the axes nan (URDF 90.000)
+VERDICT FAIL  -> /w/tbs/tbs-neck-A-gyro.json
+GYRO-EXIT 1
+RUN-TBS-DONE 21:59:07

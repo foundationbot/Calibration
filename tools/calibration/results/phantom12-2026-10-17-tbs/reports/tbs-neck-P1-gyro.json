@@ -1,0 +1,54 @@
+{
+ "verdict": "INCONCLUSIVE",
+ "R_BS_angle_deg": 1.1607794041236035,
+ "sigma_deg": 0.28857959490255974,
+ "gate_deg": 1.0,
+ "eig_ratio": 0.08470125816012943,
+ "R_BS_measured": [
+  [
+   0.009756360844041701,
+   0.8224114838268297,
+   0.5688094273944772
+  ],
+  [
+   -0.9999268290084283,
+   0.003955449398844332,
+   0.011432018597028913
+  ],
+  [
+   0.007151926469873991,
+   -0.5688793419432675,
+   0.8223898979547138
+  ]
+ ],
+ "half_turn_explained_by": null,
+ "bias_rad_s": [
+  0.010007279098805888,
+  -0.015731653169942277,
+  -0.0014348692560927842
+ ],
+ "lag_s": 0.004000000000000045,
+ "lag_at_edge": false,
+ "residual_rad_s": 0.04189372606752027,
+ "n_moving": 29050,
+ "n_still": 130934,
+ "n_gap_masked": 33396,
+ "axes": {
+  "n_pitch": 0,
+  "n_yaw": 4978,
+  "pitch_coupling": null,
+  "yaw_coupling": 0.007490559674276165,
+  "urdf_inter_axis_deg": 90.0,
+  "yaw_axis_link": [
+   -0.014702454930135262,
+   -0.009013060955903334,
+   0.9998512902183168
+  ],
+  "yaw_axis_deg": 0.9881270320725152,
+  "n_pitch_strokes": 0,
+  "n_yaw_strokes": 0
+ },
+ "warnings": [
+  "one neck joint barely moved (motion eigenvalue ratio 0.085 < 0.1): R_SB is not determined in every direction"
+ ]
+}

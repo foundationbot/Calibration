@@ -1,0 +1,6 @@
+rig config: /o/rig-nogate.yaml  (phantom12; pinhole-equi 1280x800; board aprilgrid 7x5 tags, 100 mm, pitch 120 mm)
+/o/fita-fit-corners.npz: 1777 pairs in 218 holds with >= 12 corners in both cameras
+  stereo pose alone from the nominal start: nfev 9, success True
+  attempt 1: nfev 170 success True rms 0.3911 px, kept 423487 (863 s)
+quality gate: 0 of 216 holds above 100.0 px
+converged: rms 0.391 px over 1741 pairs, baseline 44.43 mm -> /o/fit-nogate.json

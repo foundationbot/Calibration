@@ -1,0 +1,44 @@
+rig config: /t/tools/calibration/config/rig-phantom12.yaml  (phantom12; pinhole-equi 1280x800; board aprilgrid 7x5 tags, 100 mm, pitch 120 mm)
+step 81: 49 holds found, 45 used, 446 board images (images in /joints gaps left out by dump_corners.py, how many not recorded)
+  camera-in-Head vs config: 0.377 deg (Head x y z: -0.092 +0.168 +0.324), 9.96 mm (+1.35 -9.53 +2.56); ~15.5 mm at 0.85 m. Gate 0.3 deg / 3.0 mm, at 2 sigma
+  the fit's 1-sigma (clustered by hold): 0.020 0.022 0.063 deg, 0.80 0.89 2.24 mm (total 0.070 deg, 2.54 mm); Jacobian condition 59
+  X's sigma (1 sigma) 0.108 deg / 3.62 mm: the fit's statistical 0.070 deg / 2.54 mm and the cameras' systematic 0.082 deg / 2.59 mm (half their distance) in quadrature
+  pixel rms after the fit 0.773 px over 54685 corners of 446 images, 0.806 px over every corner (247 = 0.4% left out beyond 3.0 px; the model fits up to 1.5 px and 2%)
+  camera 0 alone: 0.351 deg, 7.43 mm (+0.60 -7.16 +1.88) +- 0.057 deg / 2.32 mm, 0.663 px
+  camera 1 alone: 0.417 deg, 12.53 mm (+2.11 -11.90 +3.31) +- 0.083 deg / 2.79 mm, 0.784 px
+  each camera's fit alone (45 shared holds) 0.164 deg / 5.17 mm apart (Head x y z -1.51 +4.74 -1.43 mm): half of it is the systematic
+  WARNING: each camera's fit alone (45 shared holds): 0.164 deg / 5.17 mm apart, beyond the gate: the two cameras' calibrations (intrinsics or stereo pose) disagree; half of it is in X's sigma as a systematic
+  verdict arithmetic: X - config 0.377 deg / 9.96 mm, X's 1 sigma 0.108 deg / 3.62 mm. KEEP needs 0.592 deg <= 0.3 and 17.20 mm <= 3.0; REPLACE needs 2 sigma 0.215 deg <= 0.3 and 7.25 mm <= 3.0; IMPROVE needs the config outside (0.161 deg > 0.3 or 2.71 mm > 3.0) and each part good to the gate or over 4 sigma (0.430 deg, 14.50 mm)
+  no verdict possible: neither the config nor the fit shown good to the gate at 2 sigma, and the fit not shown better than the config (see verdict_reason)
+VERDICT INCONCLUSIVE  -> /o/repro-P1.json
+exit 2 (repro P1) 23:30:06
+rig config: /t/tools/calibration/config/rig-phantom12.yaml  (phantom12; pinhole-equi 1280x800; board aprilgrid 7x5 tags, 100 mm, pitch 120 mm)
+step 81: 50 holds found, 48 used, 472 board images (images in /joints gaps left out by dump_corners.py, how many not recorded)
+  camera-in-Head vs config: 0.412 deg (Head x y z: -0.093 +0.161 +0.367), 10.32 mm (+2.23 -9.04 +4.46); ~16.4 mm at 0.85 m. Gate 0.3 deg / 3.0 mm, at 2 sigma
+  the fit's 1-sigma (clustered by hold): 0.016 0.021 0.060 deg, 0.71 0.63 2.05 mm (total 0.065 deg, 2.26 mm); Jacobian condition 57
+  X's sigma (1 sigma) 0.110 deg / 3.44 mm: the fit's statistical 0.065 deg / 2.26 mm and the cameras' systematic 0.088 deg / 2.59 mm (half their distance) in quadrature
+  pixel rms after the fit 0.747 px over 56676 corners of 472 images, 0.778 px over every corner (234 = 0.4% left out beyond 3.0 px; the model fits up to 1.5 px and 2%)
+  camera 0 alone: 0.377 deg, 7.82 mm (+1.48 -6.67 +3.80) +- 0.054 deg / 1.98 mm, 0.617 px
+  camera 1 alone: 0.460 deg, 12.90 mm (+3.01 -11.43 +5.17) +- 0.078 deg / 2.55 mm, 0.754 px
+  each camera's fit alone (48 shared holds) 0.176 deg / 5.18 mm apart (Head x y z -1.53 +4.76 -1.37 mm): half of it is the systematic
+  WARNING: each camera's fit alone (48 shared holds): 0.176 deg / 5.18 mm apart, beyond the gate: the two cameras' calibrations (intrinsics or stereo pose) disagree; half of it is in X's sigma as a systematic
+  verdict arithmetic: X - config 0.412 deg / 10.32 mm, X's 1 sigma 0.110 deg / 3.44 mm. KEEP needs 0.631 deg <= 0.3 and 17.20 mm <= 3.0; REPLACE needs 2 sigma 0.219 deg <= 0.3 and 6.87 mm <= 3.0; IMPROVE needs the config outside (0.192 deg > 0.3 or 3.45 mm > 3.0) and each part good to the gate or over 4 sigma (0.438 deg, 13.74 mm)
+  no verdict possible: neither the config nor the fit shown good to the gate at 2 sigma, and the fit not shown better than the config (see verdict_reason)
+  vs repro-P1.json: 0.044 deg, 2.16 mm -> agree, within 2 combined sigma (limits 0.1 deg / 1.0 mm; the fits' statistical combined 1-sigma 0.096 deg / 3.40 mm)
+VERDICT INCONCLUSIVE  -> /o/repro-P2.json
+exit 2 (repro P2) 23:30:51
+rig config: /t/tools/calibration/config/rig-phantom12.yaml  (phantom12; pinhole-equi 1280x800; board aprilgrid 7x5 tags, 100 mm, pitch 120 mm)
+step 81: 49 holds found, 45 used, 446 board images (images in /joints gaps left out by dump_corners.py, how many not recorded)
+  camera-in-Head vs config: 0.377 deg (Head x y z: -0.092 +0.168 +0.324), 9.96 mm (+1.35 -9.53 +2.56); ~15.5 mm at 0.85 m. Gate 0.3 deg / 3.0 mm, at 2 sigma
+  the fit's 1-sigma (clustered by hold): 0.020 0.022 0.063 deg, 0.80 0.89 2.24 mm (total 0.070 deg, 2.54 mm); Jacobian condition 59
+  X's sigma (1 sigma) 0.108 deg / 3.62 mm: the fit's statistical 0.070 deg / 2.54 mm and the cameras' systematic 0.082 deg / 2.59 mm (half their distance) in quadrature
+  pixel rms after the fit 0.773 px over 54685 corners of 446 images, 0.806 px over every corner (247 = 0.4% left out beyond 3.0 px; the model fits up to 1.5 px and 2%)
+  camera 0 alone: 0.351 deg, 7.43 mm (+0.60 -7.16 +1.88) +- 0.057 deg / 2.32 mm, 0.663 px
+  camera 1 alone: 0.417 deg, 12.53 mm (+2.11 -11.90 +3.31) +- 0.083 deg / 2.79 mm, 0.784 px
+  each camera's fit alone (45 shared holds) 0.164 deg / 5.17 mm apart (Head x y z -1.51 +4.74 -1.43 mm): half of it is the systematic
+  WARNING: each camera's fit alone (45 shared holds): 0.164 deg / 5.17 mm apart, beyond the gate: the two cameras' calibrations (intrinsics or stereo pose) disagree; half of it is in X's sigma as a systematic
+  verdict arithmetic: X - config 0.377 deg / 9.96 mm, X's 1 sigma 0.108 deg / 3.62 mm. KEEP needs 0.592 deg <= 0.3 and 17.20 mm <= 3.0; REPLACE needs 2 sigma 0.215 deg <= 0.3 and 7.25 mm <= 3.0; IMPROVE needs the config outside (0.161 deg > 0.3 or 2.71 mm > 3.0) and each part good to the gate or over 4 sigma (0.430 deg, 14.50 mm)
+  no verdict possible: neither the config nor the fit shown good to the gate at 2 sigma, and the fit not shown better than the config (see verdict_reason)
+VERDICT INCONCLUSIVE  -> /o/cfglens-P1.json
+exit 2 (cfglens P1) 23:31:34
+done

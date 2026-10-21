@@ -1,0 +1,26 @@
+rig config: /t/tools/calibration/config/rig-phantom12.yaml  (phantom12; pinhole-equi 1280x800; board aprilgrid 7x5 tags, 100 mm, pitch 120 mm)
+/t/tools/calibration/results/phantom12-2026-10-20-lens/fit-a-kb4t.json:KB4T@all@800 reading /o/fit-nogate.json's scene at 1.0 m depth, largest |difference| per image cell:
+| cell | largest difference (%) | grid points |
+|---|---|---|
+| top-left | 5.03 | 60 |
+| top | 0.05 | 68 |
+| top-right | 5.54 | 60 |
+| left | 0.84 | 94 |
+| centre | 0.04 | 44 |
+| right | 1.46 | 94 |
+| bottom-left | 6.23 | 70 |
+| bottom | 0.03 | 80 |
+| bottom-right | 6.16 | 70 |
+rig config: /t/tools/calibration/config/rig-phantom12.yaml  (phantom12; pinhole-equi 1280x800; board aprilgrid 7x5 tags, 100 mm, pitch 120 mm)
+/t/tools/calibration/results/phantom12-2026-10-20-lens/fit-a-kb4t.json:KB4T@all@800 reading /o/fit-nogate.json's scene at 1.0 m depth, largest |difference| per image cell (points within 450 px of the principal point):
+| cell | largest difference (%) | grid points |
+|---|---|---|
+| top-left | 0.09 | 17 |
+| top | 0.05 | 68 |
+| top-right | 0.08 | 19 |
+| left | 0.11 | 59 |
+| centre | 0.04 | 44 |
+| right | 0.09 | 59 |
+| bottom-left | 0.03 | 18 |
+| bottom | 0.03 | 78 |
+| bottom-right | 0.10 | 19 |

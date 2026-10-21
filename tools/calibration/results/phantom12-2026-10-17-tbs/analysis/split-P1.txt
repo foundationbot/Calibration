@@ -1,0 +1,15 @@
+tbs-neck-P1: 446 images, 45 holds (dropped [4, 33, 48])
+all images: X vs config 0.374 deg (-0.149 +0.101 +0.328) +- (0.030 0.020 0.050), 14.6 mm (-4.5 -7.9 +11.4) +- (0.6 0.4 0.5); residual rms 0.224 deg / 3.70 mm; cond 26
+  per-hold mean residual in Head axes (deg, mm): rms, and its linear dependence on yaw / pitch (per 10 deg)
+    rot x: rms 0.069; per 10 deg yaw -0.022, pitch -0.011; R2 0.41
+    rot y: rms 0.062; per 10 deg yaw -0.005, pitch -0.021; R2 0.09
+    rot z: rms 0.161; per 10 deg yaw -0.073, pitch -0.046; R2 0.81
+    tr x: rms 0.724; per 10 deg yaw +0.079, pitch +0.253; R2 0.12
+    tr y: rms 1.202; per 10 deg yaw +0.275, pitch +0.413; R2 0.25
+    tr z: rms 1.656; per 10 deg yaw +0.278, pitch +1.487; R2 0.60
+  within-hold image scatter: 0.124 deg rms
+camera 0 only (223 images): X vs config 0.477 deg (-0.258 +0.136 +0.377) +- (0.033 0.019 0.047), 14.7 mm (-9.0 -4.0 +10.8) +- (0.6 0.3 0.5); residual rms 0.256 deg / 2.50 mm; cond 26
+camera 1 only (223 images): X vs config 0.280 deg (-0.043 +0.068 +0.268) +- (0.036 0.022 0.067), 16.9 mm (-0.0 -11.8 +12.1) +- (1.0 0.6 0.9); residual rms 0.167 deg / 3.17 mm; cond 26
+|yaw| <= 20 deg (290 images): X vs config 0.355 deg (-0.168 +0.200 +0.240) +- (0.041 0.016 0.022), 14.3 mm (-3.6 -8.9 +10.6) +- (0.5 0.3 0.4); residual rms 0.158 deg / 2.53 mm; cond 27
+neck geometry free: X vs config 0.455 deg (-0.265 +0.106 +0.354) +- (0.173 0.019 0.064), 12.7 mm (+3.2 -7.7 +9.6) +- (1.2 0.5 0.7); residual rms 0.223 deg / 3.49 mm; cond 27
+    neck: angle between axes 89.858 deg (+- 0.177), pitch axis offset dx -9.3 +- 1.5 mm

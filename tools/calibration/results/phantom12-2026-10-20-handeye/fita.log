@@ -1,0 +1,51 @@
+rig config: /t/tools/calibration/config/rig-phantom12.yaml  (phantom12; pinhole-equi 1280x800; board aprilgrid 7x5 tags, 100 mm, pitch 120 mm)
+step 81: 49 holds found, 45 used, 446 board images (images in /joints gaps left out by dump_corners.py, how many not recorded)
+  camera-in-Head vs config: 0.480 deg (Head x y z: -0.030 +0.259 +0.403), 13.91 mm (-2.87 -12.38 +5.67); ~21.0 mm at 0.85 m. Gate 0.3 deg / 3.0 mm, at 2 sigma
+  the fit's 1-sigma (clustered by hold): 0.019 0.021 0.057 deg, 0.87 0.91 2.41 mm (total 0.063 deg, 2.72 mm); Jacobian condition 59
+  X's sigma (1 sigma) 0.084 deg / 2.80 mm: the fit's statistical 0.063 deg / 2.72 mm and the cameras' systematic 0.055 deg / 0.68 mm (half their distance) in quadrature
+  pixel rms after the fit 0.713 px over 54699 corners of 446 images, 0.747 px over every corner (233 = 0.4% left out beyond 3.0 px; the model fits up to 1.5 px and 2%)
+  camera 0 alone: 0.442 deg, 13.35 mm (-3.11 -11.76 +5.51) +- 0.062 deg / 2.62 mm, 0.684 px
+  camera 1 alone: 0.528 deg, 14.46 mm (-2.61 -12.98 +5.82) +- 0.064 deg / 2.82 mm, 0.725 px
+  each camera's fit alone (45 shared holds) 0.109 deg / 1.36 mm apart (Head x y z -0.50 +1.22 -0.31 mm): half of it is the systematic
+  verdict arithmetic: X - config 0.480 deg / 13.91 mm, X's 1 sigma 0.084 deg / 2.80 mm. KEEP needs 0.648 deg <= 0.3 and 19.52 mm <= 3.0; REPLACE needs 2 sigma 0.168 deg <= 0.3 and 5.60 mm <= 3.0; IMPROVE needs the config outside (0.313 deg > 0.3 or 8.31 mm > 3.0) and each part good to the gate or over 4 sigma (0.335 deg, 11.21 mm)
+VERDICT IMPROVE  -> /o/fita450-P1.json
+exit 1 (fita450 P1) 23:32:33
+rig config: /t/tools/calibration/config/rig-phantom12.yaml  (phantom12; pinhole-equi 1280x800; board aprilgrid 7x5 tags, 100 mm, pitch 120 mm)
+step 81: 50 holds found, 48 used, 472 board images (images in /joints gaps left out by dump_corners.py, how many not recorded)
+  camera-in-Head vs config: 0.510 deg (Head x y z: -0.032 +0.254 +0.442), 14.15 mm (-2.00 -11.80 +7.55); ~21.7 mm at 0.85 m. Gate 0.3 deg / 3.0 mm, at 2 sigma
+  the fit's 1-sigma (clustered by hold): 0.015 0.020 0.054 deg, 0.79 0.63 2.21 mm (total 0.060 deg, 2.42 mm); Jacobian condition 57
+  X's sigma (1 sigma) 0.079 deg / 2.53 mm: the fit's statistical 0.060 deg / 2.42 mm and the cameras' systematic 0.052 deg / 0.71 mm (half their distance) in quadrature
+  pixel rms after the fit 0.674 px over 56680 corners of 472 images, 0.708 px over every corner (230 = 0.4% left out beyond 3.0 px; the model fits up to 1.5 px and 2%)
+  camera 0 alone: 0.473 deg, 13.57 mm (-2.23 -11.13 +7.43) +- 0.058 deg / 2.32 mm, 0.642 px
+  camera 1 alone: 0.554 deg, 14.72 mm (-1.75 -12.46 +7.64) +- 0.061 deg / 2.54 mm, 0.690 px
+  each camera's fit alone (48 shared holds) 0.105 deg / 1.42 mm apart (Head x y z -0.48 +1.33 -0.20 mm): half of it is the systematic
+  verdict arithmetic: X - config 0.510 deg / 14.15 mm, X's 1 sigma 0.079 deg / 2.53 mm. KEEP needs 0.669 deg <= 0.3 and 19.20 mm <= 3.0; REPLACE needs 2 sigma 0.159 deg <= 0.3 and 5.05 mm <= 3.0; IMPROVE needs the config outside (0.351 deg > 0.3 or 9.10 mm > 3.0) and each part good to the gate or over 4 sigma (0.318 deg, 10.10 mm)
+  vs fita450-P1.json: 0.039 deg, 2.16 mm -> agree, within 2 combined sigma (limits 0.1 deg / 1.0 mm; the fits' statistical combined 1-sigma 0.087 deg / 3.64 mm)
+VERDICT IMPROVE  -> /o/fita450-P2.json
+exit 1 (fita450 P2) 23:33:25
+rig config: /t/tools/calibration/config/rig-phantom12.yaml  (phantom12; pinhole-equi 1280x800; board aprilgrid 7x5 tags, 100 mm, pitch 120 mm)
+step 81: 49 holds found, 46 used, 456 board images (images in /joints gaps left out by dump_corners.py, how many not recorded)
+  camera-in-Head vs config: 0.450 deg (Head x y z: -0.034 +0.226 +0.388), 15.68 mm (-2.26 -13.41 +7.81); ~22.4 mm at 0.85 m. Gate 0.3 deg / 3.0 mm, at 2 sigma
+  the fit's 1-sigma (clustered by hold): 0.016 0.021 0.050 deg, 0.91 0.83 2.51 mm (total 0.057 deg, 2.80 mm); Jacobian condition 51
+  X's sigma (1 sigma) 0.072 deg / 2.88 mm: the fit's statistical 0.057 deg / 2.80 mm and the cameras' systematic 0.044 deg / 0.67 mm (half their distance) in quadrature
+  pixel rms after the fit 0.724 px over 60965 corners of 456 images, 0.757 px over every corner (247 = 0.4% left out beyond 3.0 px; the model fits up to 1.5 px and 2%)
+  camera 0 alone: 0.417 deg, 15.11 mm (-2.50 -12.81 +7.63) +- 0.057 deg / 2.71 mm, 0.695 px
+  camera 1 alone: 0.485 deg, 16.25 mm (-2.02 -14.01 +7.97) +- 0.057 deg / 2.90 mm, 0.736 px
+  each camera's fit alone (46 shared holds) 0.089 deg / 1.35 mm apart (Head x y z -0.48 +1.21 -0.35 mm): half of it is the systematic
+  verdict arithmetic: X - config 0.450 deg / 15.68 mm, X's 1 sigma 0.072 deg / 2.88 mm. KEEP needs 0.594 deg <= 0.3 and 21.43 mm <= 3.0; REPLACE needs 2 sigma 0.144 deg <= 0.3 and 5.75 mm <= 3.0; IMPROVE needs the config outside (0.306 deg > 0.3 or 9.93 mm > 3.0) and each part good to the gate or over 4 sigma (0.289 deg, 11.50 mm)
+VERDICT IMPROVE  -> /o/fita560-P1.json
+exit 1 (fita560 P1) 23:34:12
+rig config: /t/tools/calibration/config/rig-phantom12.yaml  (phantom12; pinhole-equi 1280x800; board aprilgrid 7x5 tags, 100 mm, pitch 120 mm)
+step 81: 50 holds found, 49 used, 482 board images (images in /joints gaps left out by dump_corners.py, how many not recorded)
+  camera-in-Head vs config: 0.473 deg (Head x y z: -0.037 +0.224 +0.415), 15.76 mm (-1.65 -12.90 +8.90); ~22.8 mm at 0.85 m. Gate 0.3 deg / 3.0 mm, at 2 sigma
+  the fit's 1-sigma (clustered by hold): 0.012 0.020 0.048 deg, 0.77 0.61 2.15 mm (total 0.053 deg, 2.36 mm); Jacobian condition 49
+  X's sigma (1 sigma) 0.069 deg / 2.45 mm: the fit's statistical 0.053 deg / 2.36 mm and the cameras' systematic 0.044 deg / 0.66 mm (half their distance) in quadrature
+  pixel rms after the fit 0.678 px over 64078 corners of 482 images, 0.713 px over every corner (255 = 0.4% left out beyond 3.0 px; the model fits up to 1.5 px and 2%)
+  camera 0 alone: 0.440 deg, 15.24 mm (-1.87 -12.30 +8.80) +- 0.053 deg / 2.26 mm, 0.646 px
+  camera 1 alone: 0.507 deg, 16.30 mm (-1.42 -13.52 +8.98) +- 0.054 deg / 2.48 mm, 0.693 px
+  each camera's fit alone (49 shared holds) 0.089 deg / 1.32 mm apart (Head x y z -0.46 +1.22 -0.18 mm): half of it is the systematic
+  verdict arithmetic: X - config 0.473 deg / 15.76 mm, X's 1 sigma 0.069 deg / 2.45 mm. KEEP needs 0.612 deg <= 0.3 and 20.66 mm <= 3.0; REPLACE needs 2 sigma 0.139 deg <= 0.3 and 4.90 mm <= 3.0; IMPROVE needs the config outside (0.334 deg > 0.3 or 10.86 mm > 3.0) and each part good to the gate or over 4 sigma (0.277 deg, 9.80 mm)
+  vs fita560-P1.json: 0.027 deg, 1.35 mm -> agree, within 2 combined sigma (limits 0.1 deg / 1.0 mm; the fits' statistical combined 1-sigma 0.078 deg / 3.66 mm)
+VERDICT IMPROVE  -> /o/fita560-P2.json
+exit 1 (fita560 P2) 23:35:03
+done

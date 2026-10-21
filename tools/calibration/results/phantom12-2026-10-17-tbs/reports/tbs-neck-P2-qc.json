@@ -1,0 +1,33 @@
+{
+ "verdict": "GOOD",
+ "findings": [
+  {
+   "level": "WARN",
+   "what": "sweeps",
+   "action": "step 82 will not measure the joint axes (its R_BS still fits): nod and turn one joint at a time, faster than ~20 deg/s; a short separate take will do"
+  },
+  {
+   "level": "WARN",
+   "what": "joints",
+   "action": "the recorder fell behind (gaps in /joints; check the record pod's CPU): those holds are dropped; nothing to do unless too few holds remain"
+  },
+  {
+   "level": "WARN",
+   "what": "imu",
+   "action": "gaps in the head IMU stream: step 82 has fewer samples; nothing to do"
+  },
+  {
+   "level": "WARN",
+   "what": "camera-gaps-cam1",
+   "action": "camera cam1's frames cover 93% of the take (longest gap 5.0 s, 0 holds without frames): the recorder fell behind (check the record pod's CPU); those holds have fewer images; nothing to do"
+  },
+  {
+   "level": "WARN",
+   "what": "camera-gaps-cam2",
+   "action": "camera cam2's frames cover 93% of the take (longest gap 5.0 s, 0 holds without frames): the recorder fell behind (check the record pod's CPU); those holds have fewer images; nothing to do"
+  }
+ ],
+ "drop_holds": [
+  49
+ ]
+}

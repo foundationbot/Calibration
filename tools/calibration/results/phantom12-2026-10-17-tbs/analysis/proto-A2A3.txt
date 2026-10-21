@@ -1,0 +1,24 @@
+X = camera 0 in the Head link, vs the config (T_BS T_SC0): angle (Head x y z), mm (Head x y z) +- 1 sigma
+tbs-neck-A2: 64 stereo pairs (holds left out: [0, 2, 4, 5, 6, 12])
+  mono, both cameras                 0.628 deg (-0.487 -0.349 +0.190),  22.1 mm ( -6.8  -5.3 +20.4) +- 0.452 deg / 3.19 mm  residual 0.465 deg / 4.55 mm
+  mono, camera 0                     0.773 deg (-0.629 -0.310 +0.325),  21.2 mm (-10.0  -0.6 +18.7) +- 0.483 deg / 2.39 mm  residual 0.486 deg / 4.07 mm
+  mono, camera 1                     0.520 deg (-0.344 -0.386 +0.048),  24.6 mm ( -3.6  -9.9 +22.3) +- 0.428 deg / 5.36 mm  residual 0.419 deg / 3.78 mm
+  triangulated board: scale vs the board 1.01670 (IQR 0.02810), rigid-fit residual median 23.45 mm over 64 pairs
+  stereo-pose                        2.816 deg (-2.670 +0.075 +0.893), 240.3 mm (+234.7 +12.5 -49.9) +- 2.397 deg / 54.72 mm  residual 4.941 deg / 53.89 mm
+  stereo-points                      1.172 deg (-0.555 +1.004 +0.238),  34.8 mm (+12.7 +27.9 -16.5) +- 0.944 deg / 34.82 mm  3D residual rms 30.87 mm, median 18.88
+  pixels, both cameras               0.765 deg (-0.629 -0.363 -0.241),  17.4 mm ( +8.9  -3.0 +14.7) +- 0.797 deg / 22.20 mm  pixel rms 2.408 px
+  pixels, camera 0                   0.780 deg (-0.668 -0.291 -0.278),  17.2 mm ( +8.9  +0.8 +14.7) +- 0.777 deg / 21.13 mm  pixel rms 2.352 px
+  pixels, camera 1                   0.761 deg (-0.589 -0.440 -0.199),  18.6 mm ( +8.8  -6.9 +14.9) +- 0.820 deg / 23.09 mm  pixel rms 2.436 px
+tbs-neck-A3: 80 stereo pairs (holds left out: [3, 6, 10, 11, 13, 14, 16])
+  mono, both cameras                 1.873 deg (+1.782 +0.195 +0.543),  56.4 mm ( +8.4 -29.5 +47.4) +- 1.096 deg / 9.70 mm  residual 0.609 deg / 4.33 mm
+  mono, camera 0                     1.792 deg (+1.699 +0.219 +0.527),  53.5 mm ( +6.7 -27.5 +45.4) +- 1.102 deg / 9.89 mm  residual 0.616 deg / 4.37 mm
+  mono, camera 1                     1.953 deg (+1.864 +0.172 +0.557),  59.5 mm (+10.0 -31.5 +49.5) +- 1.092 deg / 9.58 mm  residual 0.601 deg / 4.13 mm
+  triangulated board: scale vs the board 1.00506 (IQR 0.00974), rigid-fit residual median 18.74 mm over 64 pairs
+  stereo-pose                        1.035 deg (+0.271 -0.541 +0.840),  93.1 mm (+90.3 -11.1 -20.1) +- 1.499 deg / 27.52 mm  residual 1.846 deg / 29.10 mm
+  stereo-points                      4.237 deg (+2.030 +3.045 +2.134),  41.4 mm (+22.5 -34.4  -4.4) +- 2.064 deg / 14.01 mm  3D residual rms 23.52 mm, median 15.64
+  pixels, both cameras               4.198 deg (+2.215 +2.372 +2.663),  64.2 mm (+27.1 -47.6 +33.5) +- 2.305 deg / 45.45 mm  pixel rms 5.054 px
+  pixels, camera 0                   4.094 deg (+2.191 +2.306 +2.577),  59.6 mm (+25.2 -43.4 +32.1) +- 2.270 deg / 43.09 mm  pixel rms 5.013 px
+  pixels, camera 1                   4.304 deg (+2.240 +2.434 +2.754),  69.0 mm (+29.0 -51.8 +35.0) +- 2.342 deg / 47.86 mm  pixel rms 5.090 px
+both takes together (one X, a board pose per take):
+  stereo-points                      4.594 deg (+1.275 +2.449 +3.671),  30.0 mm (+15.9 +21.7 -13.2) +- 1.677 deg / 19.06 mm  3D residual rms 28.67 mm, median 17.86
+  pixels, both cameras               4.180 deg (+1.491 +1.023 +3.769),  23.1 mm (+12.5  -4.3 +18.9) +- 1.902 deg / 24.43 mm  pixel rms 4.690 px

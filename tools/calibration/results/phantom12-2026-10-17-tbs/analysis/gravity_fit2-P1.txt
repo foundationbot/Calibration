@@ -1,0 +1,56 @@
+== tbs-neck-P1-signals: 45 holds
+  [base] R_SB vs config 0.386 deg; residual rms 0.261, max 1.660 deg; about the pitch axis rms 0.258 deg
+      reached from pitch +: mean residual about the pitch axis +0.068 deg over 5 holds
+      reached from pitch -: mean residual about the pitch axis -0.025 deg over 3 holds
+  [torso] R_SB vs config 0.389 deg; residual rms 0.261, max 1.657 deg; about the pitch axis rms 0.258 deg
+      reached from pitch +: mean residual about the pitch axis +0.069 deg over 5 holds
+      reached from pitch -: mean residual about the pitch axis -0.022 deg over 3 holds
+  [scale] R_SB vs config 0.862 deg; residual rms 0.258, max 1.623 deg; about the pitch axis rms 0.253 deg, accel scale [-6.39  0.01 -0.02] %
+      reached from pitch +: mean residual about the pitch axis -0.093 deg over 5 holds
+      reached from pitch -: mean residual about the pitch axis -0.027 deg over 3 holds
+      hold  yaw pitch ap drift | about pitch | total
+         -0    +1 +0  0.01 | -0.028 | 0.028
+        -29   -23 -1  0.06 | +0.008 | 0.083
+        -15   -23 +0  0.02 | +0.043 | 0.070
+         -0   -23 +0  0.02 | +0.004 | 0.063
+        +30   -23 +0  0.02 | -0.112 | 0.120
+        +30   -17 +1  0.13 | -0.145 | 0.150
+        +16   -17 +0  0.02 | -0.055 | 0.055
+         +1   -17 +0  0.04 | -0.015 | 0.055
+        -14   -17 +0  0.02 | +0.033 | 0.060
+        -29   -17 +0  0.02 | +0.019 | 0.084
+        -29   -11 +1  0.08 | -0.054 | 0.089
+        -16   -11 +0  0.02 | -0.017 | 0.069
+         -0   -11 +0  0.01 | -0.066 | 0.091
+        +15   -11 +0  0.02 | -0.064 | 0.069
+        +30   -11 +0  0.01 | -0.133 | 0.137
+        +30    -6 +1  0.11 | -0.206 | 0.215
+        +16    -5 +0  0.02 | -0.117 | 0.118
+         +1    -5 +0  0.02 | -0.012 | 0.022
+        -14    -5 +0  0.04 | +0.007 | 0.012
+        -29    -5 +0  0.02 | +0.022 | 0.114
+        -29    +0 +1  0.07 | -0.029 | 0.092
+        -16    +1 +0  0.02 | -0.012 | 0.045
+         -0    +1 +0  0.03 | -0.079 | 0.093
+        +30    +1 +0  0.02 | -0.196 | 0.200
+        +16    +1 +0  0.03 | -0.096 | 0.098
+         +1    +1 +0  0.03 | +0.074 | 0.078
+        -14    +1 +0  0.04 | +0.020 | 0.036
+        -16    -5 +0  0.03 | -0.004 | 0.012
+         -0    -5 +0  0.02 | -0.001 | 0.007
+        +15    -5 +0  0.02 | -0.107 | 0.109
+        +30   -11 +0  6.00 | +1.622 | 1.623
+        +16   -11 +0  0.02 | -0.052 | 0.056
+         +1   -11 +0  0.02 | -0.025 | 0.057
+        -14   -11 +0  0.02 | -0.009 | 0.054
+        -29   -11 +0  0.04 | -0.027 | 0.075
+        -29   -17 -1  0.05 | +0.037 | 0.080
+        -16   -17 +0  0.04 | +0.051 | 0.084
+         -0   -17 +0  0.03 | +0.014 | 0.068
+        +15   -17 +0  0.02 | -0.055 | 0.061
+        +30   -17 +0  0.01 | -0.134 | 0.139
+        +30   -23 -1  0.04 | -0.125 | 0.131
+         +1   -23 +0  0.02 | +0.009 | 0.058
+        -14   -23 +0  0.04 | +0.059 | 0.080
+        -29   -23 +0  0.03 | -0.003 | 0.079
+         -0    +1 +1  0.16 | -0.034 | 0.051

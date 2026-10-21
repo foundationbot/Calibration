@@ -1,0 +1,27 @@
+cv2 4.6.0 numpy 1.26.4
+rectified: fx 186.469956 cx 254.317030 cy 150.429607; baseline -P2[0,3]/fx 0.044427 m; Fit A's |t| 0.044427 m
+camera 0: p1 0.000852307 p2 -0.00111309
+  ok: (b) cam0 p=0 vs cv2.fisheye CV_16SC2: 0 differing entries of 163840
+  ok: (b) cam0 p=0 vs cv2.fisheye CV_32FC1: max |diff| 0 px (tol 1e-4)
+  (the twin's doubles vs OpenCV's floats: max |diff| 6.1e-05 px, float rounding)
+  ok: (c) cam0 KB4T map vs lensmodel.project('KB4T'): max |diff| 6.82e-12 px (tol 1e-9)
+  ok: (d) cam0 p1/p2 swapped misses the KB4T map by 4.919 px (must be > 0.1)
+  p-terms move the map by up to 2.520 px (raw); > 0.5 px at 113866 of 163840 pixels; map u 107.0..1170.1, v 4.4..800.8
+camera 1: p1 -0.000370916 p2 -7.26592e-05
+  ok: (b) cam1 p=0 vs cv2.fisheye CV_16SC2: 0 differing entries of 163840
+  ok: (b) cam1 p=0 vs cv2.fisheye CV_32FC1: max |diff| 0 px (tol 1e-4)
+  (the twin's doubles vs OpenCV's floats: max |diff| 6.1e-05 px, float rounding)
+  ok: (c) cam1 KB4T map vs lensmodel.project('KB4T'): max |diff| 8.92e-12 px (tol 1e-9)
+  ok: (d) cam1 p1/p2 swapped misses the KB4T map by 0.750 px (must be > 0.1)
+  p-terms move the map by up to 0.484 px (raw); > 0.5 px at 0 of 163840 pixels; map u 104.8..1172.3, v -2.3..797.6
+  ok: (b') synthetic: OpenCV maps 145440 pixels to inf (the w <= 0 branch is exercised)
+  ok: (b') synthetic p=0 vs cv2.fisheye CV_32FC1 (same +-inf): max |diff| 0 px
+  ok: (b') synthetic p=0 vs cv2.fisheye CV_16SC2: 0 differing entries of 307200
+  ok: fixture cam0: the largest sample p-effect is 2.520 px (must be > 0.5)
+  ok: fixture cam1: the largest sample p-effect is 0.484 px (must be > 0.25)
+  ok: fixture cam0: lensmodel.project reproduces the reference pixels, max |diff| 0 px
+  ok: fixture cam1: lensmodel.project reproduces the reference pixels, max |diff| 0 px
+points: angle off the axis (deg) [3.0, 13.4, 26.9, 35.9, 43.4, 52.8, 64.5, 74.7]
+wrote okvis_common/test/kb4t_rectify_fixture.hpp
+formatted with clang-format-22
+all checks passed
