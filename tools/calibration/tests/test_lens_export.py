@@ -161,6 +161,18 @@ def test_only_a_pass_for_this_calibration_is_exported(exported, tmp_path):
         assert msg in str(e.value)
 
 
+def test_a_report_on_the_fit_sweep_itself_is_not_exported(exported, tmp_path):
+    """step 66 run on the recording step 45 fitted passes easily (in-sample) and is no validation"""
+    rep = json.loads((exported / "v" / "report.json").read_text())
+    fit = json.loads((S.pipeline() / "fit.json").read_text())
+    bad = tmp_path / "r.json"
+    bad.write_text(json.dumps({**rep, "test": {**rep["test"], "sha256": fit["inputs"]["sha256"]}}))
+    with pytest.raises(SystemExit) as e:
+        m71.main([str(S.pipeline() / "fit.json"), str(bad), str(tmp_path / "e"), "--rig", str(S.RIG12)])
+    assert "the recording" in str(e.value) and "fitted on" in str(e.value)
+    assert not (tmp_path / "e").exists()
+
+
 def test_only_a_converged_fit_is_exported(exported, tmp_path):
     """an unconverged step-45 file has the same numbers as the report judged (same sha256), so only its verdict can
     stop it; a file with no verdict is not step 45's output"""

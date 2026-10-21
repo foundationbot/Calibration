@@ -90,7 +90,7 @@ adapt one rather than retyping commands.
    and every restart in order, and refuses unless the config is the known auto file.
 4. **After every producer restart, restart the viewer and the RTSP streamer** too (scale 0 → 1):
    otherwise they keep showing frozen images (§8.7).
-5. **Record pod CPU limit 4** (`05_record.sh` on the robot): 2 CPUs gave 10–12 fps, 4 gave ~12–13.
+5. **Record pod CPU limit 4** (`05_record.sh` on the robot, its `CPU` default): 2 CPUs gave 10–12 fps, 4 gave ~12–13.
 6. **IMU index:** `python3 display_imu.py` on the robot (repo `deployment/`) prints the roster;
    NeckPitch was index 2 on phantom12 (2026-10-15). The roster can change.
 7. **Board measured:** `target-aprilgrid.yaml` and `target_measured: true` (phantom12: 720 mm

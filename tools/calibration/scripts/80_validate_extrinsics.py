@@ -70,11 +70,13 @@ def load_calib(path):
     assert tbs, f"{path}: no T_BS"
     K = [np.array(nums(m)[:2]) for m in re.findall(r"focal_length: \[([^\]]+)\]", text)]
     C = [np.array(nums(m)[:2]) for m in re.findall(r"principal_point: \[([^\]]+)\]", text)]
-    D = [np.array(nums(m)[:4]) for m in re.findall(r"distortion_coefficients: \[([^\]]+)\]", text)]
     Q = [int(x) for x in re.findall(r"dma_queue: (\d+)", text)]
     L = [rigcfg.Lens(x) for x in re.findall(r"distortion_type: (\w+)", text)]
     if len(L) != 2:
         L = [RIG.lens, RIG.lens]
+    # a kb4t block (step 71 --okvis-kb4t) carries six numbers, k1..k4, p1, p2; the others four
+    D = [np.array(nums(m)[:6 if lens.kind == "kb4t" else 4])
+         for m, lens in zip(re.findall(r"distortion_coefficients: \[([^\]]+)\]", text), L)]
     return dict(T_SC=tsc, T_BS=np.array(nums(tbs.group(1))[:16]).reshape(4, 4),
                 f=K, c=C, d=D, queue=Q, lens=L)
 

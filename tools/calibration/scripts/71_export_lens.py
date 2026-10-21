@@ -149,6 +149,10 @@ def main(argv=None):
         sys.exit(f"ERROR: {a.report}: verdict {rep.get('verdict')!r}; only a PASS is exported")
     if rep["calibration"]["sha256"] != sf.calibration_digest(model, intr, C):
         sys.exit(f"ERROR: {a.report} judged another calibration than {a.fit}")
+    fitted_on = fit.get("inputs", {}).get("sha256")
+    if fitted_on and fitted_on == rep.get("test", {}).get("sha256"):
+        sys.exit(f"ERROR: {a.report} scored {rep['test']['corners']}, the recording {a.fit} was fitted on: a "
+                 "validation needs the test sweep, recorded apart from the fit sweep")
     if model != "KB4T":
         sys.exit(f"ERROR: {a.fit} is {model}; this step exports KB4T")
     a.out_dir.mkdir(parents=True, exist_ok=True)

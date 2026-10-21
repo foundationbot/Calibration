@@ -92,6 +92,20 @@ def test_a_lens_that_turns_over_in_the_image_reads_its_own_scene_where_it_has_ra
     assert dm.points_without_ray(cal, RES) == 145
 
 
+def test_where_the_second_calibration_has_no_ray_the_reading_is_infinite_and_its_cell_flagged():
+    """b's camera 1 turns over inside the image (step 46's half fits can): b cannot read a's scene at those pixels.
+    Before the guard they went into triangulate with b's wrong rays: NaN or a LinAlgError, and by_cell's NaN maximum
+    passed every gate"""
+    lens = S.I1.copy()
+    lens[4] = -0.2
+    uv, pct = dm.depth_diff_map(TRUTH, ("KB4T", [S.I0, lens], S.C_TRUE), RES)
+    assert not np.isnan(pct).any() and np.isinf(pct).sum() > 10 and np.isfinite(pct).sum() > 300
+    cells = dm.by_cell(uv, pct, S.I0[2:4])
+    lab = dm.lenscells.cell_of(uv[:, 0] - S.I0[2], uv[:, 1] - S.I0[3])
+    for c in set(lab[np.isinf(pct)]):
+        assert np.isinf(cells[c]["max_abs_pct"]) and cells[c]["max_abs_pct"] > 0.5, c      # beyond any gate
+
+
 def test_fit_a_has_a_ray_at_every_grid_point():
     """the guard leaves Fit A's maps as they were: no grid point of either camera (as camera 0) fails the round trip"""
     assert dm.points_without_ray(TRUTH, RES) == 0

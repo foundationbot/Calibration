@@ -67,14 +67,19 @@ def triangulate(model, intr, C, uv0, uv1, iters=5):
         r = res(X)
         J = np.stack([(res(X + h * np.eye(3)[j]) - res(X - h * np.eye(3)[j])) / (2 * h) for j in range(3)], axis=2)
         JT = np.transpose(J, (0, 2, 1))
-        X = X - np.linalg.solve(JT @ J, JT @ r[:, :, None])[:, :, 0]
+        # pinv, not solve: near a lens's turn the projection is flat along the ray and JᵀJ singular for that point
+        # alone (solve raised LinAlgError for the whole map); such a point comes out wrong, not as an exception
+        X = X - (np.linalg.pinv(JT @ J) @ (JT @ r[:, :, None]))[:, :, 0]
     return X
 
 
 def depth_diff_map(cal_a, cal_b, resolution, z=1.0, step=40):
     """cal = (model, [intr0, intr1], C). -> (uv (N, 2) camera-0 pixels on a step-px grid, pct (N,) b's depth reading
     of a's scene at depth z, %), keeping only pixels where a's camera 0 has a ray (rays(); points_without_ray counts
-    the others) and whose point lands inside camera 1's image under a (where a depth image exists)"""
+    the others) and whose point lands inside camera 1's image under a (where a depth image exists). Where b cannot
+    read the point (a's camera 1 has no ray at the point's pixel there, or either of b's cameras has none at its
+    pixel), pct is +inf: a cell holding such a point is beyond every gate (step 46 flags it), never NaN, which none
+    catches"""
     (ma, ia, Ca), (mb, ib, Cb) = cal_a, cal_b
     W, H = resolution
     g = grid(resolution, step)
@@ -85,8 +90,13 @@ def depth_diff_map(cal_a, cal_b, resolution, z=1.0, step=40):
     Ci = np.linalg.inv(Ca)
     uv1 = lensmodel.project(ma, ia[1], P @ Ci[:3, :3].T + Ci[:3, 3])
     inside = (uv1[:, 0] >= 0) & (uv1[:, 0] <= W - 1) & (uv1[:, 1] >= 0) & (uv1[:, 1] <= H - 1)
-    X = triangulate(mb, ib, Cb, g[inside], uv1[inside])
-    return g[inside], 100 * (np.linalg.norm(X, axis=1) / np.linalg.norm(P[inside], axis=1) - 1)
+    g, P, uv1 = g[inside], P[inside], uv1[inside]
+    readable = rays(ma, ia[1], uv1)[1] & rays(mb, ib[0], g)[1] & rays(mb, ib[1], uv1)[1]
+    pct = np.full(len(g), np.inf)
+    X = triangulate(mb, ib, Cb, g[readable], uv1[readable])
+    pct[readable] = 100 * (np.linalg.norm(X, axis=1) / np.linalg.norm(P[readable], axis=1) - 1)
+    pct[~np.isfinite(pct)] = np.inf
+    return g, pct
 
 
 def by_cell(uv, pct, pp):

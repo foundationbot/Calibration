@@ -118,20 +118,33 @@ def pose_from_corners(det: dict, board, lens, K, D, centre, max_radius_px=MAX_RA
 LENS_OF_MODEL = {"KB4T": "pinhole-kb4t", "KB4": "pinhole-equi"}
 
 
-def lens_from_fit(cfg, path, key):
+def lens_from_fit(cfg, path, key=None, okvis_order=(0, 1)):
     """The OKVIS config with another calibration's lens and stereo pose: K, D and the lens name from a lens fit's
     JSON entry (model, intr per camera [fx, fy, cx, cy, *distortion], C = camera 1 in camera 0, mapping camera-1
     points into camera 0), and camera 1's T_SC = T_SC0 · C so that every C this step derives is the fit's.
     T_SC0 and T_BS stay the config's: X is still compared with T_BS · T_SC0, and step 83 writes
-    T_BS = X · T_SC0^-1 into a config with that T_SC0. (Fit A of 20 Oct: results/phantom12-2026-10-20-lens.)"""
-    e = json.loads(Path(path).read_text())[key]
-    if e["model"] not in LENS_OF_MODEL:
-        raise ValueError(f"{path}:{key}: model {e['model']!r}; this step fits with {sorted(LENS_OF_MODEL)}")
+    T_BS = X · T_SC0^-1 into a config with that T_SC0. (Fit A of 20 Oct: results/phantom12-2026-10-20-lens.)
+    The fit's cameras are Kalibr's (step 45's camera c is the rig's kalibr[c]); OKVIS camera i is Kalibr camera
+    okvis_order[i], so a rig in order [1, 0] (mk13) gets the two lenses swapped and C inverted. key None: the file
+    is one entry (step 45's output)."""
+    where = f"{path}:{key}" if key else str(path)
+    e = json.loads(Path(path).read_text())
+    e = e[key] if key else e
+    if e.get("model") not in LENS_OF_MODEL:
+        raise ValueError(f"{where}: model {e.get('model')!r}; this step fits with {sorted(LENS_OF_MODEL)}")
+    if "intr" not in e or "C" not in e:
+        raise ValueError(f"{where}: no calibration in it (verdict {e.get('verdict')!r})")
+    order = [int(k) for k in okvis_order]
+    if sorted(order) != [0, 1]:
+        raise ValueError(f"okvis_order {order}: two cameras, [0, 1] or [1, 0]")
     C = np.asarray(e["C"], float)
     if np.abs(C[:3, :3] @ C[:3, :3].T - np.eye(3)).max() > 1e-9 or not np.allclose(C[3], [0, 0, 0, 1]):
-        raise ValueError(f"{path}:{key}: C is not a rotation and translation")
-    K = [np.array([[v[0], 0.0, v[2]], [0.0, v[1], v[3]], [0.0, 0.0, 1.0]]) for v in e["intr"]]
-    D = [np.asarray(v[4:], float).reshape(-1, 1) for v in e["intr"]]
+        raise ValueError(f"{where}: C is not a rotation and translation")
+    if order == [1, 0]:
+        C = rm.inv(C)
+    intr = [e["intr"][k] for k in order]
+    K = [np.array([[v[0], 0.0, v[2]], [0.0, v[1], v[3]], [0.0, 0.0, 1.0]]) for v in intr]
+    D = [np.asarray(v[4:], float).reshape(-1, 1) for v in intr]
     return dataclasses.replace(cfg, K=K, D=D, lens=LENS_OF_MODEL[e["model"]], T_SC=[cfg.T_SC[0], cfg.T_SC[0] @ C])
 
 
@@ -528,7 +541,8 @@ def main(argv: list | None = None) -> int:
     ap.add_argument("--config", type=Path, required=True, help="OKVIS config with T_SC and T_BS")
     ap.add_argument("--lens-json", type=Path, help="a lens fit's JSON (model, intr, C): its lens and stereo pose "
                                                    "replace the config's; T_SC0 and T_BS stay the config's")
-    ap.add_argument("--lens-key", help="the entry of --lens-json to use (Fit A: KB4T@all@800)")
+    ap.add_argument("--lens-key", help="the entry of --lens-json to use (Fit A: KB4T@all@800); without it the file "
+                                       "is one entry (step 45's output)")
     ap.add_argument("--urdf", type=Path, required=True)
     ap.add_argument("--model", choices=("pixels", "poses"), default="pixels",
                     help="fit X to every board corner's pixels (default, handeye_px.py) or to per-image board poses "
@@ -545,11 +559,11 @@ def main(argv: list | None = None) -> int:
     a = ap.parse_args(argv)
     if a.corners is None and (a.session is None or a.export is None):
         ap.error("give --corners, or --session and --export")
-    if (a.lens_json is None) != (a.lens_key is None):
-        ap.error("--lens-json and --lens-key go together")
+    if a.lens_key is not None and a.lens_json is None:
+        ap.error("--lens-key needs --lens-json")
     rig, cfg, chain = rigcfg.load(a.rig), okviscfg.load(a.config), neckfk.NeckChain(a.urdf)
     if a.lens_json:
-        cfg = lens_from_fit(cfg, a.lens_json, a.lens_key)
+        cfg = lens_from_fit(cfg, a.lens_json, a.lens_key, rig.okvis_order)
     other, notes = None, []
     if a.compare:                                    # read first: a bad --compare must not cost the fit
         other = json.loads(a.compare.read_text()) if a.compare.exists() else None

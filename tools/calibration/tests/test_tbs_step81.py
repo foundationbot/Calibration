@@ -459,6 +459,28 @@ def test_lens_from_fit_refuses_what_it_cannot_use(tmp_path):
         s81.lens_from_fit(cfg, _fit_json(tmp_path, C=bad), "KB4T@all@800")
 
 
+def test_lens_from_fit_follows_the_rigs_okvis_order(tmp_path):
+    """the fit's cameras are Kalibr's; a rig in OKVIS order [1, 0] (mk13) gets the lenses swapped and the stereo pose
+    inverted, so OKVIS camera 1 in OKVIS camera 0 is still the fit's geometry"""
+    cfg = _cfg()
+    out = s81.lens_from_fit(cfg, _fit_json(tmp_path), "KB4T@all@800", okvis_order=[1, 0])
+    assert np.allclose(out.D[0].ravel(), FIT_A_REF[1][4:]) and np.allclose(out.D[1].ravel(), FIT_A_REF[0][4:])
+    assert np.isclose(out.K[0][0, 0], FIT_A_REF[1][0]) and np.isclose(out.K[1][0, 0], FIT_A_REF[0][0])
+    assert np.allclose(rm.inv(out.T_SC[0]) @ out.T_SC[1], rm.inv(C_FIT))
+    with pytest.raises(ValueError, match="okvis_order"):
+        s81.lens_from_fit(cfg, _fit_json(tmp_path), "KB4T@all@800", okvis_order=[0, 0])
+
+
+def test_lens_from_fit_reads_step_45s_output_without_a_key(tmp_path):
+    cfg = _cfg()
+    p = tmp_path / "fit45.json"
+    p.write_text(json.dumps({"model": "KB4T", "intr": FIT_A_REF, "C": C_FIT.tolist(), "verdict": "converged"}))
+    assert np.allclose(rm.inv(s81.lens_from_fit(cfg, p).T_SC[0]) @ s81.lens_from_fit(cfg, p).T_SC[1], C_FIT)
+    p.write_text(json.dumps({"model": "KB4T", "verdict": "unconverged: 1 attempt"}))      # step 45 gave up: no numbers
+    with pytest.raises(ValueError, match="no calibration"):
+        s81.lens_from_fit(cfg, p)
+
+
 def test_lens_from_fit_reads_a_kb4_fit_as_that_lens(tmp_path):
     """The KB4 branch (20 Oct's real-data check 3b went through it): the config written as a KB4 lens fit comes
     back as the config's own lens and stereo pose."""

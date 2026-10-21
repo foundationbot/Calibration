@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Step 05 (ON THE ROBOT) — record the calibration datasets.
-# Packaged from OKVIS2-X deployment/record.sh @ 0f32385b. The ONE change: the
+# Packaged from OKVIS2-X deployment/record.sh @ 0f32385b. Changes: the
 # CAMERAS and IMU_INDEX defaults come from config/rig.yaml (cameras.kalibr[].
 # dma_queue, imu.index) instead of "1,2" / "0" — upstream's IMU_INDEX=0 is a
 # FOOT IMU on the mk13 roster. Env vars still win. If the rig file cannot be
-# read, both must be passed explicitly; there is no silent default.
+# read, both must be passed explicitly; there is no silent default. CPU=4 by
+# default (upstream 2). The preflight no longer says to delete OKVIS's pod:
+# okvis2x is a DaemonSet now (the upstream header below predates that).
 #
 #   sudo DURATION=90  OUT_SUBDIR=calib-stereo ./05_record.sh
 #   sudo DURATION=150 OUT_SUBDIR=calib-imucam ./05_record.sh
@@ -32,6 +34,7 @@ NODE="${NODE:-$(hostname)}"
 # Published recorder image (recorder is baked into this tag, not :latest). For a
 # locally-built+imported image, override IMAGE= and it'll use the cached copy.
 IMAGE="${IMAGE:-foundationbot/okvis2x:feat-mapping-integration-260710.1.0}"
+CPU="${CPU:-4}"                                    # record pod CPUs: PNG encoding; 2 gave 10-12 fps, 4 ~12-13 (calibration.md)
 OUT_HOST="${OUT_HOST:-/data/okvis-recordings}"   # host dir that persists the recording
 OUT_SUBDIR="${OUT_SUBDIR:-$(date +%Y%m%d-%H%M%S)}" # subdir under OUT_HOST; defaults to YYYYMMDD-HHMMSS (node local time)
 RIG="${RIG:-$(cd "$(dirname "$0")/.." && pwd)/config/rig.yaml}"
@@ -61,11 +64,13 @@ echo "==> [1/3] preflight"
 ls /dev/shm/video_meta_cam* >/dev/null 2>&1 || echo "   WARNING: no /dev/shm/video_meta_cam* on this node (no camera frames)"
 [ -e /dev/shm/raw_imu_actuals ]            || echo "   WARNING: no /dev/shm/raw_imu_actuals on this node (no IMU)"
 if $K -n "$NS" get pods -l app.kubernetes.io/name=okvis2x --no-headers 2>/dev/null | grep -q .; then
-  echo "   WARNING: okvis2x SLAM pods still running — kill them first so they don't contend on /dev/shm + GPU:"
-  echo "            $K -n $NS delete pod -l app.kubernetes.io/name=okvis2x"
+  # OKVIS is the okvis2x DaemonSet (platform infra's, deployment/RUNBOOK.md section 4a): deleting its pod only
+  # restarts it, so this script does not tell you to
+  echo "   NOTE: okvis2x (DaemonSet) is running on this node; the recorder reads the same /dev/shm rings beside it."
+  echo "         Stopping OKVIS is platform infra's call (deployment/RUNBOOK.md 4a), not this script's."
 fi
 
-echo "==> [2/3] launch record pod (image=$IMAGE cameras=$CAMERAS imu-index=$IMU_INDEX duration=${DURATION}s -> ${OUT_HOST}/${OUT_SUBDIR})"
+echo "==> [2/3] launch record pod (image=$IMAGE cameras=$CAMERAS imu-index=$IMU_INDEX cpu=$CPU duration=${DURATION}s -> ${OUT_HOST}/${OUT_SUBDIR})"
 $K -n "$NS" delete pod "$POD" --ignore-not-found
 cat <<EOF | $K apply -f -
 apiVersion: v1
@@ -99,8 +104,8 @@ spec:
         - { name: shm,    mountPath: /dev/shm }
         - { name: output, mountPath: /output }
       resources:
-        requests: { cpu: "2", memory: "2Gi" }
-        limits:   { cpu: "2", memory: "2Gi" }
+        requests: { cpu: "${CPU}", memory: "2Gi" }
+        limits:   { cpu: "${CPU}", memory: "2Gi" }
       securityContext:
         capabilities: { add: ["IPC_LOCK"] }   # mlock for the POSIX /dev/shm queues
   volumes:
