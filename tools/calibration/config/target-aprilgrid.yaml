@@ -1,0 +1,25 @@
+# Kalibr aprilgrid target for phantom12's calibration.
+#
+# MEASURED 2026-10-14: the board used is the same 7x5 board phantom21 was
+# calibrated with (the repo's config/calibration/target.yaml). Steel rule, left
+# edge of the first tag's black square to the left edge of the last one's:
+#   along a 7-tag row     720 mm = 6 pitches -> 0.120 m
+#   down a 5-tag column   480 mm = 4 pitches -> 0.120 m
+# Both read to the millimetre, so the pitch is 0.120 m to about 0.15 % in both
+# directions (no one-axis print stretch). tagSize * (1 + tagSpacing) below = 0.120.
+#
+#   tagCols     tags along the board's x axis: the direction tag ids 0,1,2,... run
+#   tagRows     tags along y
+#   tagSize     edge of one tag's black square, metres (Kalibr's definition; OpenCV's
+#               aruco corners on the phantom21 board sat on a 92.3 mm square for a
+#               0.100 m Kalibr tagSize, so measure the black square, not the code)
+#   tagSpacing  gap between neighbouring tags / tagSize (a ratio, not metres)
+#
+# Measure the pitch (tagSize * (1 + tagSpacing)) across the whole board: e.g. the
+# distance between the same corner of tag 0 and of the last tag in its row,
+# divided by (tagCols - 1). Step 65 compares the stereo-triangulated pitch to it.
+target_type: 'aprilgrid'
+tagCols: 7
+tagRows: 5
+tagSize: 0.1
+tagSpacing: 0.2

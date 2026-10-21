@@ -1,0 +1,107 @@
+# =============================================================================
+#  rig.yaml — EVERY rig-specific input of this package, in one place.
+#  Values below describe the mk13 head (phantom13's Thor, now hw-thor01).
+# =============================================================================
+#  Every script reads this file. Pick another one with  --rig PATH  or the
+#  CALIB_RIG environment variable (40_calibrate.sh: RIG=...). Relative paths
+#  in here resolve against THIS file's directory.
+#
+#  Plain YAML (PyYAML), not OpenCV-YAML: no %YAML:1.0 line.
+#
+#  The package is STEREO-ONLY: exactly two cameras. That is structural, not a
+#  setting — the pairing, the stereo cross-checks and the two OKVIS blocks all
+#  assume a pair.
+# =============================================================================
+
+rig_name: phantom13              # appears in the step-70 yaml header
+okvis_yaml_name: mk13_stereo.yaml  # ditto
+
+# ---- calibration board ------------------------------------------------------
+# The Kalibr target file. Steps 20/30/31/60/61 read the corner grid
+# (targetCols x targetRows INTERNAL corners) and spacing out of it, so the
+# board is described once, in the file Kalibr itself uses.
+target: target.yaml
+
+# ChArUco layout — only steps 31 and 61 use it (ID-anchored variants).
+charuco:
+  squares: [12, 9]               # (x, y) squares, as cv2.aruco.CharucoBoard takes them
+  square_m: 0.06
+  marker_m: 0.045
+  dictionary: DICT_5X5_100
+  description: "ChArUco 9x12@60mm/45mm DICT_5X5 driven as an 8x11@60mm checkerboard"
+
+# ---- cameras ----------------------------------------------------------------
+cameras:
+  # Kalibr model name. Supported: pinhole-equi (equidistant fisheye),
+  # pinhole-radtan (radial-tangential). Steps 30/60/61 also read the model from
+  # the camchain and REFUSE to run if it disagrees with this.
+  model: pinhole-equi
+  resolution: [1280, 800]        # width, height in px
+  # Pre-calibration focal estimate, px — only step 20's radial-reach figure.
+  # Equidistant: image width / FOV in radians (1280 px over 129 deg -> ~568).
+  nominal_focal_px: 568.0
+  # Stereo baseline before calibration, m: only the start of the KB4T fit (step 45), which refines it.
+  # mk13: 79.0 mm = |T_cn_cnm1 translation| of reference/2026-08-22/kalibr/calib_stereo_d-camchain.yaml
+  # (README "The rig, as measured"). Its cameras are also rolled ~21 deg about the optical axis; step 45's
+  # identity-rotation start reaches that (tests/test_lens_stereofit.py, the 21 deg case).
+  nominal_baseline_m: 0.079
+
+  # One entry per camera, in KALIBR order (first entry = kalibr cam0).
+  #   record_dir  the record.sh output dir that camera's frames are in
+  #   dma_queue   the DMA video queue it is published on
+  #   side        the PHYSICAL eye. Step 60 MEASURES this from the disparity
+  #               sign and fails if the data disagrees — so a wrong value here
+  #               is caught, not trusted.
+  kalibr:
+    - {record_dir: cam1, dma_queue: 1, side: right}
+    - {record_dir: cam2, dma_queue: 2, side: left}
+
+  # OKVIS block order: OKVIS cam i <- kalibr cam okvis_order[i].
+  # [1, 0] is the 2026-08-16 stereo-role swap: OKVIS cam0 = kalibr cam1 =
+  # physical LEFT on queue 2. Step 70 checks the template's dma_queue values
+  # against this, so the yaml cannot end up feeding a camera the wrong T_SC.
+  okvis_order: [1, 0]
+
+# ---- IMU ----------------------------------------------------------------------
+imu:
+  name: NeckPitch                # as display_imu.py prints it
+  index: 2                       # on /raw_imu_actuals; VERIFY against the live roster every session
+  kalibr_yaml: imu.yaml          # Kalibr noise model for THIS IMU
+  # Fallback T_BS, injected by step 70 only when the template has none.
+  # It is THIS robot's IMU-in-Head transform: on another robot, supply that
+  # robot's value or keep T_BS in the template.
+  T_BS_default_file: neckpitch_imu.yaml
+  T_BS_default_key: T_BS_DEFAULT
+
+# ---- robot access (step 80's live checks only) -------------------------------
+robot:
+  host: root@hw-thor01
+  # where deployment/display_imu.py lives ON THE ROBOT
+  display_imu_dir: /root/terrain_aware/OKVIS2-X/deployment
+  # OKVIS2-X/tools on the WORKSTATION (step 80 uses vio_tuner.videoqueue)
+  vio_tuner_tools: /path/to/OKVIS2-X/tools   # a checkout of feat/vio-tuning-ui (tools/vio_tuner exists only there)
+  # body (Head) frame axis indices; OKVIS body frame = the Head URDF link
+  body_axes: {forward: 0, left: 1, up: 2}
+
+# ---- capture / tree building (step 10) ---------------------------------------
+capture:
+  pair_tol_ms: 10                # max stamp gap for a stereo pair
+  calib_pairs: 450               # stereo pairs that enter the fit
+  heldout_pairs: 25              # stereo pairs reserved for step 60
+
+# ---- acceptance gates ----------------------------------------------------------
+gates:
+  coverage_grid: [16, 10]        # step 20 cell grid (x, y)
+  coverage_min: 0.60             # step 20: fraction of cells ever visited
+  reach_min_deg: 60.0            # step 20: max off-axis angle reached. A narrow
+                                 # non-fisheye lens needs a LOWER value.
+  epipolar_max_px: 0.5           # step 60: median held-out |dy| to PASS
+  degenerate_disparity_px: 1.0   # step 60: median |dx| below this = collapsed rectification
+  t_sc_range_m: [0.05, 0.40]     # step 70: plausible |T_SC| band (warning only)
+  # KB4T lens steps 06/45/46/66 (calibration.md section 4b; rigcfg.LENS_GATES holds the same defaults)
+  lens_hold_rms_max_px: 0.6
+  lens_bad_hold_max_frac: 0.20
+  lens_repeat_max_pct: 0.5
+  lens_pass_pct: 0.5
+  lens_pass_corner_pct: 1.0
+  lens_min_holds: 8

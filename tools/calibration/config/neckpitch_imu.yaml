@@ -1,0 +1,125 @@
+%YAML:1.0
+# =============================================================================
+#  T_BS — the NeckPitch IMU pose in the Head frame.   phantom13 / mk13 head.
+#  AUTHORITATIVE DEFAULT. Use these numbers when the URDF cannot supply them.
+# =============================================================================
+#
+#  ⚠ THE URDF CANNOT SUPPLY THEM. This is not a fallback for an unusual case —
+#  it is the normal case, and assuming otherwise caused a 31 deg error that
+#  survived two full recalibrations.
+#
+#  Checked 2026-09-03: NO URDF in this workspace declares a NeckPitch IMU link,
+#  and none declares a head camera link either. Every variant declares 16 IMU
+#  links; NeckPitch is not among them, while the LIVE roster on the robot has
+#  17. So any claim that T_BS was "derived by chaining the URDF-validated
+#  head_T_cam with the calibrated T_SC" is false — that chain has no URDF end to
+#  anchor to. The 2026-08-22 header made exactly that claim and was wrong.
+#
+#  RULE:  look for a NeckPitch IMU link in the URDF.
+#         If it is absent — which is what you should expect — use T_BS_DEFAULT
+#         below verbatim and do NOT re-derive it from the calibration.
+#
+# -----------------------------------------------------------------------------
+#  WHY T_BS IS NOT AN OUTPUT OF THIS PIPELINE
+# -----------------------------------------------------------------------------
+#  Kalibr solves T_SC (camera <- IMU). OKVIS needs camera-in-Head, which it
+#  forms as  T_BC = T_BS @ T_SC.  T_BS is the IMU-in-Head leg and is NOT
+#  observable from a camera-IMU calibration: the board gives you the cameras
+#  relative to the IMU, and nothing in the capture references the Head link.
+#
+#  So step 70 (`70_make_mk13_yaml.py`) deliberately REWRITES ONLY the camera
+#  block and leaves imu_parameters and T_BS byte-identical. When the cameras
+#  are repositioned but the IMU is not, that is exactly right — the new T_SC
+#  propagates through the unchanged T_BS with no URDF edit at all.
+#
+#  Re-derive T_BS ONLY if the IMU board itself moves, and then validate it with
+#  `80_validate_extrinsics.py` (checks 2-4), never by reprojection error.
+#
+# -----------------------------------------------------------------------------
+#  WHICH IMU, AND WHERE IT IS ON THE WIRE
+# -----------------------------------------------------------------------------
+#  IMU        : NeckPitch  (head-fixed, so it is rigid with the cameras)
+#  queue      : /dev/shm/raw_imu_actuals, published by dma-ethercat
+#  index      : 2           ->  run OKVIS with  OKVIS_DMA_IMU_INDEX=2
+#               and record with  IMU_INDEX=2   (record.sh defaults to 0 — WRONG
+#               for this rig; pass it explicitly or you calibrate a foot IMU)
+#
+#  ⚠ THE INDEX IS NOT STABLE. The roster is dynamic and has grown 5 -> 17.
+#    NeckPitch has held index 2 by luck; Torso moved 3 -> 9 and Pelvis 4 -> 10.
+#    VERIFY EVERY SESSION, against the live roster, before recording:
+#        python3 deployment/display_imu.py      # reads imu_names[] from /dev/shm/config
+#    Old roster:  0=RightFoot 1=LeftFoot 2=NeckPitch 3=Torso     4=Pelvis
+#    Live roster: 0=RightFoot 1=LeftFoot 2=NeckPitch 3=LeftWristYaw
+#                 4=RightWristYaw 5-8=shoulders 9=Torso 10=Pelvis ...
+#
+# -----------------------------------------------------------------------------
+#  FRAME CONVENTION
+# -----------------------------------------------------------------------------
+#  Body frame B := the "Head" URDF link (OKVIS reads it as dma:body_frame).
+#  Head axes, read off the joint axes in 20250206_phantom_mk1.urdf
+#  (NeckYaw axis (0,0,1), NeckPitch axis (0,1,0), LeftShoulderPitch at +y):
+#        x FORWARD      y LEFT      z UP
+#  T_BS is Body_T_Sensor, i.e. it maps a point in the IMU frame into the Head
+#  frame. Row-major 4x4, translation in metres.
+#
+# =============================================================================
+#  T_BS_DEFAULT — CORRECTED 2026-09-03. This is the value to use.
+# =============================================================================
+T_BS_DEFAULT:
+    [-0.03735085764393119,  0.839173404349257,   0.5425798658871718,  0.018,
+     -0.9989078032051125,  -0.01610002806750228, -0.04386330803942975, -0.026,
+     -0.02807337046382329, -0.543625594071052,   0.8388582117030844,   0.077,
+      0, 0, 0, 1]
+#  translation = (0.018, -0.026, 0.077) m — CAD, NeckPitch axis -> IMU board,
+#  one rigid link.
+#
+#  Verified against SEVEN independent live measurements (2026-09-03):
+#    baseline 99.9% lateral | pair centre +3.2 mm | forward stagger -1.4 mm
+#    optical azimuth -1.1 deg
+#    head tilt 11.98 deg      (joint-derived band 9.29-14.37)
+#    IMU board tilt 60.67 deg (gravity-derived band 58.3-87.0)
+#    camera 67.9 deg below horizontal predicted vs 67.4 deg measured
+#
+# =============================================================================
+#  T_BS_SUPERSEDED — 2026-08-22. DO NOT USE. Kept so you can recognise it.
+# =============================================================================
+#  It carried a spurious +31.31 deg YAW about the head vertical and placed the
+#  IMU 90.5 mm too high. GRAVITY CANNOT SEE A YAW ABOUT THE VERTICAL, which is
+#  why the camera-IMU fit never complained and why it survived two
+#  recalibrations. It was caught by STEREO GEOMETRY instead: a rigidly mounted
+#  pair must give a lateral baseline, left/right symmetry, no forward stagger
+#  and a forward optical axis. The superseded value scored
+#    86.3% lateral | centre +39.1 mm | stagger +39.9 mm | azimuth +30.2 deg
+#  A 40 mm front-to-back stagger between two cameras bolted into one rigid head
+#  is the tell — nothing physical can produce it.
+#
+# T_BS_SUPERSEDED_20260822:
+#     [0.5004186836961286,   0.4255955720961243,  0.7539559337388402,  0.03396008704660239,
+#      -0.8657761758657717,  0.2423979204097354,  0.4378068769266598, -0.01292884777077408,
+#      0.003571317834344168, -0.8718438261484727, 0.4897709551369067,  0.1674791795027249,
+#      0, 0, 0, 1]
+#
+# =============================================================================
+#  imu_parameters — OKVIS form. Paste alongside T_BS.
+# =============================================================================
+#  ⚠ These are the OKVIS numbers, which are NOT identical to the Kalibr ones in
+#    config/imu.yaml. sigma_g_c and sigma_gw_c are deliberately INFLATED over
+#    the Allan-variance values Kalibr is given (gyro noise 0.00264 vs 0.00164,
+#    gyro drift 3.917e-4 vs 3.917e-5 — 10x). Kalibr wants the true noise model
+#    to weight its fit; OKVIS wants headroom so the estimator stays robust on a
+#    walking robot. Do not "fix" one to match the other.
+imu_parameters:
+    use: true
+    a_max: 176.0                      # accelerometer saturation [m/s^2]
+    g_max: 7.8                        # gyro saturation [rad/s]
+    sigma_g_c: 0.0026405873915791738  # gyro noise density [rad/s/sqrt(Hz)]
+    sigma_a_c: 0.010935292495321242   # accel noise density [m/s^2/sqrt(Hz)]
+    sigma_bg: 0.01                    # gyro bias prior [rad/s]
+    sigma_ba: 0.1                     # accel bias prior [m/s^2]
+    sigma_gw_c: 3.916835278254409e-04 # gyro drift noise density
+    sigma_aw_c: 0.0012028682743073398 # accel drift noise density
+    g: 9.81007                        # gravity [m/s^2]
+    g0: [ 0.0, 0.0, 0.0 ]
+    a0: [ 0.0, 0.0, 0.0 ]
+    s_a: [ 1.0, 1.0, 1.0 ]
+    update_rate: 500                  # Hz, matches config/imu.yaml

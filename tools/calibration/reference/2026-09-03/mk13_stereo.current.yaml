@@ -1,0 +1,341 @@
+%YAML:1.0
+# mk13_stereo.yaml — phantom13, RECALIBRATED 2026-08-22 after the cameras were
+# repositioned within the rigid head unit (the IMU was NOT moved).
+# Kalibr stereo + camera-IMU, ChArUco 9x12@60mm/45mm DICT_5X5 driven as an
+# 8x11@60mm checkerboard. cam0=LEFT(queue2), cam1=RIGHT(queue1), pinhole-equi.
+# Stereo-role swap of 2026-08-16 preserved: OKVIS cam0 <- kalibr cam1.
+# head_camera.json's left/right LABELS were wrong until 2026-08-28 (the stream
+# named 'left' carried the right eye). Fixed THERE by moving each name onto its
+# own socket, which left socket->queue UNCHANGED (B->2, D->1), so this file did
+# not move. Verified by disparity on 2026-08-28 - median u(cam0)-u(cam1) +73.6 px,
+# 99.8% positive, epipolar |dy| 0.53 px, i.e. cam0 IS the physical left eye.
+# DO NOT 'fix' a left/right label by swapping SOCKETS - that inverts socket->queue
+# and silently doubles the SuperPoint de-roll to ~41 deg. Swap the whole entry.
+# IMU = NECKPITCH, index 2 on /raw_imu_actuals (verified this session, 17 IMUs):
+# OKVIS_DMA_IMU_INDEX=2. imu_parameters + T_BS (Head_T_NeckPitchIMU) UNCHANGED —
+# the IMU did not move and camera-in-Head follows from T_BS @ T_SC.
+# Quality: stereo Kalibr sigma 0.266/0.234 px on 450 pairs (68% frame coverage,
+# periphery sampled to 63/65 deg off-axis); held-out ChArUco: mono RMS 0.268 px,
+# rectified epipolar |dy| 0.195 px (BETTER than the 2026-08-14 0.246 px).
+# cam-IMU: reproj 0.237/0.254 px, gyro resid 0.0030 rad/s, accel 0.085 m/s^2,
+# |T_SC| 16.7/17.9 cm, timeshift -23.6/-24.6 ms => image_delay 0.0241.
+# Baseline 79.0 mm with ~20.7 deg relative camera rotation (was 43.0 mm, ~0 deg).
+# NOTE: the cam-IMU input was filtered to a single board orientation. Kalibr wraps
+# cv::findChessboardCorners, whose corner ordering is 180 deg ambiguous on any
+# rectangular grid; unfiltered, ~35% of frames asserted a flipped board and the
+# solve diverged to |T_SC| = 1.03 m. Frames were labelled by comparing observed
+# board rotation against gyro-integrated rotation, cross-checked between cameras
+# (935 agree / 0 disagree), keeping 993/1318 frames.
+# INDEPENDENT VALIDATION on a separate 40 s static-head take (never used in the
+# fit): 80/80 stereo pairs, 7040 epipolar samples over all 88 checkerboard
+# corners -> |dy| mean 0.338 px, median 0.290, p95 0.817, max 1.341. The OLD
+# pre-move calibration scores 19.72 px mean on those same frames (58x worse),
+# while mono reproj RMS is identical (0.422 vs 0.423 px) -- mono cannot see an
+# extrinsics change, solvePnP absorbs focal error into board distance, so judge
+# stereo calibrations by epipolar |dy|, not reprojection RMS.
+# Artifacts: ~/Desktop/calib-phantom13/pipeline-20260822 (workstation),
+# /root/terrain_aware/calibration/tree-20260822 (robot).
+# ⭐ t_SC TRANSLATIONS CORRECTED 2026-09-04 -- COMMON OFFSET ONLY.
+# The Kalibr cam-IMU solve put the lenses 178.8/166.7 mm from the IMU; the hardware
+# geometry (CAD r_BS = 0.018,-0.026,0.077 from the NeckPitch axis to the IMU board, plus
+# the measured lens position in the head) puts them at 150.5/137.1 mm -- long by 28.3 and
+# 29.5 mm, i.e. COMMON-MODE, the signature of the least-observable term in a cam-IMU fit.
+# |t_SC| is invariant under R_BS, so that comparison holds whatever T_BS is.
+# FIX: both translations shifted by ONE offset D = (0.004182, -0.030577, -0.017173),
+# |D| = 35.3 mm. The BASELINE is their difference and is preserved to 79.0028 mm exactly;
+# rotations, intrinsics, distortion and image_delay are UNTOUCHED, so nothing that was
+# validated is disturbed (held-out epipolar 0.195 px; R_SC vs gravity 1.45/1.46/2.04 deg
+# over three captures). Superseded translations:
+#   cam0 (-0.07089146295785216, 0.164065836910722, -0.004532453504371032)
+#   cam1 (0.008072425224628045, 0.1663895712327116, -0.005396596047364558)
+# ⚠ A full recalibration was considered and rejected: it would re-solve four validated
+# quantities to fix one, through a pipeline with documented failure modes (the
+# checkerboard-flip ambiguity that returned |T_SC| = 1.03 m; the coverage failure that
+# sign-flipped distortion between two identical lenses).
+# ⚠ RESIDUAL ~3.3 mm: the hand-tuned lens pair spans 74.0 mm where the stereo solve
+# measures 79.003 mm, so this keeps the MEASURED baseline and matches the midpoint. A CAD
+# lens position would remove that residual.
+cameras:
+    - {T_SC:
+        [0.9835201412779124, 0.173947216234732, -0.04930007773687873, -0.0667086577420461,
+          0.03320896386722427, 0.09423374957433761, 0.9949960628866963, 0.1334851484133401,
+          0.1777225264831115, -0.9802358728415057, 0.0869041838757565, -0.02170132568201757,
+          0, 0, 0, 1],
+        image_dimension: [1280, 800],
+        distortion_coefficients: [-0.01751581238256941, 0.04059672955050699, -0.04043106803082815, 0.01567323082025988],
+        distortion_type: equidistant,
+        focal_length: [562.648174565324, 562.4625617158331],
+        principal_point: [646.7961068522945, 372.0335029968752],
+        cam_model: pinhole,
+        mapping_rectification: true,
+        mapping: true,
+        camera_type: rgb+depth, #gray, rgb, gray+depth, rgb+depth
+        slam_use: okvis, #none, okvis, okvis-depth, okvis-virtual
+        dma_queue: 2} # OKVIS cam0 = physical LEFT eye = video queue 2 (socket B)
+
+    - {T_SC:
+        [0.9818699071732953, -0.1854763792276325, 0.03911519060561305, 0.01225523044043412,
+          -0.02423680253984211, 0.08181707901106855, 0.9963526198012139, 0.1358088827353297,
+          -0.1880001669950075, -0.9792366814671034, 0.07583837339464296, -0.0225654682250111,
+          0, 0, 0, 1],
+        image_dimension: [1280, 800],
+        distortion_coefficients: [-0.01886008645592145, 0.04706055299278377, -0.04813587431831245, 0.01849445292952036],
+        distortion_type: equidistant,
+        focal_length: [562.0303618023321, 561.6307822833373],
+        principal_point: [642.4663540069959, 374.4486513745691],
+        cam_model: pinhole,
+        camera_type: rgb, #gray, rgb, gray+depth, rgb+depth
+        mapping: true,
+        mapping_rectification: true,
+        slam_use: okvis, #none, okvis, okvis-depth, okvis-virtual
+        dma_queue: 1} # OKVIS cam1 = physical RIGHT eye = video queue 1 (socket D)
+
+# additional camera parameters
+camera_parameters:
+    timestamp_tolerance: 0.005 # [s] stereo frame out-of-sync tolerance
+    sync_cameras: [0, 1] # the cameras that will be synchronised
+    image_delay: 0.0241 # (measured: Kalibr timeshift, phantom13 NeckPitch run) # [s] timestamp_camera_correct = timestamp_camera - image_delay
+    online_calibration: # some parameters to set the online
+        do_extrinsics: false # Do we online-calibrate extrinsics?
+        do_extrinsics_final_ba: false # Do we calibrate extrinsics in final BA?
+        sigma_r: 0.01 # T_SCi position prior stdev [m]
+        sigma_alpha: 0.1 # T_SCi orientation prior stdev [rad]
+        sigma_r_final_ba: 0.03 # T_SCi position prior stdev in final BA [m]
+        sigma_alpha_final_ba: 0.3 # T_SCi orientation prior stdev in final BA [rad]
+    deep_stereo_indices: [0, 1] # [left, right] camera indices for the stereo network
+    fov_scale: 1.0 # Divisor for new focal length which is only used when fisheye stereo rectification for dense mapping.
+    stereo_network_type: tensorrt # torch | tensorrt
+    stereo_network_file: s2m2_M_512x320_thor_fp16_pinned.engine # filename in modelDir; extension must match backend
+    stereo_network_width: 512  # rectified-image width fed to the stereo network; must match the engine
+    stereo_network_height: 320 # rectified-image height fed to the stereo network; must match the engine
+
+imu_parameters:
+    use: true
+    a_max: 176.0 # acceleration saturation [m/s^2]
+    g_max: 7.8 # gyro saturation [rad/s]
+    sigma_g_c: 0.0026405873915791738 # gyro noise density [rad/s/sqrt(Hz)]
+    sigma_a_c: 0.010935292495321242 # accelerometer noise density [m/s^2/sqrt(Hz)]
+    sigma_bg: 0.01 # gyro bias prior [rad/s]
+    sigma_ba: 0.1 # accelerometer bias prior [m/s^2]
+    sigma_gw_c: 3.916835278254409e-04 # gyro drift noise density [rad/s^s/sqrt(Hz)]
+    sigma_aw_c: 0.0012028682743073398 # accelerometer drift noise density [m/s^2/sqrt(Hz)]
+    g: 9.81007 # Earth's acceleration due to gravity [m/s^2]
+    g0: [ 0.0, 0.0, 0.0 ] # initial gyro bias [rad/s]
+    a0: [ 0.0, 0.0, 0.0 ] # initial accelerometer bias [m/s^2]
+    s_a: [ 1.0,  1.0, 1.0 ] # scale factor for accelerometer measurements: a_true = s_a * a_meas + b_a
+    # transform Body-Sensor (IMU): T_BS = Body_T_Sensor = IMU pose in the body
+    # frame. Body frame := the "Head" URDF link (see dma:body_frame), so this is
+    # head_T_IMU for the NECKPITCH IMU (head-fixed). IMU = NeckPitch on
+    # /raw_imu_actuals — currently index 2 => run with OKVIS_DMA_IMU_INDEX=2.
+    # NOTE: the index shifts if the enabled-IMU set changes — verify against the
+    # /config queue roster.
+    #
+    # ⭐ CORRECTED 2026-09-03. The previous value carried a spurious +31.31 deg
+    # YAW about the head vertical and put the IMU 90.5 mm too high. Both are now
+    # fixed; nothing else in this file changed.
+    #
+    # ⚠ THE OLD PROVENANCE NOTE WAS WRONG and is deleted: it claimed T_BS was
+    # "derived by chaining the URDF-validated head_T_cam with the calibrated
+    # T_SC". No URDF in this workspace has a head camera link OR a NeckPitch IMU
+    # link — every variant declares 16 IMU links and NeckPitch is not among them
+    # (the live roster has 17). So that chain cannot have been URDF-validated,
+    # which is how a 31 deg error survived two recalibrations.
+    #
+    # TRANSLATION: CAD, NeckPitch axis -> IMU board (one rigid link).
+    # ROTATION: the previous rotation with a -31.31 deg yaw about the head z.
+    # Gravity CANNOT see that axis, which is why it was invisible to the
+    # camera-IMU fit; it was found from stereo geometry, where a rigidly
+    # mounted pair must give a lateral baseline, left/right symmetry, no
+    # forward stagger and a forward optical axis. Verified 2026-09-03 against
+    # seven independent measurements on the live robot:
+    #   baseline 99.9% lateral | pair centre +3.2 mm | stagger -1.4 mm
+    #   optical azimuth -1.1 deg | head tilt 11.98 deg (joint-derived band
+    #   9.29-14.37 from NeckPitch +2.54 deg + torso 11.83 deg) | IMU board tilt
+    #   60.67 deg (gravity-derived band 58.3-87.0) | camera 67.9 deg below
+    #   horizontal predicted vs 67.4 deg measured from the accelerometer.
+    # The pre-correction value scored 86.3% / +39.1 mm / +39.9 mm / +30.2 deg —
+    # a 40 mm front-to-back stagger between two cameras bolted into one rigid
+    # head is the tell, since nothing physical can produce it.
+    # Re-check with tools/../validate_extrinsics.py: check 4 must ask for ~0 yaw.
+    T_BS:
+        [-0.03735085764393119, 0.839173404349257, 0.5425798658871718, 0.018,
+         -0.9989078032051125, -0.01610002806750228, -0.04386330803942975, -0.026,
+         -0.02807337046382329, -0.543625594071052, 0.8388582117030844, 0.077,
+         0, 0, 0, 1]
+
+# frontend: detection etc.
+frontend_parameters:
+    feature_type: superpoint # brisk | orb | superpoint
+    keyframe_overlap: 0.60
+    use_cnn: false
+    parallelise_detection: true
+    num_matching_threads: 8
+    resize_factor: 0.5  # 1280x800 -> 640x400 for the whole VIO incl. SuperPoint
+    serialize_gpu_inference: 0  # 1 = SuperPoint detect + s2m2 never run on the GPU at once; detect has priority. 0 = off
+
+    brisk:
+        detection_threshold: 38.0
+        absolute_threshold: 50.0
+        matching_threshold: 60.0
+        octaves: 0
+        max_num_keypoints: 500
+        rotation_invariance: true
+        scale_invariance: false
+        vocabulary: small_voc.yml.gz
+        p_dbow: 0.4
+
+    orb:
+        n_features: 1000
+        scale_factor: 1.2
+        n_levels: 4
+        ini_fast_threshold: 20
+        min_fast_threshold: 10
+        ratio_test: 0.6
+        check_orientation: true
+        nms_radius: 4       # greedy spatial NMS on keypoints (px); 0 disables
+        vocabulary: ORBvoc.txt
+        p_dbow: 0.010
+
+    superpoint:
+        # Static fixed-top-K, batch-1 engine. Input size MUST match the VIO
+        # frame size (resize_factor*raw = 0.5*1280x800 = 640x400). Detection is
+        # per-camera (parallelise_detection); batching was removed.
+        # Re-export: export_superpoint_topk.py --width 640 --height 400 --batch 1
+        engine: superpoint_640x400_topk512_thor.engine
+        # lightglue | bruteforce. bruteforce = cuBLAS cosine, no engine,
+        # preferred on Thor. (SuperPoint is the only feature type with a
+        # matcher choice, so it lives here.)
+        matcher: bruteforce
+        score_threshold: 0.2
+        p_dbow: 0.075
+        # Loop-closure distinctiveness floor (sum of per-dim std-dev over the
+        # RANSAC-inlier 256-float descriptors). Rejects an LC when below this
+        # AND inliers < 20. Observed good LCs ~14; these descriptors top out
+        # ~16, so 20 effectively requires >=20 inliers. 0 = off (log-only).
+        lc_distinctiveness: 12.0
+        # Final keypoint cap, applied in C++ AFTER score-threshold + greedy NMS
+        # (post-processing). The engine's 1024 candidates are thinned to at most
+        # this many well-spread points.
+        max_keypoints: 300
+        # C++ greedy NMS radius in pixels, applied to the engine's 1024
+        # candidates. 0 disables. Mirrors BRISK's uniformity-radius selection;
+        # ~0.3 ms for ~1024 candidates at radius=16.
+        nms_radius: 8
+
+
+    # Brute-force (cuBLAS cosine) matcher, used when matcher=bruteforce.
+    # min_cossim is also reused as the loop-closure verification floor.
+    bruteforce:
+        min_cossim: 0.80     # accept a match if cosine >= this
+        max_ratio: 1.0       # Lowe ratio (top1/top2); 1.0 disables
+        cross_check: 1        # 1 = mutual nearest-neighbour check, 0 = off
+
+    lightglue:
+        engine: lightglue.engine
+        min_score: 0.20
+
+# estimator parameters
+estimator_parameters:
+    num_keyframes: 5 # number of keyframes in optimisation window
+    num_loop_closure_frames: 5 # number of loop closure frames in optimisation window
+    num_imu_frames: 3 # number of frames linked by most recent nonlinear IMU error terms
+    do_loop_closures: true # whether to do VI-SLAM or VIO
+    do_final_ba: true # Whether to run a full final BA
+    enforce_realtime: true # whether to limit the time budget for optimisation
+    realtime_min_iterations: 3 # minimum number of iterations always performed
+    realtime_max_iterations: 10 # never do more than these, even if not converged
+    realtime_time_limit: 0.035 # time budget for realtime optimisation [s]
+    realtime_num_threads: 5 # number of threads for the realtime optimisation
+    full_graph_iterations: 15 # don't do more than these for the full (background) optimisation
+    full_graph_num_threads: 3 # number of threads for the full (background) optimisation
+    drift_percentage_heuristic: 10.0 # % allowed drift in loop closures rel. to dist. travelled.
+
+# some options for how and what to output
+output_parameters:
+    display_topview: false # Displays top view of the trajectory. Might become slow for long sequences.
+    display_matches: false # displays debug video and matches. May be slow. OFF (depth-only profile).
+                           # The pod is headless; when on, ThreadedSlam spawns a viz thread and builds
+                           # match images ON the estimator thread (ThreadedSlam.cpp ~1331) for a window
+                           # that does not exist. NOTE for this file's OpenCV-YAML parser: never put
+                           # ": " (colon-space) in a same-line comment — it turns the value into a map.
+    display_overhead: false # debug overhead image. Is slow.
+    enable_submapping: true # Enable volumetric submapping
+    use_rerun: false                    # Connect to a running Rerun viewer for live visualization.
+                                        # OFF (depth-only profile). Gates the visualizer ENTIRELY: no
+                                        # live stream AND no .rrd (DenseSlamApp.hpp:213). Measured
+                                        # 2026-08-22: true with no viewer listening wedged the
+                                        # estimator (Depth measurement drop every frame, imu-drop
+                                        # burst, /heightmap + /vio_features at 0 Hz). If you turn it
+                                        # on, start the viewer BEFORE the pod.
+
+    # ---- UI / forwarder shared-memory channels -------------------------------
+    # A SEPARATE AXIS FROM use_rerun, on purpose. Rerun is an in-process sink: it
+    # serialises and sends on the producing thread, inside the publication
+    # consumer, so a slow send overflows publicationQueue_ and starves the planner
+    # tick. These channels are ring pushes into memory this process owns and no
+    # consumer can backpressure them. Turn Rerun off to recover its ~4-8 MB/s and
+    # that latency while keeping the UI fed, or vice versa.
+    # Env overrides: OKVIS_UI_CHANNELS / OKVIS_PUBLISH_HEIGHTMAP /
+    # OKVIS_PUBLISH_VIO_FEATURES / OKVIS_PUBLISH_DEPTH, all VALUE-parsed
+    # (0|false|off vs 1|true|on) through the one resolveGate() helper, which
+    # also logs which source won.
+    use_ui_channels: true               # Master gate for everything below.
+    ui_publish_heightmap: false         # /heightmap forward terrain crop. NOT viz-only —
+                                        # locomotion consumes it, so off means the WBC
+                                        # stops seeing the ground ahead. OFF for the
+                                        # depth-only profile, which is safe ONLY while
+                                        # driving is off (OKVIS_ENABLE_DRIVING unset in
+                                        # deployment/okvis2x.yaml). Re-enable with driving.
+    ui_publish_vio_features: false      # /vio_features keypoints + estimator verdict.
+                                        # Debug only: ~10.8 KB per camera per frame and
+                                        # nothing in the control path reads it.
+    ui_publish_depth: true              # /depth_image — the rectified depth the mapper
+                                        # actually integrates, after the self-footprint
+                                        # mask, quantised to mm (0 = INVALID, never
+                                        # "zero metres"). Debug only: nothing in the
+                                        # control path reads it, and it is the most
+                                        # expensive of these channels at ~320 KB per
+                                        # frame (1.25 MiB of segment at capacity 4).
+                                        # ON here because phantom13 is the rig being
+                                        # tuned and the tuning UI reads this pane; turn
+                                        # it off before any run where the WiFi budget
+                                        # matters, since a workstation reading it over
+                                        # ssh pulls a whole segment per poll.
+    rerun_enable_occupancy_grid: false # Stream OccupancyGrid points to Rerun (requires use_rerun).
+    rerun_enable_submap_mesh: false     # Stream submap meshes to Rerun (requires use_rerun).
+    # ESDF/occupancy COMPUTE enables moved to se2.yaml (general.esdf_enabled / occupancy_enabled).
+    rerun_enable_submap_esdf: false     # Stream the ESDF to Rerun (viz only; requires use_rerun).
+    rerun_enable_obstacle_depth: false  # Stream live depth frames to Rerun.
+    rerun_enable_elevation_grid: false   # Stream the 2.5D elevation grid to Rerun (requires use_rerun + se2 elevation_enable).
+    esdf_window_submaps: 3              # Rolling window: TOTAL submaps (active + frozen) the ESDF/occupancy keeps
+                                        # and the planner aggregates. >=1; 1 = single active submap (old behavior).
+
+
+# Absolute path to directory containing neural-network .pt files
+# (depth-model.pt, depth-model-rgb.pt, fast-scnn.pt, mvs-model.pt, etc.).
+# If omitted, the apps fall back to <executable_dir>/../models/.
+model_dir: /okvis-models
+
+# DMA shared-memory transport settings — consumed only by okvis2x_app_dma_live.
+# Per-camera queues live in the `dma_queue` field of each cameras: entry above;
+# this section holds the non-per-camera knobs. Env vars OKVIS_DMA_IMU_NAME /
+# OKVIS_DMA_IMU_SHM / OKVIS_DMA_IMU_INDEX override these at runtime.
+dma:
+    # IMU to use, by RobotConfigData name (empty -> slot 0).
+    imu_name: "NeckPitch"
+    # shm queue the raw IMU frames are published on.
+    imu_shm: "/raw_imu_actuals"
+    # shm queue carrying RobotConfigData (imu_names[]).
+    config_shm: "/config"
+    # Robot URDF: the TF tree is built in-process from this via forward
+    # kinematics (joint angles come from the DMA /actuals queue). Override with
+    # OKVIS_URDF. Path is resolved relative to the process working directory.
+    urdf: "config/foundation_rig/20250206_phantom_mk1.urdf"
+    # URDF link that the OKVIS body frame (imu_parameters:T_BS) is expressed in.
+    # The FrameBridge looks this link up in the TF tree to map the OKVIS pose
+    # (T_WB = world->body = world->this link) into the robot_frame for planning.
+    body_frame: "Head"
+    # Target frame for all OKVIS outputs (pose + map): the robot root/base link.
+    # The FrameBridge re-expresses world->body into this frame via the TF tree,
+    # so downstream planning / obstacle avoidance runs in the pelvis frame.
+    robot_frame: "Pelvis"

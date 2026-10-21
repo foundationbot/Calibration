@@ -1,0 +1,28 @@
+# Kalibr IMU noise model for phantom12's NeckPitch IMU (TDK ICM-42688-P).
+#
+# Measured 2026-10-14 by overlapping Allan deviation over 2.35 h of the head
+# standing still (dma-recorder /raw_imu at 500 Hz, 22:50 -> 01:10 UTC; one 33 s
+# gap at a recorder restart; a 10 min head motion afterwards excluded):
+#   gyro   noise density 3.7-5.2e-5 rad/s/sqrt(Hz)  (datasheet 4.9e-5)
+#          bias instability ~3-5e-5 rad/s; random walk <~ 9e-6 rad/s^2/sqrt(Hz)
+#          (an upper bound: no clean +1/2 slope within 1.2 h of contiguous data)
+#   accel  noise density 5.9-7.8e-4 m/s^2/sqrt(Hz) on x/y (datasheet 6.9e-4)
+#          bias instability ~2.3e-4 m/s^2; random walk <~ 2e-5 m/s^3/sqrt(Hz)
+#          z excluded: an unexplained 0.06 Hz component (~0.02 m/s^2) the gyro
+#          does not share, so not head rotation.
+#
+# Values below are the measured maxima x10, the usual inflation for vibration and
+# unmodelled effects on a robot. Check after the camera-IMU fit: Kalibr's
+# NORMALIZED gyro/accel residuals should average ~1. Well below 1 = too
+# pessimistic (phantom21's August fit: 0.41 / 0.47), well above = too optimistic;
+# scale the factor and refit.
+#
+# The package's phantom13 file (imu.yaml) is 32x / 14x / 260x the measured gyro
+# noise / accel noise / accel random walk.
+accelerometer_noise_density: 8.0e-3    # m/s^2/sqrt(Hz)
+accelerometer_random_walk: 2.0e-4      # m/s^3/sqrt(Hz)
+gyroscope_noise_density: 5.0e-4        # rad/s/sqrt(Hz)
+gyroscope_random_walk: 9.0e-5          # rad/s^2/sqrt(Hz)
+
+rostopic: '/imu0'
+update_rate: 500

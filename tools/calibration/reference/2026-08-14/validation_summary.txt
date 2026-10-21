@@ -1,0 +1,5 @@
+dictionary: DICT_5X5_100 (0 corners on probe frame)
+paired 15 frames, max stamp gap 0.03 ms
+frames with detections: mono solves=22/20, stereo pairs=11/10
+monocular reprojection RMS: mean=0.243 px, worst=0.320 px
+rectified epipolar |dy|: mean=0.246 px, p95=0.738 px, max=1.567 px

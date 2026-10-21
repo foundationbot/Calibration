@@ -1,0 +1,319 @@
+# phantom12 step-70 TEMPLATE, derived from config/foundation_rig/mk12_stereo_holevisor.yaml at
+# OKVIS2-X AI-1184 (phantom21's deployed rig). Only dma_queue changed (1, 2). Step 70 overwrites
+# T_SC, intrinsics, distortion and image_delay from the camera-IMU calibration; T_BS and
+# imu_parameters (incl. imu_name NeckPitch) are kept: T_BS is phantom21's head-design value.
+%YAML:1.0
+# mk12_stereo_holevisor.yaml -- phantom21 stereo+imu calibration taken WITH the standard
+# visor that has HOLES in front of the cameras (deployed optics since aug-11). Fresh
+# kalibr session 2026-08-17. Stereo pair (video_2 -> cam0, video_0 -> cam1), radialtangential @ 1280x800.
+# Session
+#   capture A  2x90s handheld 7x5/0.1m aprilgrid, 1760 stereo pairs
+#   capture B  120s 6-axis swing-rig excitation, 60k IMU samples @ 500Hz
+#   kalibr     stereo reproj ~1.1/0.65 px (90 views kept); imu-cam reproj ~1.0 px,
+#              gyro/accel residuals white; timeshift -27.1 ms both cams = the prep tool's
+#              min(publish-capture) rebase handed back (raw stamps: +1.2 ms, 2026-09-16 re-run).
+#              OKVIS has NO online time-offset estimate; image_delay 0.00 is correct now that
+#              the live app no longer rebases camera stamps (PR fix/alessandro-clock-rebase-overshoot)
+# Acceptance (median SIFT dy on OKVIS rect taps, gate <0.5 px)
+#   offline aug-11 window  -0.03 px   (previous best no_visor +0.10)
+#   LIVE on phantom21      -0.01 px   (previous deployed -0.28)
+#   swing test             0 failures, z +-0.8 cm, return-to-start 2.6 cm
+# Raw kalibr outputs in config/calibration/results-2026-08-17-phantom21/
+cameras:
+    - {T_SC:
+        [0.9997015624011211, -0.016231969593498253, -0.018256760278647626, -0.04342120873392799,
+          0.0232531447126003, 0.40318670717074145, 0.914822261656213, 0.18355826837828718,
+          -0.007488484074305435, -0.9149737713857866, 0.4034438254358819, -0.08110152664250427,
+          0.0, 0.0, 0.0, 1.0],
+        image_dimension: [1280, 800],
+        distortion_coefficients: [-0.24755694208857879, 0.0461219428050993, -0.0026497836842966933, 8.688025600117236e-05],
+        distortion_type: radialtangential,
+        focal_length: [584.6248299240958, 580.9794962014405],
+        principal_point: [631.8726173868959, 406.40766405955026],
+        cam_model: pinhole,
+        mapping_rectification: true,
+        mapping: true,
+        camera_type: rgb+depth, #gray, rgb, gray+depth, rgb+depth
+        slam_use: okvis, #none, okvis, okvis-depth, okvis-virtual
+        dma_queue: 1} # OKVIS cam0 = phantom12 queue 1 (left, socket B)
+
+    - {T_SC:
+        [0.9994089686204399, -0.021310997913429112, -0.026973223925998893, -6.181594634298193e-05,
+          0.033307690968979044, 0.4062162296009335, 0.9131697391674326, 0.1834653128203529,
+          -0.008503597082602794, -0.9135284430036842, 0.4066859631950939, -0.08225597797133992,
+          0.0, 0.0, 0.0, 1.0],
+        image_dimension: [1280, 800],
+        distortion_coefficients: [-0.2447087580022334, 0.044672484468112894, -0.004223492386125011, 0.0010993458645014215],
+        distortion_type: radialtangential,
+        focal_length: [583.1765010196484, 579.2717447775505],
+        principal_point: [626.6951788596449, 401.55978875467395],
+        cam_model: pinhole,
+        camera_type: rgb, #gray, rgb, gray+depth, rgb+depth
+        mapping: true,
+        mapping_rectification: true,
+        slam_use: okvis, #none, okvis, okvis-depth, okvis-virtual
+        dma_queue: 2} # OKVIS cam1 = phantom12 queue 2 (right, socket D)
+
+# additional camera parameters
+camera_parameters:
+    timestamp_tolerance: 0.005 # [s] stereo frame out-of-sync tolerance
+    sync_cameras: [0, 1] # the cameras that will be synchronised
+    image_delay: 0.00 # [s] timestamp_camera_correct = timestamp_camera - image_delay
+    online_calibration: # some parameters to set the online
+        do_extrinsics: true # Do we online-calibrate extrinsics?
+        do_extrinsics_final_ba: true # Do we calibrate extrinsics in final BA?
+        sigma_r: 0.01 # T_SCi position prior stdev [m]
+        sigma_alpha: 0.1 # T_SCi orientation prior stdev [rad]
+        sigma_r_final_ba: 0.03 # T_SCi position prior stdev in final BA [m]
+        sigma_alpha_final_ba: 0.3 # T_SCi orientation prior stdev in final BA [rad]
+    deep_stereo_indices: [0, 1] # [left, right] camera indices for the stereo network
+    fov_scale: 1.0 # Divisor for new focal length which is only used when fisheye stereo rectification for dense mapping.
+    stereo_network_type: tensorrt # torch | tensorrt
+    stereo_network_file: s2m2_M_512x320_thor_fp16_pinned.engine # filename in modelDir; extension must match backend
+    stereo_network_width: 512  # rectified-image width fed to the stereo network; must match the engine
+    stereo_network_height: 320 # rectified-image height fed to the stereo network; must match the engine
+
+imu_parameters:
+    use: true
+    a_max: 78.0 # acceleration saturation [m/s^2] -- the neck IMU clips at 78.41 (measured 2026-09-15); was 176, so the saturation handling never fired
+    g_max: 7.8 # gyro saturation [rad/s]
+    sigma_g_c: 0.0026405873915791738 # gyro noise density [rad/s/sqrt(Hz)]
+    sigma_a_c: 0.010935292495321242 # accelerometer noise density [m/s^2/sqrt(Hz)]
+    sigma_bg: 0.01 # gyro bias prior [rad/s]
+    sigma_ba: 0.1 # accelerometer bias prior [m/s^2]
+    sigma_gw_c: 3.916835278254409e-04 # gyro drift noise density [rad/s^s/sqrt(Hz)]
+    sigma_aw_c: 0.0012028682743073398 # accelerometer drift noise density [m/s^2/sqrt(Hz)]
+    g: 9.81007 # Earth's acceleration due to gravity [m/s^2]
+    g0: [ 0.0, 0.0, 0.0 ] # initial gyro bias [rad/s]
+    a0: [ 0.0, 0.0, 0.0 ] # initial accelerometer bias [m/s^2]
+    s_a: [ 1.0,  1.0, 1.0 ] # scale factor for accelerometer measurements: a_true = s_a * a_meas + b_a
+    # transform Body-Sensor (IMU): T_BS = Body_T_Sensor = IMU pose in the body
+    # frame. Body frame := the "Head" URDF link (see dma:body_frame), so this is
+    # head_T_IMU (derived from the CAD Head->cam1 + calibrated cam-IMU T_SC).
+    T_BS:
+        [-0.00188426, 0.831282, 0.555847, 0.0110568,
+         -0.999996, -0.00262363, 0.000533834, -0.0457738,
+         0.0019021, -0.555844, 0.831284, 0.0826725,
+         0.0, 0.0, 0.0, 1.0]
+
+# frontend: detection etc.
+frontend_parameters:
+    feature_type: superpoint # brisk | orb | superpoint
+    keyframe_overlap: 0.60
+    use_cnn: false
+    parallelise_detection: true
+    num_matching_threads: 8
+    resize_factor: 0.5  # 1280x800 -> 640x400 for the whole VIO incl. SuperPoint
+    serialize_gpu_inference: 0  # 1 = SuperPoint detect + s2m2 never run on the GPU at once; detect has priority. 0 = off
+
+    brisk:
+        detection_threshold: 38.0
+        absolute_threshold: 50.0
+        matching_threshold: 60.0
+        octaves: 0
+        max_num_keypoints: 500
+        rotation_invariance: true
+        scale_invariance: false
+        vocabulary: small_voc.yml.gz
+        p_dbow: 0.4
+
+    orb:
+        n_features: 1000
+        scale_factor: 1.2
+        n_levels: 4
+        ini_fast_threshold: 20
+        min_fast_threshold: 10
+        ratio_test: 0.6
+        check_orientation: true
+        nms_radius: 4       # greedy spatial NMS on keypoints (px); 0 disables
+        vocabulary: ORBvoc.txt
+        p_dbow: 0.010
+
+    superpoint:
+        # Static fixed-top-K, batch-1 engine. Input size MUST match the VIO
+        # frame size (resize_factor*raw = 0.5*1280x800 = 640x400). Detection is
+        # per-camera (parallelise_detection); batching was removed.
+        # Re-export: export_superpoint_topk.py --width 640 --height 400 --batch 1
+        engine: superpoint_640x400_topk512_thor.engine
+        # lightglue | bruteforce. bruteforce = cuBLAS cosine, no engine,
+        # preferred on Thor. (SuperPoint is the only feature type with a
+        # matcher choice, so it lives here.)
+        matcher: bruteforce
+        score_threshold: 0.2
+        p_dbow: 0.075
+        # Loop-closure distinctiveness floor (sum of per-dim std-dev over the
+        # RANSAC-inlier 256-float descriptors). Rejects an LC when below this
+        # AND inliers < 20. Observed good LCs ~14; these descriptors top out
+        # ~16, so 20 effectively requires >=20 inliers. 0 = off (log-only).
+        lc_distinctiveness: 12.0
+        # Final keypoint cap, applied in C++ AFTER score-threshold + greedy NMS
+        # (post-processing). The engine's 1024 candidates are thinned to at most
+        # this many well-spread points.
+        max_keypoints: 300
+        # C++ greedy NMS radius in pixels, applied to the engine's 1024
+        # candidates. 0 disables. Mirrors BRISK's uniformity-radius selection;
+        # ~0.3 ms for ~1024 candidates at radius=16.
+        nms_radius: 8
+
+
+    # Brute-force (cuBLAS cosine) matcher, used when matcher=bruteforce.
+    # min_cossim is also reused as the loop-closure verification floor.
+    bruteforce:
+        min_cossim: 0.80     # accept a match if cosine >= this
+        max_ratio: 1.0       # Lowe ratio (top1/top2); 1.0 disables
+        cross_check: 1        # 1 = mutual nearest-neighbour check, 0 = off
+
+    lightglue:
+        engine: lightglue.engine
+        min_score: 0.20
+
+# estimator parameters
+estimator_parameters:
+    num_keyframes: 5 # number of keyframes in optimisation window
+    num_loop_closure_frames: 5 # number of loop closure frames in optimisation window
+    num_imu_frames: 3 # number of frames linked by most recent nonlinear IMU error terms
+    do_loop_closures: true # whether to do VI-SLAM or VIO
+    # OFF on the robot (#358 shutdown): the final full BA is the one optimisation with no time
+    # budget -- setOptimisationTimeLimit() applies to realtimeGraph_ only, the fullGraph_ line
+    # beside it commented out as "\todo Fix hack!". So a graceful stop ran an unbounded solve
+    # against `docker stop -t 60`, and 3 of the 5 graceful shutdowns in the preserved run logs
+    # were SIGKILLed mid-BA. Measured cost of turning it off, live vs final-BA trajectory on the
+    # same stamps: median 0.16-0.48 m raw, but only 0.08-0.23 m RMS once a rigid alignment is
+    # removed -- i.e. most of what it changes is a global transform, which ATE scoring discards
+    # anyway, and the remainder sits inside the 0.677 m within-arm repeatability floor (#342).
+    # The live trajectory is written BEFORE the BA and already carries loop closures, so nothing
+    # is lost from the saved output except this last global refinement.
+    # Left true in the benchmark configs (euroc/, replica/, hilti22/), where it is the point.
+    do_final_ba: false # Whether to run a full final BA
+    enforce_realtime: true # whether to limit the time budget for optimisation
+    realtime_min_iterations: 3 # minimum number of iterations always performed
+    realtime_max_iterations: 10 # never do more than these, even if not converged
+    realtime_time_limit: 0.015 # time budget for realtime optimisation [s]. Charged to the solve
+                               # alone (#499): 15 ms on Thor is 3-4 Gauss-Newton rounds, what the
+                               # robot ran on before when a dead override clamped this to 10 ms.
+    realtime_num_threads: 5 # number of threads for the realtime optimisation
+    full_graph_iterations: 15 # don't do more than these for the full (background) optimisation
+    full_graph_num_threads: 3 # number of threads for the full (background) optimisation
+    drift_percentage_heuristic: 10.0 # % allowed drift in loop closures rel. to dist. travelled.
+
+# some options for how and what to output
+output_parameters:
+    display_topview: false # Displays top view of the trajectory. Might become slow for long sequences.
+    display_matches: false # displays debug video and matches. May be slow.
+    display_overhead: false # debug overhead image. Is slow.
+    enable_submapping: true # Enable volumetric submapping
+
+    # ---- 3D Gaussian Splatting (see docs/gaussian_splatting.md) ----
+    # Export a 3DGS-trainable dataset: raw images + per-image OPENCV intrinsics +
+    # per-image camera pose in the METRIC, gravity-aligned OKVIS world frame W.
+    # Poses are exported verbatim (no re-estimation, no recentring, no rescaling)
+    # and resolved AFTER the final BA, so every frame carries a globally
+    # consistent pose. Costs a lossless PNG write per frame while enabled.
+    # OFF since 2026-09-18. Nobody is training a splat off this robot, and while it was on
+    # every run paid a lossless PNG per frame and the console grew a 3DGS fold whose two
+    # buttons controlled something no one used (#387 hides that fold when there is no
+    # producer -- this is what makes there be no producer). Flip to true to bring the whole
+    # thing back: setupGsWriter returns nullptr on false, so every gs_* below is inert
+    # until it does, and they are left in place as the recipe rather than deleted.
+    export_gs_dataset: false            # master switch for the export
+    # gs_dataset_path: ""               # default: <savePath>/gs_dataset
+    gs_write_colmap: true               # also emit a COLMAP cameras/images/points3D triplet
+    gs_start_paused: true               # start with the export PAUSED; the console's EXPORT
+                                        # button turns it on. Nothing is written to disk until
+                                        # then, matching liveviz's serving default (#271).
+    gs_frame_stride: 2                  # keep every Nth frame (thins an oversampled traverse). 2 halves
+                                        # the PNG writes and still leaves ~6.6 frames/s of overlapping
+                                        # views, which is what a splat needs.
+    gs_max_images: 2000                 # cap exported PNGs kept on disk; 0 = unlimited.
+                                        # NOTHING else bounds them: the stream carries paths,
+                                        # not pixels, and the trainer's window lives on another
+                                        # machine, where fetching an image does not consume it.
+                                        # Left at 0 this reached 297,935 images / 129 GB on
+                                        # 2026-09-01. Sized as CONSUMER SLACK, not a training
+                                        # set: ~880 MB, ~4.4 min at 7.5 frames/s. Must exceed
+                                        # any consumer's window (600 by default).
+    # LIVE streaming: train a splat WHILE the run happens, offboard.
+    #   gs_stream_dir: /dev/shm/gs-stream   # then, on the training machine:
+    #                                       #   app/gs/train_gs_stream.py /dev/shm/gs-stream
+    # Requires export_gs_dataset: the stream REFERENCES the PNGs the export writes
+    # rather than carrying pixels, so the images must be going to disk anyway.
+    # ONE camera per stream (gs_stream_camera): the stream advertises a single
+    # intrinsics set and this rig's two cameras differ by 2.6 px of principal point,
+    # so mixing them would put a systematic reprojection error on every second frame.
+    # Do not run the trainer on Thor -- serialize_gpu_inference already exists
+    # because SuperPoint and the stereo network cannot share that GPU.
+    # Live stream for app/gs/train_gs_stream.py. The pod runs hostIPC, so this IS
+    # the host's /dev/shm and the trainer can reach it (served over liveviz's /gs
+    # route). NB the comment goes ABOVE, not trailing -- this is a STRING parameter
+    # and OpenCV's FileStorage would swallow a trailing comment into the value.
+    gs_stream_dir: /dev/shm/gs-stream
+    gs_export_camera: 0                 # export ONLY this camera. The stream carries one; exporting
+                                        # the other was half of 5.3 GB and half the PNG encodes for
+                                        # pixels nothing downstream reads.
+    gs_async_image_write: true          # PNG encode on a writer thread, NOT the image-callback thread
+                                        # that feeds the estimator. Measured 28.84 ms/frame inline vs a
+                                        # 0.20 ms clone. Leave this on for anything realtime.
+    gs_stream_camera: 0                 # which camera to stream
+    gs_stream_seed_every: 200           # republish the landmark seed cloud every N streamed frames.
+                                        # Seeding is not cosmetic: measured 2.45x registration
+                                        # confidence against 0.70x for the trainer's random init.
+    gs_seed_from_depth: true            # seed the gaussians from the stereo network's depth, not just
+                                        # the sparse landmarks. Measured -- median surface agreement
+                                        # 8.0 -> 5.2 cm and far-field junk 14.7 -> 3.0 %, at matched
+                                        # gaussian count. The single biggest quality lever here.
+    gs_seed_depth_voxel: 0.1            # 10 cm, not the 5 cm default -- a room-sized space fills the
+                                        # 400k-point cap at 5 cm and burns a mid-run re-bin.
+    # Size of the trainer's ROLLING WINDOW, not a guess at the run length. The
+    # trainer PREALLOCATES this many slots at startup, so it is a straight memory
+    # cost -- capacity x 640 x 400 x 3 bytes. 4000 is ~10 min of travel at 6.65
+    # frames/s and costs 3.1 GB; the old 12000 cost 9.2 GB before a single frame
+    # arrived, on the same laptop that is training and rendering.
+    #
+    # Overshooting is no longer free and undershooting no longer drops frames --
+    # the window evicts the least distinct viewpoint instead, so this now trades
+    # MEMORY against how much of the traverse stays trainable. It also no longer
+    # touches the densification schedule (that coupling was a bug, since fixed).
+    gs_stream_capacity_hint: 4000
+    gs_keyframes_only: false            # export only keyframes
+    gs_max_angular_rate: 0.0            # drop frames above this body rate [rad/s]; 0 = off. MUST have a
+                                        # decimal point (the parser demands a real).
+                                        # Motion blur / rolling-shutter skew is the top 3DGS
+                                        # quality risk on a walking rig; ~1.0 is a sane start.
+    gs_write_seed_pointcloud: true      # dump OKVIS landmarks as a metric sparse seed (points3d.ply)
+
+# Absolute path to directory containing neural-network .pt files
+# (depth-model.pt, depth-model-rgb.pt, fast-scnn.pt, mvs-model.pt, etc.).
+# If omitted, the apps fall back to <executable_dir>/../models/.
+model_dir: /okvis-models
+
+# Live-robot breakpoints (#435). false = OKVIS_DEBUG_BREAK sites are inert and cost one
+# relaxed atomic load. true = a tripped site FREEZES every OKVIS thread, zeroes the
+# velocity command (the head is held), publishes the state to liveviz -- which turns red
+# -- and waits for resume / next / skip. A freeze outlives the estimator's IMU buffer at
+# 8 s and resets tracking, so look fast. Arming on the robot is an edit to the HOST copy
+# (/etc/phantomos/okvis/) plus an OKVIS restart; only ADDING a breakpoint costs a new image.
+debug_mode: false
+
+# DMA shared-memory transport settings — consumed only by okvis2x_app_dma_live.
+# Per-camera queues live in the `dma_queue` field of each cameras: entry above;
+# this section holds the non-per-camera knobs. Env vars OKVIS_DMA_IMU_NAME /
+# OKVIS_DMA_IMU_SHM / OKVIS_DMA_IMU_INDEX override these at runtime.
+dma:
+    # IMU to use, by RobotConfigData name (empty -> slot 0).
+    imu_name: "NeckPitch"
+    # shm queue the raw IMU frames are published on.
+    imu_shm: "/raw_imu_actuals"
+    # shm queue carrying RobotConfigData (imu_names[]).
+    config_shm: "/config"
+    # Robot URDF: the TF tree is built in-process from this via forward
+    # kinematics (joint angles come from the DMA /actuals queue). Override with
+    # OKVIS_URDF. Path is resolved relative to the process working directory.
+    urdf: "/etc/okvis/20250206_phantom_mk1.urdf"
+    # URDF link that the OKVIS body frame (imu_parameters:T_BS) is expressed in.
+    # The FrameBridge looks this link up in the TF tree to map the OKVIS pose
+    # (T_WB = world->body = world->this link) into the robot_frame for planning.
+    body_frame: "Head"
+    # Target frame for all OKVIS outputs (pose + map): the robot root/base link.
+    # The FrameBridge re-expresses world->body into this frame via the TF tree,
+    # so downstream planning / obstacle avoidance runs in the pelvis frame.
+    robot_frame: "Pelvis"

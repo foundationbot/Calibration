@@ -1,0 +1,9 @@
+# User's ChArUco board driven as a plain checkerboard for Kalibr:
+# 9x12 squares, 60 mm checker size (45 mm ArUco markers in the squares are
+# ignored by the chessboard-corner detector), DICT_5X5.
+# Kalibr checkerboard counts INTERNAL corners: 9x12 squares -> 8x11 corners.
+target_type: 'checkerboard'
+targetCols: 8
+targetRows: 11
+rowSpacingMeters: 0.06
+colSpacingMeters: 0.06

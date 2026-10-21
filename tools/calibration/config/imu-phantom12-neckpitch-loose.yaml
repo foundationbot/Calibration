@@ -1,0 +1,11 @@
+# phantom12 NeckPitch, Kalibr IMU model for the camera-IMU REFIT (2026-10-15 evening).
+# = imu-phantom12-neckpitch.yaml with the noise densities loosened to the motion actually seen:
+# the first fits (takes B and C) gave normalized accelerometer residuals mean 3.0-3.2 (median 1.4)
+# and gyro mean 1.4 (median 0.65); calibration.md section 6 says rescale towards ~1 and refit.
+# accelerometer_noise_density x2.5, gyroscope_noise_density x1.4; random walks unchanged.
+accelerometer_noise_density: 2.0e-2    # m/s^2/sqrt(Hz)
+accelerometer_random_walk: 2.0e-4      # m/s^3/sqrt(Hz)
+gyroscope_noise_density: 7.0e-4        # rad/s/sqrt(Hz)
+gyroscope_random_walk: 9.0e-5          # rad/s^2/sqrt(Hz)
+rostopic: '/imu0'
+update_rate: 500
