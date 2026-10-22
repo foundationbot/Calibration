@@ -78,3 +78,49 @@ def test_too_few_pairs_is_no_result_and_a_board_outside_the_depth_band_skips_onl
 def test_a_far_board_is_no_result_by_its_span():
     far = dc.check("KB4T", I, S.C_TRUE, board(S.C_TRUE, z=(1.5, 1.7)), S.BOARD)
     assert far["verdict"] == "NO RESULT" and any("span" in w for w in far["reasons"])
+
+
+m67 = importlib.import_module("67_drift_check")
+
+
+def test_load_okvis_reads_the_calibration_okvis_runs(tmp_path):
+    """an OKVIS kb4t config (step 71's surgery) gives back the fit's lenses and C = inv(T_SC0) T_SC1"""
+    m71 = importlib.import_module("71_export_lens")
+    tpl_mod = importlib.import_module("test_calib_make_yaml")
+    tpl = tmp_path / "template.yaml"
+    tpl.write_text(tpl_mod.TEMPLATE.replace("{tbs}", tpl_mod.TBS))
+    C = turned(S.C_TRUE, [0.0, 0.0, -0.36])
+    cfg = tmp_path / "okvis.yaml"
+    cfg.write_text(m71.okvis_text(tpl, S.rig12(), I, C, ["test"], kb4t=True))
+    model, intr, C2 = dc.load_okvis(cfg)
+    assert model == "KB4T" and all(np.allclose(a, b, rtol=1e-14, atol=0) for a, b in zip(intr, I))
+    assert np.allclose(C2, C, atol=1e-12)
+
+
+@pytest.mark.parametrize("truth, targets, code", [(None, CENTRE, 0), ("roll", CENTRE, 1), (None, [(643, 90)], 2)])
+def test_the_cli_exits_0_ok_1_drifted_2_no_result_and_writes_the_report(tmp_path, truth, targets, code, capsys):
+    C = turned(S.C_TRUE, [0, 0, -0.36]) if truth == "roll" else S.C_TRUE
+    np.savez(tmp_path / "c.npz", **board(C, targets=targets))
+    S.write_calibration(tmp_path / "cal.json", "KB4T", I, S.C_TRUE)
+    out = tmp_path / "r.json"
+    assert m67.main(["--corners", str(tmp_path / "c.npz"), "--calibration", str(tmp_path / "cal.json"),
+                     "--rig", str(S.RIG12), "--out", str(out)]) == code
+    rep = json.loads(out.read_text())
+    assert rep["verdict"] == ("OK", "DRIFTED", "NO RESULT")[code] and rep["calibration"]["source"].endswith("cal.json")
+    assert any(ln.startswith(rep["verdict"] + ":") for ln in capsys.readouterr().out.splitlines())
+
+
+def test_a_session_is_dumped_with_one_long_hold(tmp_path, monkeypatch):
+    seen = {}
+    d = board(S.C_TRUE)
+
+    def fake_dump(path, b, out, still_px=1.0, per_hold=3, **kw):
+        seen.update(path=str(path), per_hold=per_hold)
+        np.savez(out, **d)
+        return len(d["img_t0"])
+
+    monkeypatch.setattr(m67, "_dump", fake_dump)
+    S.write_calibration(tmp_path / "cal.json", "KB4T", I, S.C_TRUE)
+    assert m67.main(["--session", str(tmp_path / "session.mcap"), "--calibration", str(tmp_path / "cal.json"),
+                     "--rig", str(S.RIG12), "--out", str(tmp_path / "r.json")]) == 0
+    assert seen == {"path": str(tmp_path / "session.mcap"), "per_hold": m67.PER_HOLD} and m67.PER_HOLD == 30

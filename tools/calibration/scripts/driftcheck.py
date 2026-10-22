@@ -115,3 +115,16 @@ def check(model, intr, C, d, board) -> dict:
     out["reasons"] = drift
     out["verdict"] = "DRIFTED" if drift else "OK"
     return out
+
+
+def load_okvis(path):
+    """the calibration an OKVIS config makes OKVIS run: (model, [intr0, intr1], C) with C = inv(T_SC0) T_SC1 (camera-1
+    points into camera 0); KB4T for a kb4t file, KB4 for an equidistant one"""
+    import okviscfg
+    import rigmath as rm
+    cfg = okviscfg.load(path)
+    model = {"pinhole-kb4t": "KB4T", "pinhole-equi": "KB4"}.get(cfg.lens)
+    if model is None:
+        raise ValueError(f"{path}: lens {cfg.lens}; the drift check reads kb4t or equidistant configs")
+    intr = [np.r_[cfg.K[c][0, 0], cfg.K[c][1, 1], cfg.K[c][0, 2], cfg.K[c][1, 2], np.ravel(cfg.D[c])] for c in (0, 1)]
+    return model, intr, rm.inv(cfg.T_SC[0]) @ cfg.T_SC[1]
