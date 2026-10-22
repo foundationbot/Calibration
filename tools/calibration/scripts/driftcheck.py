@@ -58,15 +58,17 @@ def roll_pitch(model, intr, C, d, board=None) -> dict:
     (pitch, roll), ok = _fit(np.vstack([r[0] for r in rays]), np.vstack([r[1] for r in rays]), R, t)
     per = np.array(per)
     return {"pairs": len(rays), "pitch_deg": float(pitch), "roll_deg": float(roll), "converged": ok,
-            "pitch_p10_p90": np.percentile(per[:, 0], [10, 90]).tolist(),
-            "roll_p10_p90": np.percentile(per[:, 1], [10, 90]).tolist(),
+            "pitch_repeat_p10_p90": np.percentile(per[:, 0], [10, 90]).tolist(),     # repeatability over the pairs
+            "roll_repeat_p10_p90": np.percentile(per[:, 1], [10, 90]).tolist(),      # of one static board: narrower
+                                                                                     # than the true uncertainty
             "corners": int(sum(len(r[0]) for r in rays)), "uv0": [r[2] for r in rays]}
 
 
 # D2 (coverage) and D3 (verdict), fixed in the plan before any data
 MIN_PAIRS = 10
 MIN_SPAN_U, MIN_SPAN_V = 400.0, 150.0          # raw px spanned by the median pair's camera-0 corners
-MAX_DU, MAX_DV = 300.0, 200.0                  # the board centre's distance from the principal point, raw px
+MAX_DU, MAX_DV = 150.0, 100.0                  # the board centre's distance from the principal point, raw px (rev 2:
+                                               # off-centre a lens mismatch aliases into pitch / roll; code review I1)
 DEPTH_BAND_M = (0.4, 1.3)                      # the depth part is judged only here
 MAX_ROLL_DEG, MAX_PITCH_DEG, MAX_DEPTH_PCT = 0.10, 0.03, 1.0
 
@@ -94,10 +96,12 @@ def check(model, intr, C, d, board) -> dict:
     if abs(du) > MAX_DU or abs(dv) > MAX_DV:
         out["reasons"].append(f"the board centre is {du:+.0f}, {dv:+.0f} raw px from the image centre (limits "
                               f"+-{MAX_DU:.0f}, +-{MAX_DV:.0f}): centre the board (at an edge roll and yaw mix)")
+    if not rp["converged"]:
+        out["reasons"].append("the roll / pitch fit did not converge")
     if out["reasons"]:
         out["verdict"] = "NO RESULT"
         return out
-    rec, _, solves = ls.score(model, intr, C, sf.Data(dict(d), board))
+    rec, _, solves = ls.score(model, intr, C, sf.Data(dict(d), board, min_corners=MIN_CORNERS))
     if ls.solved(solves):
         e, z = 100 * (np.asarray(rec["scale"]) - 1), np.asarray(rec["z"])
         out.update(depth_pct=float(np.median(e)), depth_p10_p90=np.percentile(e, [10, 90]).tolist(),
@@ -117,11 +121,14 @@ def check(model, intr, C, d, board) -> dict:
     return out
 
 
-def load_okvis(path):
+def load_okvis(path, okvis_order=(0, 1)):
     """the calibration an OKVIS config makes OKVIS run: (model, [intr0, intr1], C) with C = inv(T_SC0) T_SC1 (camera-1
-    points into camera 0); KB4T for a kb4t file, KB4 for an equidistant one"""
+    points into camera 0); KB4T for a kb4t file, KB4 for an equidistant one. OKVIS block i is the rig's kalibr camera
+    okvis_order[i]; only [0, 1] (phantom12) is supported: another order would swap the cameras silently"""
     import okviscfg
     import rigmath as rm
+    if list(okvis_order) != [0, 1]:
+        raise ValueError(f"okvis_order {list(okvis_order)}: the drift check supports [0, 1] only")
     cfg = okviscfg.load(path)
     model = {"pinhole-kb4t": "KB4T", "pinhole-equi": "KB4"}.get(cfg.lens)
     if model is None:

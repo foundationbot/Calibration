@@ -11,9 +11,9 @@ docs/superpowers/plans/2026-10-22-phantom12-drift-check.md). It would have caugh
   NO RESULT  fewer than 10 still pairs, the board too small in the image (< 400 x 150 raw px) or off-centre
              (> 300 / 200 raw px from the principal point; at an edge roll and yaw mix)
 
-Exit 0 OK, 1 DRIFTED, 2 NO RESULT.
+Exit 0 OK, 1 DRIFTED, 2 NO RESULT, 3 an error (exit 1 never means anything but DRIFTED).
 Usage: python 67_drift_check.py (--session session.mcap | --corners corners.npz)
-           (--config okvis.yaml | --calibration fit.json[:key]) [--out report.json] [--rig PATH]"""
+           (--config okvis.yaml | --calibration fit.json[:key]) --rig config/rig-phantom12.yaml [--out report.json]"""
 import argparse
 import importlib
 import sys
@@ -36,6 +36,16 @@ def _dump(path, board, out, still_px=1.0, per_hold=PER_HOLD):
 
 
 def main(argv=None) -> int:
+    try:
+        return _main(argv)
+    except SystemExit:
+        raise
+    except Exception as e:                       # noqa: BLE001 -- a crash must not read as DRIFTED (exit 1)
+        print(f"ERROR: {type(e).__name__}: {e}", file=sys.stderr)
+        return 3
+
+
+def _main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument("--session", type=Path, help="the record app's session.mcap of a still board")
@@ -47,8 +57,11 @@ def main(argv=None) -> int:
     rigcfg.add_arg(ap)
     a = ap.parse_args(argv)
     rig = rigcfg.load(a.rig)
+    if not hasattr(rig.board, "n_tags"):
+        print(f"ERROR: {rig.path.name}'s board is not an AprilGrid (pass --rig config/rig-phantom12.yaml)", file=sys.stderr)
+        return 3
     if a.config:
-        model, intr, C = dc.load_okvis(a.config)
+        model, intr, C = dc.load_okvis(a.config, rig.okvis_order)
         source = str(a.config)
     else:
         model, intr, C = sf.load_calibration(a.calibration)

@@ -34,7 +34,7 @@ def test_a_planted_roll_and_pitch_are_read_back():
     d = board(turned(S.C_TRUE, [0.03, 0.0, -0.36]))
     r = dc.roll_pitch("KB4T", I, S.C_TRUE, d, S.BOARD)
     assert r["roll_deg"] == pytest.approx(-0.36, abs=0.02) and r["pitch_deg"] == pytest.approx(0.03, abs=0.01)
-    assert r["pairs"] == 12 and r["roll_p10_p90"][0] <= r["roll_deg"] <= r["roll_p10_p90"][1]
+    assert r["pairs"] == 12 and r["roll_repeat_p10_p90"][0] <= r["roll_deg"] <= r["roll_repeat_p10_p90"][1]
 
 
 def test_the_true_calibration_reads_zero_and_yaw_is_not_mistaken_for_roll():
@@ -124,3 +124,84 @@ def test_a_session_is_dumped_with_one_long_hold(tmp_path, monkeypatch):
     assert m67.main(["--session", str(tmp_path / "session.mcap"), "--calibration", str(tmp_path / "cal.json"),
                      "--rig", str(S.RIG12), "--out", str(tmp_path / "r.json")]) == 0
     assert seen == {"path": str(tmp_path / "session.mcap"), "per_hold": m67.PER_HOLD} and m67.PER_HOLD == 30
+
+
+# --- the code review's I1-I4 and minors (plan revision 2): a truly still board, every limit pinned on both sides ---
+
+def still(truth, n=30, target=(643, 385), z=0.8, seed=5):
+    """ONE board pose and n noise realisations of it: what a 30 s still recording gives"""
+    return S.views(I, truth, 1, seed=seed, z_range=(z, z + 0.001), noise=0.2, per_hold=n, targets=[target],
+                   jitter=(0, 0))
+
+
+@pytest.mark.parametrize("rot, expect", [([0, 0, 0.08], "OK"), ([0, 0, 0.12], "DRIFTED"), ([0, 0, -0.12], "DRIFTED"),
+                                         ([0.02, 0, 0], "OK"), ([0.04, 0, 0], "DRIFTED"), ([-0.04, 0, 0], "DRIFTED")])
+def test_the_roll_and_pitch_limits_on_both_sides(rot, expect):
+    r = dc.check("KB4T", I, S.C_TRUE, still(turned(S.C_TRUE, rot)), S.BOARD)
+    assert r["verdict"] == expect, (rot, r["roll_deg"], r["pitch_deg"], r["reasons"])
+
+
+@pytest.mark.parametrize("k, expect", [(1.008, "OK"), (1.012, "DRIFTED")])
+def test_the_depth_limit_on_both_sides(k, expect):
+    C = S.C_TRUE.copy()
+    C[:3, 3] *= k
+    r = dc.check("KB4T", I, S.C_TRUE, still(C), S.BOARD)
+    assert r["verdict"] == expect and r["depth_judged"], (k, r.get("depth_pct"), r["reasons"])
+
+
+def test_the_centre_box_is_150_by_100_px():
+    inside = dc.check("KB4T", I, S.C_TRUE, still(S.C_TRUE, target=(643 + 120, 385 + 80)), S.BOARD)
+    right = dc.check("KB4T", I, S.C_TRUE, still(S.C_TRUE, target=(643 + 200, 385)), S.BOARD)
+    low = dc.check("KB4T", I, S.C_TRUE, still(S.C_TRUE, target=(643, 385 + 150)), S.BOARD)
+    assert inside["verdict"] == "OK" and right["verdict"] == low["verdict"] == "NO RESULT"
+
+
+def test_nine_pairs_are_no_result_and_ten_are_judged():
+    assert dc.check("KB4T", I, S.C_TRUE, still(S.C_TRUE, n=9), S.BOARD)["verdict"] == "NO RESULT"
+    assert dc.check("KB4T", I, S.C_TRUE, still(S.C_TRUE, n=10), S.BOARD)["verdict"] == "OK"
+
+
+def test_an_unconverged_roll_fit_is_no_result_and_an_unconverged_depth_is_not_judged(monkeypatch):
+    d = still(S.C_TRUE)
+    ls = importlib.import_module("lensscore")
+    monkeypatch.setattr(ls, "solved", lambda solves: False)
+    r = dc.check("KB4T", I, S.C_TRUE, d, S.BOARD)
+    assert r["verdict"] == "OK" and r["depth_judged"] is False and "converge" in r["depth_note"]
+    monkeypatch.undo()
+    real = dc._fit
+    monkeypatch.setattr(dc, "_fit", lambda *a: (real(*a)[0], False))
+    r = dc.check("KB4T", I, S.C_TRUE, d, S.BOARD)
+    assert r["verdict"] == "NO RESULT" and any("converge" in w for w in r["reasons"])
+
+
+def test_load_okvis_with_a_turned_camera_0_and_the_okvis_order(tmp_path):
+    m70 = importlib.import_module("70_make_mk13_yaml")
+    m71 = importlib.import_module("71_export_lens")
+    tpl_mod = importlib.import_module("test_calib_make_yaml")
+    tpl = tmp_path / "template.yaml"
+    tpl.write_text(tpl_mod.TEMPLATE.replace("{tbs}", tpl_mod.TBS))
+    C = turned(S.C_TRUE, [0.0, 0.0, -0.36])
+    T0 = S.stereo_pose([-91.0, 2.0, -88.0], [0.03, -0.01, 0.02])     # camera 0 in the IMU: not the identity
+    text = m71.okvis_text(tpl, S.rig12(), I, C, ["test"], kb4t=True)
+    cfg = tmp_path / "okvis.yaml"
+    cfg.write_text(m70.replace_tsc(text, [T0, T0 @ C]))
+    model, intr, C2 = dc.load_okvis(cfg)
+    assert np.allclose(C2, C, atol=1e-9)
+    with pytest.raises(ValueError, match="okvis_order"):
+        dc.load_okvis(cfg, okvis_order=[1, 0])
+
+
+def test_errors_exit_3_never_1(tmp_path):
+    np.savez(tmp_path / "c.npz", **still(S.C_TRUE))
+    S.write_calibration(tmp_path / "cal.json", "KB4T", I, S.C_TRUE)
+    charuco = Path(__file__).resolve().parent.parent / "config" / "rig.yaml"     # the package default: a ChArUco board
+    args = ["--corners", str(tmp_path / "c.npz"), "--calibration", str(tmp_path / "cal.json")]
+    assert m67.main(args + ["--rig", str(charuco)]) == 3                          # not an AprilGrid: refused
+    assert m67.main(["--corners", str(tmp_path / "missing.npz"), "--calibration", str(tmp_path / "cal.json"),
+                     "--rig", str(S.RIG12)]) == 3                                  # any error: 3
+
+
+def test_a_centred_board_at_105_m_is_judged_its_span_wide_enough_but_not_400_px_tall():
+    """~440 x ~310 raw px: the u span (>= 400) and the v span (>= 150) are separate limits"""
+    r = dc.check("KB4T", I, S.C_TRUE, still(S.C_TRUE, z=1.05), S.BOARD)
+    assert r["span_px"][0] >= 400 > r["span_px"][1] >= 150 and r["verdict"] == "OK", r

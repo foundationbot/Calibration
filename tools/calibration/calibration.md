@@ -174,10 +174,12 @@ itself. Cause unknown (`docs/superpowers/plans/2026-10-21-phantom12-fit-c.md`, o
 
 **How:**
 1. Put the board on its stand ~0.7-1.0 m from the head, roughly centred in the image, and keep it still.
-2. Record 30 s: the record pod, as in the Fit C plan's Task 1, with the user's yes.
+2. Keep the board within ~150 px sideways and ~100 px vertically of the image centre (off-centre a lens
+   mismatch reads as pitch). Record 30 s: the record pod, as in the Fit C plan's Task 1, with the user's yes.
 3. Run:
    ```
-   python 67_drift_check.py --session <take>/session.mcap --config /etc/phantomos/okvis/<the file robot.env names>
+   python 67_drift_check.py --session <take>/session.mcap --config /etc/phantomos/okvis/<the file robot.env names> \
+       --rig config/rig-phantom12.yaml
    ```
    Step 15's corner dump runs inside it; 30 s of recording took 44 s on Thor.
 
@@ -191,7 +193,7 @@ itself. Cause unknown (`docs/superpowers/plans/2026-10-21-phantom12-fit-c.md`, o
   - Do not trust depth; record a neck grid and follow the Fit C plan's §4 table.
 - **NO RESULT:** too few still pairs, or the board too small or off-centre. At an edge, roll and yaw cannot be told
   apart (the 21 Oct 18:11 recording). Move the board and record again.
-- **Exit codes:** 0 / 1 / 2.
+- **Exit codes:** 0 OK, 1 DRIFTED, 2 NO RESULT, 3 an error. Exit 1 never means a crash.
 
 **How it measures:**
 - roll and pitch from the epipolar coplanarity of the corners' rays, with the calibration's own lenses; it needs no
