@@ -8,8 +8,8 @@ docs/superpowers/plans/2026-10-22-phantom12-drift-check.md). It would have caugh
 (-0.36 deg) at once.
 
   DRIFTED    |roll| > 0.10 deg, |pitch| > 0.03 deg, or (board at 0.4-1.3 m) |depth error| > 1.0 %
-  NO RESULT  fewer than 10 still pairs, the board too small in the image (< 400 x 150 raw px) or off-centre
-             (> 300 / 200 raw px from the principal point; at an edge roll and yaw mix)
+  NO RESULT  fewer than 10 still pairs, the board too small in the image (< 250 x 150 raw px) or off-centre
+             (> 150 / 100 raw px from the principal point; off-centre a lens mismatch reads as pitch)
 
 Exit 0 OK, 1 DRIFTED, 2 NO RESULT, 3 an error (exit 1 never means anything but DRIFTED).
 Usage: python 67_drift_check.py (--session session.mcap | --corners corners.npz)

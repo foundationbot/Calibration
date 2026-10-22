@@ -66,7 +66,8 @@ def roll_pitch(model, intr, C, d, board=None) -> dict:
 
 # D2 (coverage) and D3 (verdict), fixed in the plan before any data
 MIN_PAIRS = 10
-MIN_SPAN_U, MIN_SPAN_V = 400.0, 150.0          # raw px spanned by the median pair's camera-0 corners
+MIN_SPAN_U, MIN_SPAN_V = 250.0, 150.0          # raw px spanned by the median pair's camera-0 corners (rev 3: the real
+                                               # board spans 280-394 px at 0.7-1.2 m; 400 was unreachable)
 MAX_DU, MAX_DV = 150.0, 100.0                  # the board centre's distance from the principal point, raw px (rev 2:
                                                # off-centre a lens mismatch aliases into pitch / roll; code review I1)
 DEPTH_BAND_M = (0.4, 1.3)                      # the depth part is judged only here

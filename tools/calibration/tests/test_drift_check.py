@@ -76,7 +76,7 @@ def test_too_few_pairs_is_no_result_and_a_board_outside_the_depth_band_skips_onl
 
 
 def test_a_far_board_is_no_result_by_its_span():
-    far = dc.check("KB4T", I, S.C_TRUE, board(S.C_TRUE, z=(1.5, 1.7)), S.BOARD)
+    far = dc.check("KB4T", I, S.C_TRUE, board(S.C_TRUE, z=(2.1, 2.3)), S.BOARD)
     assert far["verdict"] == "NO RESULT" and any("span" in w for w in far["reasons"])
 
 
@@ -201,7 +201,11 @@ def test_errors_exit_3_never_1(tmp_path):
                      "--rig", str(S.RIG12)]) == 3                                  # any error: 3
 
 
-def test_a_centred_board_at_105_m_is_judged_its_span_wide_enough_but_not_400_px_tall():
-    """~440 x ~310 raw px: the u span (>= 400) and the v span (>= 150) are separate limits"""
-    r = dc.check("KB4T", I, S.C_TRUE, still(S.C_TRUE, z=1.05), S.BOARD)
-    assert r["span_px"][0] >= 400 > r["span_px"][1] >= 150 and r["verdict"] == "OK", r
+def test_the_u_span_limit_is_250_px_and_separate_from_the_v_limit():
+    """rev 3: the real board spans 280-394 raw px at 0.7-1.2 m (partly cut or turned), so 400 px was unreachable;
+    250 px keeps roll's lever arm. Synthetic face-on board: ~280 x ~200 px at 1.62 m, ~220 x ~155 px at 2.1 m"""
+    ok = dc.check("KB4T", I, S.C_TRUE, still(S.C_TRUE, z=1.62), S.BOARD)
+    far = dc.check("KB4T", I, S.C_TRUE, still(S.C_TRUE, z=2.1), S.BOARD)
+    assert ok["span_px"][0] >= 250 > far["span_px"][0] and far["span_px"][1] >= 150, (ok["span_px"], far["span_px"])
+    assert ok["verdict"] == "OK" and ok["depth_judged"] is False                    # 1.62 m: beyond the depth band
+    assert far["verdict"] == "NO RESULT" and any("span" in w for w in far["reasons"])
