@@ -61,3 +61,57 @@ def roll_pitch(model, intr, C, d, board=None) -> dict:
             "pitch_p10_p90": np.percentile(per[:, 0], [10, 90]).tolist(),
             "roll_p10_p90": np.percentile(per[:, 1], [10, 90]).tolist(),
             "corners": int(sum(len(r[0]) for r in rays)), "uv0": [r[2] for r in rays]}
+
+
+# D2 (coverage) and D3 (verdict), fixed in the plan before any data
+MIN_PAIRS = 10
+MIN_SPAN_U, MIN_SPAN_V = 400.0, 150.0          # raw px spanned by the median pair's camera-0 corners
+MAX_DU, MAX_DV = 300.0, 200.0                  # the board centre's distance from the principal point, raw px
+DEPTH_BAND_M = (0.4, 1.3)                      # the depth part is judged only here
+MAX_ROLL_DEG, MAX_PITCH_DEG, MAX_DEPTH_PCT = 0.10, 0.03, 1.0
+
+
+def check(model, intr, C, d, board) -> dict:
+    """the drift check of one still-board corner dump d against (model, intr, C): numbers, reasons and the verdict
+    (OK / DRIFTED / NO RESULT); a JSON-safe dict"""
+    import lensscore as ls
+    intr = [np.asarray(v, float) for v in intr]
+    rp = roll_pitch(model, intr, C, d)
+    uv0 = rp.pop("uv0", [])
+    out = {"model": model, **rp, "reasons": [], "depth_judged": False}
+    if rp["pairs"] < MIN_PAIRS:
+        out["reasons"].append(f"{rp['pairs']} still pairs with >= {MIN_CORNERS} common corners (needs {MIN_PAIRS})")
+        out["verdict"] = "NO RESULT"
+        return out
+    spans = np.array([np.ptp(u, axis=0) for u in uv0])
+    span_u, span_v = (float(v) for v in np.median(spans, axis=0))
+    centre = np.median(np.array([u.mean(0) for u in uv0]), axis=0)
+    du, dv = float(centre[0] - intr[0][2]), float(centre[1] - intr[0][3])
+    out.update(span_px=[span_u, span_v], centre_px=centre.tolist(), centre_offset_px=[du, dv])
+    if span_u < MIN_SPAN_U or span_v < MIN_SPAN_V:
+        out["reasons"].append(f"the board spans {span_u:.0f} x {span_v:.0f} raw px (needs {MIN_SPAN_U:.0f} x "
+                              f"{MIN_SPAN_V:.0f}): move it closer or into the middle of the image")
+    if abs(du) > MAX_DU or abs(dv) > MAX_DV:
+        out["reasons"].append(f"the board centre is {du:+.0f}, {dv:+.0f} raw px from the image centre (limits "
+                              f"+-{MAX_DU:.0f}, +-{MAX_DV:.0f}): centre the board (at an edge roll and yaw mix)")
+    if out["reasons"]:
+        out["verdict"] = "NO RESULT"
+        return out
+    rec, _, solves = ls.score(model, intr, C, sf.Data(dict(d), board))
+    if ls.solved(solves):
+        e, z = 100 * (np.asarray(rec["scale"]) - 1), np.asarray(rec["z"])
+        out.update(depth_pct=float(np.median(e)), depth_p10_p90=np.percentile(e, [10, 90]).tolist(),
+                   z_m=float(np.median(z)))
+        out["depth_judged"] = bool(DEPTH_BAND_M[0] <= out["z_m"] <= DEPTH_BAND_M[1])
+    else:
+        out["depth_note"] = "the board-scale solve did not converge: depth not judged"
+    drift = []
+    if abs(out["roll_deg"]) > MAX_ROLL_DEG:
+        drift.append(f"roll {out['roll_deg']:+.3f} deg (limit {MAX_ROLL_DEG})")
+    if abs(out["pitch_deg"]) > MAX_PITCH_DEG:
+        drift.append(f"pitch {out['pitch_deg']:+.3f} deg (limit {MAX_PITCH_DEG})")
+    if out["depth_judged"] and abs(out["depth_pct"]) > MAX_DEPTH_PCT:
+        drift.append(f"depth error {out['depth_pct']:+.2f} % at {out['z_m']:.2f} m (limit {MAX_DEPTH_PCT} %)")
+    out["reasons"] = drift
+    out["verdict"] = "DRIFTED" if drift else "OK"
+    return out
