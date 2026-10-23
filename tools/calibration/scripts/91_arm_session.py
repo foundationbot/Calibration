@@ -36,8 +36,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from armchain import RIGHT_ARM  # noqa: E402
 
 CORRECT_DEG = 4.0
-ABORT_DEG = np.array([8.0, 5.0, 5.0, 8.0, 5.0, 5.0, 5.0])            # = step 90's sag band (shoulder pitch, elbow)
-CORRECTION_CAP_DEG = np.array([8.0, 4.0, 4.0, 8.0, 4.0, 4.0, 4.0])
+ABORT_DEG = np.array([8.0, 8.0, 5.0, 8.0, 5.0, 5.0, 5.0])    # = step 90's sag band (shoulder pitch and roll, elbow)
+CORRECTION_CAP_DEG = np.array([8.0, 8.0, 4.0, 8.0, 4.0, 4.0, 4.0])
 CMD_IN_DEG = 5.0                                                     # = step 90's CMD_IN_DEG
 TARGET_ECHO_DEG = 0.01
 START_TOL_DEG, NECK_TOL_DEG, BODY_TOL_DEG, GRAVITY_TOL_DEG = 3.0, 1.0, 3.0, 2.0

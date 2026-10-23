@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib
+import itertools
 import json
 import sys
 from pathlib import Path
@@ -29,6 +30,7 @@ import rigmath as rm  # noqa: E402
 
 KEEP_IN_DEG, CMD_IN_DEG = 10.0, 5.0        # T2-4: desired / commanded joints this far inside both models' ranges
 CLEAR_M, BAND_CLEAR_M, BAND_DEG = 0.03, 0.015, 8.0
+BAND_JOINTS = (0, 1, 3)                     # shoulder pitch, shoulder roll, elbow: gravity commands up to ~10 deg
 PATH_STEP_DEG, PATH_MM = 2.0, 10.0          # path samples: at most this many degrees and millimetres apart
 SIGMA_PX = 0.5
 N_POSES, N_FIT = 26, 20
@@ -102,15 +104,14 @@ class Checks:
         return ((Q >= self.lower + k) & (Q <= self.upper - k)).all(axis=1)
 
     def band(self, q, need=BAND_CLEAR_M, band_deg=BAND_DEG) -> float:
-        """least clearance with shoulder pitch and elbow moved +-band_deg (the corners and edge midpoints)"""
+        """least clearance with the BAND_JOINTS (shoulder pitch, shoulder roll, elbow: the joints whose gravity
+        command reaches ~10 deg) moved by 0 or +-band_deg each (every corner, edge and face of the box)"""
         Q = []
-        for ds in (-band_deg, 0.0, band_deg):
-            for de in (-band_deg, 0.0, band_deg):
-                if ds or de:
-                    x = np.array(q, float).copy()
-                    x[0] += np.radians(ds)
-                    x[3] += np.radians(de)
-                    Q.append(x)
+        for d in itertools.product((-band_deg, 0.0, band_deg), repeat=len(BAND_JOINTS)):
+            if any(d):
+                x = np.array(q, float).copy()
+                x[list(BAND_JOINTS)] += np.radians(d)
+                Q.append(x)
         return float(self.body.clearance(np.array(Q)).min())
 
     def pose(self, q) -> list:
@@ -161,6 +162,20 @@ class Checks:
         return why
 
 
+_W = {}
+
+
+def _init_worker(urdf, mjcf, surface_step, baseline, up, g):
+    import armsafety
+    body = armsafety.Body(mjcf, surface_step=surface_step)
+    body.set_baseline(baseline)
+    _W["chk"] = Checks(armchain.ArmChain(urdf), body, up, g)
+
+
+def _pose_ok(q) -> bool:
+    return not _W["chk"].pose(q)
+
+
 def in_sight(body, q, cfg, X, P) -> bool:
     """Both cameras see every plate corner past the robot's own meshes (MJCF frames: the Head body carries
     T_BS · T_SC, the gripper link carries X)."""
@@ -202,6 +217,11 @@ def run(a) -> dict:
     chk = Checks(arm, body, up, g)
     rng = np.random.default_rng(a.seed)
     k = np.radians(KEEP_IN_DEG)
+    pool = None
+    if a.workers > 1:                           # the slow per-pose checks (mesh surfaces, the sag band) in parallel
+        import multiprocessing as mp
+        pool = mp.get_context("fork").Pool(a.workers, initializer=_init_worker,
+                                            initargs=(a.urdf, a.mjcf, a.surface_step, baseline, up, g))
 
     # the feasible set: cheap rules first, the mesh surfaces and the sag band last
     feas, counts = [], {k_: 0 for k_ in ("sampled", "in_view", "workspace", "contact_geoms", "plate_sigma",
@@ -222,11 +242,15 @@ def run(a) -> dict:
         if len(Q):
             Q = Q[chk.limits(chk.command(Q), CMD_IN_DEG)]
         counts["commandable"] += len(Q)
-        Q = Q[[not chk.pose(q) for q in Q]] if len(Q) else Q
+        if len(Q):
+            ok = pool.map(_pose_ok, list(Q), chunksize=4) if pool else [not chk.pose(q) for q in Q]
+            Q = Q[np.array(ok, bool)]
         counts["surfaces_and_band"] += len(Q)
         Q = Q[[in_sight(body, q, cfg, X0, P) for q in Q]] if len(Q) else Q
         counts["in_sight"] += len(Q)
         feas.append(Q)
+    if pool:
+        pool.close()
     Q = np.concatenate(feas)
     if len(Q) < N_POSES:
         raise SystemExit(f"only {len(Q)} feasible poses of {counts['sampled']} sampled: {counts}")
@@ -335,6 +359,7 @@ def main(argv=None) -> int:
     p.add_argument("--hold-s", type=float, default=3.0)
     p.add_argument("--overhead-s", type=float, default=1.0, help="per move, on top of ramp and hold (22 Oct)")
     p.add_argument("--surface-step", type=float, default=0.008, help="mesh-surface sampling for the clearance, m")
+    p.add_argument("--workers", type=int, default=1, help="processes for the per-pose checks")
     p.add_argument("--out", required=True)
     a = p.parse_args(argv)
     r = run(a)

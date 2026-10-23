@@ -99,3 +99,16 @@ def test_a_failed_gate_writes_no_runnable_list(tmp_path, monkeypatch):
     assert not out.exists()
     rej = json.loads(out.with_suffix(".REJECTED.json").read_text())
     assert rej["stops"] == []
+
+
+def test_the_sag_band_covers_shoulder_roll_too():
+    """Shoulder roll gets gravity commands of up to 10 deg at kp 100 (the 05:40 list), so it lands +-several deg
+    off like pitch and elbow: a pose whose roll 8 deg further out is close to the body is flagged."""
+    class RollBody(FakeBody):
+        def clearance(self, Q):
+            Q = np.atleast_2d(Q)
+            return np.where(Q[:, 1] < np.radians(-40), 0.01, 0.10)
+    c = step90.Checks(armchain.ArmChain(URDF), RollBody(), up=(0, 0, 1), g_pelvis=(0, 0, -1))
+    q = START.copy()
+    q[1] = np.radians(-35.0)
+    assert any("sag band 1.0" in w for w in c.pose(q))
