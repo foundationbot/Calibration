@@ -333,12 +333,14 @@ def stops(Q, order, start, held_every: int = 4, n_same: int = 3, n_opp: int = 4,
           big=BIG, repeatable=None, pre: str = "tour") -> list:
     """T2-8: the session's stops. The tour (every held_every-th pose in travel order held out), then n_same +
     n_opp repeats of fit poses spread along the tour (alternating same / opposite side, extra opposite ones last),
-    each after a pre-pose. pre="tour" (default): the pose before it in the tour (same side: the same move again) or
+    each after a pre-pose. pre="inline": see _stops_inline (no move that is not the tour's own). pre="tour": the pose before it in the tour (same side: the same move again) or
     the one after it (opposite side: the same path reversed), so every pre-pose and the move from it are the tour's
     own, already checked; pre="offset": pre_deg away in the big joints, back along the original approach (same side)
     or beyond it (opposite side). Only fit poses in `repeatable` (None: all) are repeated. Last, the return to start.
     Each stop: kind, pose (index into Q), q (rad)."""
     Q, start = np.asarray(Q, float), np.asarray(start, float)
+    if pre == "inline":
+        return _stops_inline(Q, order, start, held_every, n_same, n_opp, repeatable)
     out, prev, came_from = [], start, {}
     for pos, k in enumerate(order):
         out.append({"kind": "heldout" if pos % held_every == held_every - 1 else "fit", "pose": int(k),
@@ -368,6 +370,42 @@ def stops(Q, order, start, held_every: int = 4, n_same: int = 3, n_opp: int = 4,
         out.append({"kind": "pre", "pose": int(k), "q": np.asarray(q_pre, float).tolist()})
         out.append({"kind": kind, "pose": int(k), "q": Q[k].tolist()})
     out.append({"kind": "return", "q": start.tolist()})
+    return out
+
+
+def _stops_inline(Q, order, start, held_every, n_same, n_opp, repeatable) -> list:
+    """pre='inline': each repeat right where the tour visits its pose, using only the tour's own moves: same side
+    prev -> k -> prev -> k (the same move again), opposite side k -> next -> k -> next (the same path reversed)."""
+    order = list(order)
+    kind_at = ["heldout" if pos % held_every == held_every - 1 else "fit" for pos in range(len(order))]
+    cand = [pos for pos in range(len(order) - 1) if kind_at[pos] == "fit"
+            and (repeatable is None or order[pos] in repeatable)]
+    n_rep = n_same + n_opp
+    if len(cand) < n_rep:
+        raise ValueError(f"{n_rep} repeats asked, {len(cand)} fit poses may be repeated")
+    picks = []
+    for x in np.linspace(0, len(cand) - 1, n_rep):          # spread, never two in neighbouring tour positions
+        c = [p_ for p_ in cand if all(abs(p_ - q_) > 1 for q_ in picks)]
+        if not c:
+            raise ValueError("no room for the repeats along the tour")
+        picks.append(min(c, key=lambda p_: abs(cand.index(p_) - x)))
+    picks.sort()
+    kinds = ["repeat_same" if (i % 2 == 0 and i // 2 < n_same) else "repeat_opp" for i in range(n_rep)]
+    while kinds.count("repeat_same") < n_same:
+        kinds[len(kinds) - 1 - kinds[::-1].index("repeat_opp")] = "repeat_same"
+    rep = dict(zip(picks, kinds))
+    q_at = lambda pos: start if pos < 0 or pos >= len(order) else Q[order[pos]]       # noqa: E731
+    out = []
+    for pos, k in enumerate(order):
+        out.append({"kind": kind_at[pos], "pose": int(k), "q": Q[k].tolist()})
+        if rep.get(pos) == "repeat_same":
+            out.append({"kind": "pre", "pose": int(k), "q": np.asarray(q_at(pos - 1), float).tolist()})
+            out.append({"kind": "repeat_same", "pose": int(k), "q": Q[k].tolist()})
+        if rep.get(pos - 1) == "repeat_opp":
+            j = order[pos - 1]
+            out.append({"kind": "repeat_opp", "pose": int(j), "q": Q[j].tolist()})
+            out.append({"kind": "pre", "pose": int(j), "q": Q[k].tolist()})
+    out.append({"kind": "return", "q": np.asarray(start, float).tolist()})
     return out
 
 

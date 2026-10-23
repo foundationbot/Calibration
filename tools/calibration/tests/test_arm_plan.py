@@ -356,3 +356,28 @@ def test_tour_pre_poses_replay_the_tours_own_moves():
             want = (Q[order[pos - 1]] if pos else start) if s["kind"] == "repeat_same" else \
                 (Q[order[pos + 1]] if pos + 1 < len(order) else start)
             assert pre["kind"] == "pre" and np.allclose(pre["q"], want)
+
+
+def test_inline_repeats_use_only_the_tours_own_moves():
+    """pre='inline': a same-side repeat is prev -> k -> prev -> k right where the tour visits k, an opposite one
+    k -> next -> k -> next; every move between stops is a tour move (either direction)."""
+    Q = np.radians(np.arange(26)[:, None] * np.array([2.0, 1, 1, -2, 0, 0, 0]) + np.array([-30, 0, 20, -60, -135, 20, 20]))
+    start = np.zeros(7)
+    order = list(range(26))
+    st = armplan.stops(Q, order, start, n_same=3, n_opp=4, pre="inline")
+    kinds = [s["kind"] for s in st]
+    assert kinds.count("repeat_same") == 3 and kinds.count("repeat_opp") == 4 and kinds[-1] == "return"
+    assert kinds.count("fit") == 20 and kinds.count("heldout") == 6
+    tour_moves = {frozenset((a, b)) for a, b in zip([-1] + order, order + [-1])}
+    pts = [start] + [np.array(s["q"]) for s in st]
+
+    def node(q):
+        hit = [i for i in range(26) if np.allclose(q, Q[i])]
+        return hit[0] if hit else -1
+    for a, b in zip(pts, pts[1:]):
+        assert frozenset((node(a), node(b))) in tour_moves
+    for i, s in enumerate(st):
+        if s["kind"] == "repeat_same":
+            assert st[i - 2]["pose"] == s["pose"] and st[i - 1]["kind"] == "pre"
+        if s["kind"] == "repeat_opp":
+            assert st[i - 2]["pose"] == s["pose"] and st[i + 1]["kind"] == "pre"

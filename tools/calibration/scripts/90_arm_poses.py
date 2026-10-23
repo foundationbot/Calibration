@@ -76,6 +76,11 @@ def plate_prior(corners: dict, names: list, arm, neck, cfg, grid) -> tuple:
     return rm.mean_pose(Xs[0] + Xs[1]), rep
 
 
+def cache_key(a) -> str:
+    return "|".join([sha(a.urdf), sha(a.mjcf), sha(a.config), sha(a.snapshot), sha(a.palm_corners), str(a.seed),
+                     str(a.samples), str(a.surface_step), Path(__file__).read_text().split("def run(")[0][-4000:]])
+
+
 def gravity_in_pelvis(snap: dict) -> np.ndarray:
     """Gravity's direction in the pelvis from the pelvis IMU's accelerometer (specific force = -gravity)."""
     a = snap["imu"]["Pelvis"]
@@ -233,8 +238,13 @@ def run(a) -> dict:
                                             initargs=(a.urdf, a.mjcf, a.surface_step, baseline, up, g))
 
     # the feasible set: cheap rules first, the mesh surfaces and the sag band last
+    cache = Path(a.feasible_cache) if a.feasible_cache else None
     feas, counts = [], {k_: 0 for k_ in ("sampled", "in_view", "workspace", "contact_geoms", "plate_sigma",
                                          "commandable", "surfaces_and_band", "in_sight")}
+    if cache and cache.exists():                # the same inputs and seed give the same set: reuse it
+        z = np.load(cache, allow_pickle=False)
+        if str(z["key"]) == cache_key(a):
+            feas, counts = [z["Q"]], json.loads(str(z["counts"]))
     while counts["sampled"] < a.samples:
         Q = rng.uniform(chk.lower + k, chk.upper - k, (min(a.chunk, a.samples - counts["sampled"]), 7))
         counts["sampled"] += len(Q)
@@ -259,6 +269,8 @@ def run(a) -> dict:
         counts["in_sight"] += len(Q)
         feas.append(Q)
     Q = np.concatenate(feas)
+    if cache and not cache.exists():
+        np.savez(cache, Q=Q, counts=json.dumps(counts), key=cache_key(a))
     if len(Q) < N_POSES:
         raise SystemExit(f"only {len(Q)} feasible poses of {counts['sampled']} sampled: {counts}")
     v = ap.view(cams, ap.plate_in_torso(arm, X0, Q), P, grid)
@@ -293,15 +305,19 @@ def run(a) -> dict:
     for it in range(4 * len(Qs)):
         order = ap.tour(Qs, start, allowed=lambda i, j: (i, j) not in forbid and not chk.path(
             start if i < 0 else Qs[i], start if j < 0 else Qs[j], band=False))
-        avail = len([k for pos, k in enumerate(order) if pos % 4 != 3 and k in repeatable])
-        if avail < N_SAME:
-            problems = [f"only {avail} poses can be repeated safely; the noise floor needs {N_SAME} same-side repeats"]
+        st = None
+        for n_opp in range(N_OPP, -1, -1):                   # opposite-side repeats (play) give way first
+            try:
+                st = ap.stops(Qs, order, start, n_same=N_SAME, n_opp=n_opp, repeatable=repeatable, pre="inline")
+                break
+            except ValueError:
+                continue
+        if st is None:
+            problems = [f"no room for {N_SAME} same-side repeats among the poses that can be repeated safely"]
             break
-        n_opp = min(N_OPP, avail - N_SAME)                   # opposite-side repeats (play) give way first
-        st = ap.stops(Qs, order, start, n_same=N_SAME, n_opp=n_opp, repeatable=repeatable, pre="tour")
         problems, drop = ap.verify(st, start, *lookups(st))
         print(f"verify {it}: {len(problems)} problems, {len(repeatable)} repeatable, {n_opp} opposite repeats",
-              file=sys.stderr, flush=True)
+              *("  " + w for w in problems), sep="\n", file=sys.stderr, flush=True)
         if not problems:
             break
         route = [-1] + order + [-1]
@@ -358,7 +374,7 @@ def run(a) -> dict:
         "selected_cells": {int(c): int((cell[sel] == c).sum()) for c in range(9)},
         "selected_thirds": {int(t): int((third[sel] == t).sum()) for t in range(3)},
         "orientation_pairwise_deg": {"min": float(min(ang)), "median": float(np.median(ang))},
-        "repeats": {"same": N_SAME, "opposite": n_opp, "pre": "the tour's neighbouring pose"},
+        "repeats": {"same": N_SAME, "opposite": n_opp, "pre": "inline: the tour's own moves"},
         "gate": gate, "motion_s": round(total, 1), "stops": st,
     }
 
@@ -396,6 +412,7 @@ def main(argv=None) -> int:
     p.add_argument("--overhead-s", type=float, default=1.0, help="per move, on top of ramp and hold (22 Oct)")
     p.add_argument("--surface-step", type=float, default=0.008, help="mesh-surface sampling for the clearance, m")
     p.add_argument("--workers", type=int, default=1, help="processes for the per-pose and path checks")
+    p.add_argument("--feasible-cache", default=None, help="npz to keep the feasible set in (reused if inputs match)")
     p.add_argument("--out", required=True)
     a = p.parse_args(argv)
     r = run(a)
