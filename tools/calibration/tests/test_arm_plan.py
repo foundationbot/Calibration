@@ -171,7 +171,7 @@ def test_stops_hold_out_every_fourth_and_add_the_repeats_with_their_pre_poses():
     Q = np.radians(np.arange(26)[:, None] * np.array([2.0, 1, 1, -2, 0, 0, 0]) + np.array([-30, 0, 20, -60, -135, 20, 20]))
     start = np.radians([-42.6, -4.8, 47.5, -92.3, -135.7, 21.2, 19.8])
     order = list(range(26))
-    st = armplan.stops(Q, order, start, n_same=3, n_opp=4, pre_deg=6.0)
+    st = armplan.stops(Q, order, start, n_same=3, n_opp=4, pre_deg=6.0, pre="offset")
     kinds = [s["kind"] for s in st]
     assert kinds.count("fit") == 20 and kinds.count("heldout") == 6
     assert kinds.count("repeat_same") == 3 and kinds.count("repeat_opp") == 4
@@ -340,3 +340,19 @@ def test_an_l_of_plate_tags_beats_a_row_of_board_tags():
     found = armplan.detect_plate(g3, img)
     assert sorted({t for t, _ in found}) == [0, 1, 3]
     assert all(u > 690 and v > 370 for (_, _), (u, v) in found.items())
+
+
+def test_tour_pre_poses_replay_the_tours_own_moves():
+    """A same-side repeat comes in from the pose before it in the tour (the same move again), an opposite-side one
+    from the pose after it (the same path reversed): every pre-pose is a tour pose, already checked."""
+    Q = np.radians(np.arange(26)[:, None] * np.array([2.0, 1, 1, -2, 0, 0, 0]) + np.array([-30, 0, 20, -60, -135, 20, 20]))
+    start = np.radians([-42.6, -4.8, 47.5, -92.3, -135.7, 21.2, 19.8])
+    order = list(range(26))
+    st = armplan.stops(Q, order, start, n_same=3, n_opp=4)
+    for i, s in enumerate(st):
+        if s["kind"].startswith("repeat"):
+            pre, k = st[i - 1], s["pose"]
+            pos = order.index(k)
+            want = (Q[order[pos - 1]] if pos else start) if s["kind"] == "repeat_same" else \
+                (Q[order[pos + 1]] if pos + 1 < len(order) else start)
+            assert pre["kind"] == "pre" and np.allclose(pre["q"], want)

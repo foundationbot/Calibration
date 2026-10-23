@@ -330,11 +330,13 @@ def tour(Q, start, two_opt: bool = True, allowed=None) -> list:
 
 
 def stops(Q, order, start, held_every: int = 4, n_same: int = 3, n_opp: int = 4, pre_deg: float = 6.0,
-          big=BIG, repeatable=None) -> list:
+          big=BIG, repeatable=None, pre: str = "tour") -> list:
     """T2-8: the session's stops. The tour (every held_every-th pose in travel order held out), then n_same +
     n_opp repeats of fit poses spread along the tour (alternating same / opposite side, extra opposite ones last),
-    each after a pre-pose pre_deg away in the big joints: back along the pose's original approach (same side) or
-    beyond it (opposite side). Only fit poses in `repeatable` (None: all) are repeated. Last, the return to start.
+    each after a pre-pose. pre="tour" (default): the pose before it in the tour (same side: the same move again) or
+    the one after it (opposite side: the same path reversed), so every pre-pose and the move from it are the tour's
+    own, already checked; pre="offset": pre_deg away in the big joints, back along the original approach (same side)
+    or beyond it (opposite side). Only fit poses in `repeatable` (None: all) are repeated. Last, the return to start.
     Each stop: kind, pose (index into Q), q (rad)."""
     Q, start = np.asarray(Q, float), np.asarray(start, float)
     out, prev, came_from = [], start, {}
@@ -352,12 +354,18 @@ def stops(Q, order, start, held_every: int = 4, n_same: int = 3, n_opp: int = 4,
     while kinds.count("repeat_same") < n_same:          # more same than opposite asked: fill from the end
         kinds[len(kinds) - 1 - kinds[::-1].index("repeat_opp")] = "repeat_same"
     big = list(big)
+    order = list(order)
     for k, kind in zip(picks, kinds):
-        side = np.sign(Q[k][big] - came_from[k][big])
-        side[side == 0] = 1.0
-        pre = Q[k].copy()
-        pre[big] += (-1.0 if kind == "repeat_same" else 1.0) * np.radians(pre_deg) * side
-        out.append({"kind": "pre", "pose": int(k), "q": pre.tolist()})
+        if pre == "tour":
+            pos = order.index(k)
+            nxt = Q[order[pos + 1]] if pos + 1 < len(order) else start
+            q_pre = came_from[k] if kind == "repeat_same" else nxt
+        else:
+            side = np.sign(Q[k][big] - came_from[k][big])
+            side[side == 0] = 1.0
+            q_pre = Q[k].copy()
+            q_pre[big] += (-1.0 if kind == "repeat_same" else 1.0) * np.radians(pre_deg) * side
+        out.append({"kind": "pre", "pose": int(k), "q": np.asarray(q_pre, float).tolist()})
         out.append({"kind": kind, "pose": int(k), "q": Q[k].tolist()})
     out.append({"kind": "return", "q": start.tolist()})
     return out

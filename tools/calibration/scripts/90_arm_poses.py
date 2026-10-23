@@ -34,6 +34,7 @@ BAND_JOINTS = (0, 1, 3)                     # shoulder pitch, shoulder roll, elb
 PATH_STEP_DEG, PATH_MM = 2.0, 10.0          # path samples: at most this many degrees and millimetres apart
 SIGMA_PX = 0.5
 N_POSES, N_FIT = 26, 20
+N_SAME, N_OPP = 3, 4                        # T2-8: same-side repeats (the noise floor) and opposite-side (play)
 KP = 100.0
 TIP_BODY = "RightGripperYawLink"                    # the arm chain's tip in both files (armchain: arm.tip)
 SEE_THROUGH = ("Head", "NeckYawLink", "RightHand", "RightGripperYawLink")  # the cameras' own head; the plate's hand
@@ -176,6 +177,14 @@ def _pose_ok(q) -> bool:
     return not _W["chk"].pose(q)
 
 
+def _pose_why(q) -> list:
+    return _W["chk"].pose(q)
+
+
+def _path_why(leg) -> list:
+    return _W["chk"].path(*leg)
+
+
 def in_sight(body, q, cfg, X, P) -> bool:
     """Both cameras see every plate corner past the robot's own meshes (MJCF frames: the Head body carries
     T_BS · T_SC, the gripper link carries X)."""
@@ -218,7 +227,7 @@ def run(a) -> dict:
     rng = np.random.default_rng(a.seed)
     k = np.radians(KEEP_IN_DEG)
     pool = None
-    if a.workers > 1:                           # the slow per-pose checks (mesh surfaces, the sag band) in parallel
+    if a.workers > 1:                           # the slow checks (mesh surfaces, the sag band) in parallel
         import multiprocessing as mp
         pool = mp.get_context("fork").Pool(a.workers, initializer=_init_worker,
                                             initargs=(a.urdf, a.mjcf, a.surface_step, baseline, up, g))
@@ -249,8 +258,6 @@ def run(a) -> dict:
         Q = Q[[in_sight(body, q, cfg, X0, P) for q in Q]] if len(Q) else Q
         counts["in_sight"] += len(Q)
         feas.append(Q)
-    if pool:
-        pool.close()
     Q = np.concatenate(feas)
     if len(Q) < N_POSES:
         raise SystemExit(f"only {len(Q)} feasible poses of {counts['sampled']} sampled: {counts}")
@@ -267,19 +274,47 @@ def run(a) -> dict:
 
     # order on the cheap path check, then verify every stop and path in full; a failing tour edge is forbidden
     # and the tour redone, a failing repeat is drawn from another pose
-    forbid, repeatable = set(), set(range(len(Qs)))
-    for _ in range(4 * len(Qs)):
+    def lookups(st):
+        """every stop's pose problems and every move's path problems, in parallel when a pool is up"""
+        qs = [np.asarray(x["q"], float) for x in st]
+        legs = list(zip([start] + qs[:-1], qs))
+        if pool:
+            pp = pool.map(_pose_why, qs, chunksize=1)
+            lp = pool.map(_path_why, legs, chunksize=1)
+        else:
+            pp, lp = [chk.pose(q) for q in qs], [chk.path(x, y) for x, y in legs]
+        key = lambda *v: tuple(np.round(np.concatenate(v), 9))                     # noqa: E731
+        pd = {key(q): w for q, w in zip(qs, pp)}
+        ld = {key(x, y): w for (x, y), w in zip(legs, lp)}
+        return (lambda q: pd[key(np.asarray(q, float))]), (lambda x, y: ld[key(np.asarray(x, float),
+                                                                                 np.asarray(y, float))])
+
+    forbid, repeatable, problems, n_opp = set(), set(range(len(Qs))), [], N_OPP
+    for it in range(4 * len(Qs)):
         order = ap.tour(Qs, start, allowed=lambda i, j: (i, j) not in forbid and not chk.path(
             start if i < 0 else Qs[i], start if j < 0 else Qs[j], band=False))
-        st = ap.stops(Qs, order, start, repeatable=repeatable)
-        problems, drop = ap.verify(st, start, chk.pose, chk.path)
+        avail = len([k for pos, k in enumerate(order) if pos % 4 != 3 and k in repeatable])
+        if avail < N_SAME:
+            problems = [f"only {avail} poses can be repeated safely; the noise floor needs {N_SAME} same-side repeats"]
+            break
+        n_opp = min(N_OPP, avail - N_SAME)                   # opposite-side repeats (play) give way first
+        st = ap.stops(Qs, order, start, n_same=N_SAME, n_opp=n_opp, repeatable=repeatable, pre="tour")
+        problems, drop = ap.verify(st, start, *lookups(st))
+        print(f"verify {it}: {len(problems)} problems, {len(repeatable)} repeatable, {n_opp} opposite repeats",
+              file=sys.stderr, flush=True)
         if not problems:
             break
         route = [-1] + order + [-1]
+        new = set()
         for i, j in zip(route, route[1:]):
-            if chk.path(start if i < 0 else Qs[i], start if j < 0 else Qs[j]):
-                forbid |= {(i, j), (j, i)}
+            if (i, j) not in forbid and chk.path(start if i < 0 else Qs[i], start if j < 0 else Qs[j]):
+                new |= {(i, j), (j, i)}
+        if not drop and not new:
+            break                                             # nothing left to change: the gate reports it
+        forbid |= new
         repeatable -= drop
+    if pool:
+        pool.close()
     fit_idx = [s["pose"] for s in st if s["kind"] == "fit"]
     sig = ap.plate_sigma_mm(cams, ap.plate_in_torso(arm, X0, Qs), P, SIGMA_PX)
     gate = ap.list_gate(info[np.array(sel)[fit_idx]].sum(0), sig)
@@ -323,6 +358,7 @@ def run(a) -> dict:
         "selected_cells": {int(c): int((cell[sel] == c).sum()) for c in range(9)},
         "selected_thirds": {int(t): int((third[sel] == t).sum()) for t in range(3)},
         "orientation_pairwise_deg": {"min": float(min(ang)), "median": float(np.median(ang))},
+        "repeats": {"same": N_SAME, "opposite": n_opp, "pre": "the tour's neighbouring pose"},
         "gate": gate, "motion_s": round(total, 1), "stops": st,
     }
 
@@ -359,7 +395,7 @@ def main(argv=None) -> int:
     p.add_argument("--hold-s", type=float, default=3.0)
     p.add_argument("--overhead-s", type=float, default=1.0, help="per move, on top of ramp and hold (22 Oct)")
     p.add_argument("--surface-step", type=float, default=0.008, help="mesh-surface sampling for the clearance, m")
-    p.add_argument("--workers", type=int, default=1, help="processes for the per-pose checks")
+    p.add_argument("--workers", type=int, default=1, help="processes for the per-pose and path checks")
     p.add_argument("--out", required=True)
     a = p.parse_args(argv)
     r = run(a)
