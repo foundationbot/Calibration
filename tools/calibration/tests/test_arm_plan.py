@@ -222,3 +222,46 @@ def test_workspace_keeps_the_arm_low_and_forward():
     back = np.radians([30.0, -4.8, 0.0, -90.0, 0.0, 0.0, 0.0])          # shoulder pitched back
     rolled = np.radians([-30.0, -100.0, 0.0, -90.0, 0.0, 0.0, 0.0])     # shoulder rolled out past 60 deg
     assert armplan.workspace_ok(arm, np.stack([low, up, back, rolled])).tolist() == [True, False, False, False]
+
+
+def _paste_grid(img, cols, rows, side, gap, x0, y0, ids):
+    """Kalibr-layout tags (tag 0 bottom-left, each marker rotated 180 deg as Kalibr prints them) at (x0, y0) = the
+    grid's top-left pixel. -> {id: (x, y) of its top-left pixel}."""
+    cv2 = pytest.importorskip("cv2")
+    d = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36h11)
+    at = {}
+    for i in ids:
+        r, c = divmod(i, cols)
+        x, y = x0 + c * (side + gap), y0 + (rows - 1 - r) * (side + gap)
+        img[y:y + side, x:x + side] = cv2.rotate(cv2.aruco.generateImageMarker(d, i, side, borderBits=2),
+                                                 cv2.ROTATE_180)
+        at[i] = (x, y)
+    return at
+
+
+def _scene(plate=True):
+    img = np.full((800, 1280), 255, np.uint8)
+    board = _paste_grid(img, 7, 2, 40, 12, 300, 20, range(14))               # the 7x5 board's bottom rows
+    pl = _paste_grid(img, 2, 2, 90, 18, 250, 400, range(4)) if plate else {}  # the palm plate, nearer, larger
+    return img, board, pl
+
+
+def test_the_plain_detector_mixes_the_boards_tags_into_the_plate():
+    img, board, _ = _scene()
+    found = GRID.detect(img)
+    assert any(v < 200 for (_, _), (u, v) in found.items())          # a corner taken from the board strip
+
+
+def test_detect_plate_keeps_only_the_plates_tags():
+    img, board, pl = _scene()
+    found = armplan.detect_plate(GRID, img)
+    assert len(found) == 16
+    assert all(v > 380 for (_, _), (u, v) in found.items())
+    for t, (x, y) in pl.items():
+        us = [found[(t, k)][0] for k in range(4)]
+        assert min(us) > x - 3 and max(us) < x + 93
+
+
+def test_detect_plate_finds_nothing_when_only_the_board_is_in_view():
+    img, _, _ = _scene(plate=False)
+    assert armplan.detect_plate(GRID, img) == {}

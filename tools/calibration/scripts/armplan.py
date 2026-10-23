@@ -345,3 +345,54 @@ def list_gate(info, plate_sigma_mm, offsets=INNER) -> dict:
     ps = np.asarray(plate_sigma_mm, float)
     fails += [f"plate sigma, pose {i}" for i in np.flatnonzero(ps > LIM_PLATE_MM)]
     return {"pass": not fails, "fails": fails, "sigma": sigma, "plate_sigma_mm_max": float(ps.max())}
+
+
+PLATE_MIN_TAGS = 3              # two tags of another grid with the same ids can sit side by side like the plate's
+PLATE_FIT_FRAC = 0.08           # layout check: homography rms under this fraction of the tag's side in pixels
+
+
+def detect_plate(grid, gray) -> dict:
+    """The plate's corners {(tag, k): (u, v)} when another grid with the same tag ids is in view too (phantom12: the
+    7x5 board's tags 0-8). AprilGrid.detect keeps one detection per id, so it can mix the two. Here every ArUco quad
+    with a plate id is a candidate; the set of at least PLATE_MIN_TAGS tags, one per id, whose raw corners fit the
+    plate's own layout by one homography (rms < PLATE_FIT_FRAC of a tag side) wins, most tags first; every other quad
+    is painted out and the plate's corners are refined by AprilGrid.detect on that image. {} when no set fits."""
+    import itertools
+
+    import cv2
+    p = cv2.aruco.DetectorParameters()
+    p.markerBorderBits = grid.border_bits
+    det = cv2.aruco.ArucoDetector(cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36h11), p)
+    corners, ids, _ = det.detectMarkers(gray)
+    if ids is None:
+        return {}
+    quads = [(int(i), c.reshape(4, 2).astype(float)) for c, i in zip(corners, ids.ravel())]
+    cand = {t: [q for i, q in quads if i == t] for t in range(grid.n_tags)}
+    best = None
+    for pick in itertools.product(*[[None] + cand[t] for t in range(grid.n_tags)]):
+        tags = [t for t in range(grid.n_tags) if pick[t] is not None]
+        if len(tags) < PLATE_MIN_TAGS:
+            continue
+        obj = np.concatenate([grid.obj_points(t)[:, :2] for t in tags])
+        img = np.concatenate([pick[t] for t in tags])
+        H, _ = cv2.findHomography(obj, img, 0)
+        if H is None:
+            continue
+        pr = cv2.perspectiveTransform(obj.reshape(-1, 1, 2), H).reshape(-1, 2)
+        side = np.mean([np.linalg.norm(np.roll(pick[t], -1, 0) - pick[t], axis=1).mean() for t in tags])
+        rms = float(np.sqrt(np.mean(np.sum((pr - img) ** 2, axis=1))))
+        if rms < PLATE_FIT_FRAC * side and (best is None or (len(tags), -rms) > (len(best[0]), -best[1])):
+            best = (tags, rms, pick)
+    if best is None:
+        return {}
+    tags, _, pick = best
+    keep = [pick[t] for t in tags]
+    out = gray.copy()
+    fill = int(np.median(gray))
+    for _, q in quads:
+        if not any(q is k for k in keep):
+            c = q.mean(0)
+            cv2.fillConvexPoly(out, np.round(c + 1.3 * (q - c)).astype(np.int32), fill)
+    found = grid.detect(out)
+    return {(t, k): uv for (t, k), uv in found.items() if t in tags
+            and np.linalg.norm(np.asarray(uv) - pick[t][k]) < 0.25 * np.linalg.norm(pick[t][1] - pick[t][0])}

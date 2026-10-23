@@ -16,6 +16,7 @@ import sys
 import cv2
 import numpy as np
 
+import armplan
 import mcap_reader
 import rigcfg
 
@@ -39,7 +40,7 @@ def main(argv):
                 return
             cam = TOPICS.index(ch.topic)
             g = cv2.imdecode(np.frombuffer(bytes(data), np.uint8), cv2.IMREAD_GRAYSCALE)
-            det = grid.detect(g) if g is not None else {}
+            det = armplan.detect_plate(grid, g) if g is not None else {}     # the 7x5 board shares ids 0-8
             rows_i.append((cam, pub_t, len(det)))
             for (tid, k), (u, v) in det.items():
                 rows_c.append((cam, pub_t, tid, k, u, v))
