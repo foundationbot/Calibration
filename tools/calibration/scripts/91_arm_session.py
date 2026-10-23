@@ -291,7 +291,7 @@ spec:
       args: ["record", "/output/{take}", "--cameras", "1,2", "--duration", "{duration}", "--imu-index", "2"]
       env: [ {{ name: OKVIS_DMA_IMU_SHM, value: /raw_imu_actuals }}, {{ name: OKVIS_SKIP_JETSON_CLOCKS, value: "1" }} ]
       volumeMounts: [ {{ name: shm, mountPath: /dev/shm }}, {{ name: output, mountPath: /output }} ]
-      resources: {{ requests: {{ cpu: "500m", memory: "2Gi" }}, limits: {{ cpu: "4", memory: "4Gi" }} }}
+      resources: {{ requests: {{ cpu: "100m", memory: "2Gi" }}, limits: {{ cpu: "4", memory: "4Gi" }} }}
       securityContext: {{ capabilities: {{ add: ["IPC_LOCK"] }} }}
   volumes:
     - {{ name: shm, hostPath: {{ path: /dev/shm, type: Directory }} }}
