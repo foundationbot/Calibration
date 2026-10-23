@@ -133,10 +133,19 @@ values of the rig file (defaults shown); the distance bins are fixed (`scripts/l
    while the map counts the left camera's live view around the nominal one, so the live count needs a margin. Stop
    the sweep when the map says it is complete; the corner and bottom cells, never validated on phantom12, are worth
    a minute more. The person holding the board needs the live view on a phone (§4 item 8); the map is read to them.
-7. **The quality gate: dropped from the fit, flagged in the test.** A hold whose corners fit a rigid board worse than
-   0.6 px rms (`lens_hold_rms_max_px`; phantom12: near boards 0.30-0.42 px, the bad far boards 0.67-1.13 px) is a bad
-   board in the fit sweep: step 45, the only step that drops holds, drops it, lists it and refits; more than 20 % of
-   the holds dropped (`lens_bad_hold_max_frac`) rejects the recording (exit 2: record again). Step 66 drops no test
+7. **The quality gate: dropped from the fit, flagged in the test.** Two kinds of bad hold in the fit sweep (22 Oct,
+   `docs/superpowers/plans/2026-10-22-lens-hold-gate.md`):
+   - a **far board**: its centre deeper than 1.3 m (`lens_hold_max_z_m`). Far boards fit a rigid board 2-4x worse
+     than near ones in the same image area and read depth tens of % off (cause unknown), but their rms overlaps good
+     holds' near the image edge, so distance is the test;
+   - a **gross misfit**: corners that fit a rigid board worse than 1.8 px rms (`lens_hold_rms_max_px`; phantom12, Fit C
+     on 98 held-out neck poses: median 0.42, 95th 1.05, max 1.78 px). The 20 Oct value, 0.6 px, dropped 15 % of those
+     good poses (edge boards) and rejected two good fits.
+
+   Step 45, the only step that drops holds, drops both kinds, lists them and refits; more than 20 % of the holds
+   dropped, both kinds together (`lens_bad_hold_max_frac`), rejects the recording (exit 2: record again). The 20 Oct
+   far take is rejected so (84 % of its holds). A board that is near and fits under 1.8 px is kept even if it is bad:
+   no rms limit separates such holds from good edge holds. Step 66 drops no test
    hold: measured with the calibration being judged, a bad hold can be the calibration's fault, and dropping it would
    turn that cell's FAIL into "not validated" (21 Oct, the KB4 refit's bottom-right corner). It lists such holds per
    cell as flagged and judges them with the rest. Its NO RESULT has four causes, none of them a rejected test
@@ -152,7 +161,7 @@ values of the rig file (defaults shown); the distance bins are fixed (`scripts/l
 | step 60 held-out row error | median < 0.5 px | blind to scale and to a disparity offset |
 | step 65 scale | \|error\| < 0.5 % | one number over the held-out distances only |
 | **scale against distance** | flat within ±1 % from 0.4 to 2 m | none: this is the check that decides |
-| **step 66: depth by image cell × distance** (KB4T, §4b) | every entry with ≥ 8 holds within ±0.5 % (corner cells ±1.0 %) | entries with fewer holds are not judged: read the report's "not validated" cells; holds over the 0.6 px gate are flagged and judged, not dropped |
+| **step 66: depth by image cell × distance** (KB4T, §4b) | every entry with ≥ 8 holds within ±0.5 % (corner cells ±1.0 %) | entries with fewer holds are not judged: read the report's "not validated" cells; holds over the 1.8 px gate are flagged and judged, not dropped |
 
 Run the distance check on a **common set of unused pairs** (pairs not in any candidate's fit),
 so candidates are compared on identical data: `depth_scale2.py <camchain> 4 <out.csv>
@@ -486,8 +495,8 @@ and pairs cam 0 <- DMA 1, cam 1 <- DMA 2; SLAM latency p50 149–163 ms (old con
 5. **Fit sweep, then test sweep**, each with its own run of the coverage map (step 06) until the map calls every cell
    done (by default 12 holds in one distance bin: `gates.lens_min_holds` + 4, §4b item 6).
 6. **Corners:** step 15 on each recording (`--still-px 3`).
-7. **Fit:** step 45 on the fit sweep. Exit 2: unconverged, or more than 20 % of the holds over the 0.6 px quality gate
-   (record again); exit 3: the rig file's left/right is wrong.
+7. **Fit:** step 45 on the fit sweep. Exit 2: unconverged, or more than 20 % of the holds dropped by the quality gate
+   (over 1.8 px or beyond 1.3 m, §4b item 7: record again); exit 3: the rig file's left/right is wrong.
 8. **Uncertainty:** step 46. "Unconstrained" cells: record more there, or mask them in the depth image.
 9. **Validate:** step 66 on the test sweep. Only a PASS goes on. NO RESULT (exit 2) has four causes, named in the
    report's verdict: step 45's fit did not converge (back to item 7); a scoring solve did not converge, or the scorer

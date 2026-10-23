@@ -51,7 +51,7 @@ Camera–IMU acceptance: Kalibr's normalized gyro/accel residuals average ~1 (el
 The stereo lens calibration that replaced Kalibr's 4-term lens on phantom12 (Fit A, 20 Oct): KB4T = equidistant
 k1..k4 plus tangential p1, p2 for both cameras, and the stereo pose. Why each item matters: `calibration.md` §4b; a
 new robot: §11. The heavy steps (15, 45, 46, 66) run on Thor in capped `calib-py:3` containers (§3). Every step takes
-`--rig <rig file>` (or `CALIB_RIG`); the hold counts and the 0.6 px and 20 % limits below are `gates.lens_*` values of
+`--rig <rig file>` (or `CALIB_RIG`); the hold counts and the 1.8 px, 1.3 m and 20 % limits below are `gates.lens_*` values of
 the rig file (defaults shown).
 1. Rig file: `cameras.nominal_baseline_m` and `gates.lens_*` set; the board measured (`target_measured: true`).
 2. Fixed short exposure on both cameras for the session; the live view on a phone for whoever holds the board.
@@ -65,12 +65,12 @@ the rig file (defaults shown).
    folder's `scripts/` + the repo's `interface/`).
 6. `45_fit_lens.py fit-corners.npz fit.json` (exit 0; 2 = unconverged, or the recording rejected; 3 = the rig file's
    left/right is wrong), then `46_lens_uncertainty.py fit-corners.npz fit.json unc.json`. Step 45 is the only step
-   that drops holds: fit-sweep holds whose corners fit a rigid board worse than 0.6 px rms are dropped, listed and the
-   fit repeated; more than 20 % dropped rejects the recording (record again).
+   that drops holds: fit-sweep holds whose board sits beyond 1.3 m or whose corners fit a rigid board worse than
+   1.8 px rms are dropped, listed and the fit repeated; more than 20 % dropped rejects the recording (record again).
 7. `66_validate_lens.py fit.json test-corners.npz report/ --fit-report fit.json --uncertainty unc.json`: PASS (exit 0)
    is required; 1 = FAIL; 2 = NO RESULT, which has four causes: step 45's fit did not converge (its verdict in
    fit.json), a scoring solve did not converge (restarted once), the scorer self-check failed, or no cell x distance
-   entry has 8 holds. It drops no test hold: holds over 0.6 px are flagged per cell and still judged. Read the
+   entry has 8 holds. It drops no test hold: holds over 1.8 px are flagged per cell and still judged. Read the
    report's "not validated", "unconstrained" and flagged cells.
 8. `71_export_lens.py fit.json report/report.json export/`: the KB4T JSON and `export/camchain-kb4t-equi4.yaml`
    (Kalibr, k1..k4 only), then Kalibr camera-IMU (step 40 imucam) with that camchain fixed, step 70, step 80. Dropping
@@ -434,12 +434,12 @@ own, which hands over to 40 imucam, 70 and 80: "KB4T lens calibration" at the to
 | 30 | `30_label_canonical.py` | workstation | **gate.** gyro-vs-board flip labelling; writes the `_canon` tree |
 | 31 | `31_label_canonical_charuco.py` | workstation | the ChArUco-anchored alternative. **Kept 0/2250 on real data** — close range only |
 | 40 | `40_calibrate.sh` | docker | `kalibr_bagcreater` + both fits, with sanity checks printed |
-| 45 | `45_fit_lens.py` | robot (calib-py:3) | **KB4T stereo lens fit** from the rig file's nominal camera: converged or exit 2; the only step that drops holds: fit-sweep holds above 0.6 px rigid-board rms dropped and listed, more than 20 % rejects the recording (exit 2); camera sides against the rig file (exit 3) |
+| 45 | `45_fit_lens.py` | robot (calib-py:3) | **KB4T stereo lens fit** from the rig file's nominal camera: converged or exit 2; the only step that drops holds: fit-sweep holds above 1.8 px rigid-board rms or beyond 1.3 m dropped and listed, more than 20 % rejects the recording (exit 2); camera sides against the rig file (exit 3) |
 | 46 | `46_lens_uncertainty.py` | robot (calib-py:3) | split-half refits: per-number sigma (a one-sample estimate) and the repeatability map at 1 m; cells beyond 0.5 % flagged "unconstrained" |
 | 60 | `60_validate_stereo.py` | workstation | **the acceptance test.** held-out epipolar `|dy|` over all 88 corners (aprilgrid: corners paired by tag id) |
 | 65 | `65_scale_check.py` | workstation | **gate (aprilgrid).** stereo-triangulated tag pitch vs the steel-rule pitch: catches a wrong baseline / board size |
 | 61 | `61_validate_stereo_charuco.py` | workstation | ID-anchored variant; fewer pairs, no flip handling needed |
-| 66 | `66_validate_lens.py` | robot (calib-py:3) | **the KB4T acceptance test.** depth error per image cell x distance on the test sweep; scorer self-check first; fixed rule (+-0.5 %, corners +-1.0 %, entries with 8 holds); drops no hold: test holds above 0.6 px are flagged per cell and still judged; `report.md` + `report.json`; PASS / FAIL / NO RESULT = exit 0 / 1 / 2 (NO RESULT, four causes: an unconverged fit (its step-45 verdict), an unconverged scoring solve, a failed self-check, or no entry with 8 holds) |
+| 66 | `66_validate_lens.py` | robot (calib-py:3) | **the KB4T acceptance test.** depth error per image cell x distance on the test sweep; scorer self-check first; fixed rule (+-0.5 %, corners +-1.0 %, entries with 8 holds); drops no hold: test holds above 1.8 px are flagged per cell and still judged; `report.md` + `report.json`; PASS / FAIL / NO RESULT = exit 0 / 1 / 2 (NO RESULT, four causes: an unconverged fit (its step-45 verdict), an unconverged scoring solve, a failed self-check, or no entry with 8 holds) |
 | 70 | `70_make_mk13_yaml.py` | workstation | camchain → `mk13_stereo.yaml`, preserving `T_BS` |
 | 71 | `71_export_lens.py` | either | a PASSed KB4T (step 66's report of the same numbers) -> its JSON and a Kalibr camchain (k1..k4, for the camera-IMU fit, where dropping p1, p2 costs pixels); an OKVIS config only with `--okvis-template` and `--allow-4term-okvis`, labelled NOT FOR STEREO DEPTH (Fit A at 1 m: up to 9.3 % within 450 px); both costs printed and written |
 | 75 | `75_qc_necktake.py` | robot (calib-py:2) | quick check of a neck take: holds over their own range and approach sides, encoder signs seen by the camera, sweeps, streams, head IMU, camera coverage (a stopped camera RETAKE, recorder gaps WARN), the board's spread in the torso frame, torso per hold; GOOD / RETAKE / STOP (exit 0/1/2) with an action per finding; `--qc-out` with the holds step 81 drops |

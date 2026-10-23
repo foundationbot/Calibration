@@ -18,9 +18,11 @@ def test_nominal_baselines_of_both_rigs():
     assert rigcfg.load(PKG / "config" / "rig.yaml").nominal_baseline_m == pytest.approx(0.079)
 
 
-def test_lens_gates_are_the_20_oct_values_in_both_rigs():
-    want = {"lens_hold_rms_max_px": 0.6, "lens_bad_hold_max_frac": 0.20, "lens_repeat_max_pct": 0.5,
-            "lens_pass_pct": 0.5, "lens_pass_corner_pct": 1.0, "lens_min_holds": 8}
+def test_lens_gates_are_the_22_oct_values_in_both_rigs():
+    """hold-gate plan (22 Oct) rule Z: far boards by distance (1.3 m), gross misfits by rms (1.80 px); the rest are the
+    20 Oct values"""
+    want = {"lens_hold_rms_max_px": 1.8, "lens_hold_max_z_m": 1.3, "lens_bad_hold_max_frac": 0.20,
+            "lens_repeat_max_pct": 0.5, "lens_pass_pct": 0.5, "lens_pass_corner_pct": 1.0, "lens_min_holds": 8}
     for name in ("rig-phantom12.yaml", "rig.yaml"):
         assert rigcfg.load(PKG / "config" / name).lens_gates() == want
 
