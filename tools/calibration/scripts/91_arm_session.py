@@ -46,7 +46,7 @@ DESIRED_QUIET_S = 60.0
 MOTORS_ON_NM = 1.0              # a raised arm held at kp 100 needs ~10 Nm at the shoulder and elbow
 LEG_MAX_NM = 10.0               # the robot hangs: its legs carry nothing (22 Oct: <= 5.4 Nm)
 REC_GB_PER_MIN = 3.4            # two-camera PNG, measured 22 Oct (775 MB / 15 s)
-PER_STOP_EXTRA_S = 10.0         # a burst (grab.py start + ssh) and maybe a correction, on top of step 90's motion_s
+PER_STOP_EXTRA_S = 30.0         # the per-move path check (~17 s on the laptop, dry run 23 Oct), a burst, maybe a correction
 JIDX = {n: 7 + i for i, n in enumerate(RIGHT_ARM)}       # /config indices (checked against the snapshot's order)
 MEASURED = ("fit", "heldout", "repeat_same", "repeat_opp")
 PELVIS_IMU_R = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])   # MJCF site pelvis_imu: +90 deg z
