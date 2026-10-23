@@ -140,13 +140,17 @@ def markdown(rep):
         return "\n".join(L) + "\n"
     L += ["## Holds over the quality gate", "", "How to read it:",
           f"- a hold whose corners fit a rigid board worse than {rep['gates']['lens_hold_rms_max_px']} px rms "
-          "(phantom12: near boards 0.30-0.42 px, the bad far boards 0.67-1.13 px)",
+          "(a gross misfit; phantom12, 22 Oct: good held-out neck poses median 0.42, 95th 1.05 px)",
+          f"- fit sweep only: a board deeper than {rep['gates'].get('lens_hold_max_z_m', '-')} m is dropped by "
+          "step 45 too, whatever its rms (far boards)",
           "- fit sweep: dropped by step 45 before its final fit (the calibration is fitted to every hold, so a bad "
           "hold is the board's)",
           "- test sweep: flagged, not dropped, and judged with its cell: measured with the calibration being judged, "
           "a bad hold means the board or the calibration is bad there", "",
           "| sweep | hold | cell | pixel rms (px) | what happened |", "|---|---|---|---|---|"]
-    rows = ([("fit", h, "-", v, "dropped by step 45") for h, v in rep.get("fit_dropped", [])]
+    rows = ([("fit", h, "-", v, "dropped by step 45: rms") for h, v in rep.get("fit_dropped", [])]
+            + [("fit", h, "-", rep.get("fit_hold_rms", {}).get(str(h)), f"dropped by step 45: board at {z:.2f} m")
+               for h, z in rep.get("fit_dropped_far", [])]
             + [("test", f["hold"], ", ".join(f["cells"]), f["rms_px"], "flagged: board or calibration bad here")
                for f in rep["test_flagged"]])
     L += [f"| {s} | {h} | {c} | {_rms(v)} | {w} |" for s, h, c, v, w in rows] or ["| - | none | - | - | - |"]
@@ -174,7 +178,10 @@ def main(argv=None):
            "test": {"corners": str(a.corners), "sha256": sf.file_sha256(a.corners), "pairs": int(data.n),
                     "holds": int(len(np.unique(data.hold)))}}
     if a.fit_report:
-        rep["fit_dropped"] = json.loads(a.fit_report.read_text()).get("dropped_holds", [])
+        fit = json.loads(a.fit_report.read_text())
+        rep["fit_dropped"] = fit.get("dropped_holds", [])
+        rep["fit_dropped_far"] = fit.get("dropped_far_holds", [])          # step 45 since 22 Oct; older: none
+        rep["fit_hold_rms"] = {str(h): v for h, v in fit.get("hold_rms_px", [])}
     if a.uncertainty:
         rep["uncertainty"] = json.loads(a.uncertainty.read_text())
         rep["uncertainty"].pop("repeat_map", None)                       # the points stay in step 46's file

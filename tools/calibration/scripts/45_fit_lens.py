@@ -60,7 +60,10 @@ def unconverged_text(r):
 def start_from(path, corners, model):
     """-> ([intr0, intr1], C) of a saved step-45 fit, refused (SystemExit) unless it is a converged fit of the same
     corners with the same model"""
-    f = json.loads(Path(path).read_text())
+    try:
+        f = json.loads(Path(path).read_text())
+    except (OSError, ValueError) as e:
+        sys.exit(f"ERROR: --start {path}: {e}")
     if f.get("inputs", {}).get("sha256") != sf.file_sha256(corners):
         sys.exit(f"ERROR: --start {path}: fitted on corners with sha256 {f.get('inputs', {}).get('sha256')}, "
                  f"not {corners}'s {sf.file_sha256(corners)}")

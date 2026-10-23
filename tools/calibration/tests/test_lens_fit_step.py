@@ -73,7 +73,8 @@ def test_misfits_and_far_boards_together_reject_the_recording(tmp_path):
     out = tmp_path / "fit.json"
     assert m45.main([str(_npz(tmp_path, _joined(near, far))), str(out), "--rig", str(S.RIG12)]) == 2
     r = json.loads(out.read_text())
-    assert r["verdict"].startswith("rejected") and "1.3 m" in r["verdict"]
+    assert r["verdict"].startswith("rejected") and "4 of 18 holds" in r["verdict"]
+    assert [h for h, _ in r["dropped_far_holds"]] == [16, 17] and [h for h, _ in r["dropped_holds"]] == [5, 12]
 
 
 def test_swapped_sides_in_the_rig_file_are_refused_after_the_fit_finds_the_true_side(tmp_path):

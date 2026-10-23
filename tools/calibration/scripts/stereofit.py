@@ -327,7 +327,8 @@ def git_sha():
 def hold_rms(data: Data, res):
     """{hold: pixel rms of its corners, both cameras, every pair of the hold} with the camera at a fit: how well the
     hold's corners fit a rigid board of the declared geometry (residuals beyond GROSS_PX left out as lensfit.ring_rms).
-    phantom12, 20 Oct: near boards 0.30-0.42 px, the bad far boards 0.67-1.13 px."""
+    phantom12, 22 Oct, Fit C on 98 held-out neck poses: median 0.42, 95th 1.05, max 1.78 px; the 20 Oct far take
+    (1.4-2.0 m) median 1.30 px: the two overlap (docs/superpowers/plans/2026-10-22-lens-hold-gate.md)."""
     e = np.linalg.norm(res, axis=1)
     h = data.hold[data.pair]
     out = {}
