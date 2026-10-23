@@ -208,8 +208,9 @@ spec:
 
 
 def make_check(plan: dict, urdf: Path, mjcf: Path):
-    """The reached-pose check: the plate in view in both cameras (T2-3) and the arm clear of the body (T2-4), at the
-    reached joints, with the plan's cameras and plate prior."""
+    """The reached-pose check: the plate in view in both cameras (T2-3), the arm clear of the body (T2-4: contact
+    geoms and mesh surfaces) and inside the workspace (T2-4b), at the reached joints, with the plan's cameras and
+    plate prior."""
     import armchain
     import armplan as ap
     import armsafety
@@ -220,8 +221,9 @@ def make_check(plan: dict, urdf: Path, mjcf: Path):
     P, _ = ap.plate_points(grid)
     cams = [ap.Camera(np.array(c["T_TC"]), c["model"], np.array(c["intr"]), tuple(c["size"])) for c in plan["cameras"]]
     X0 = np.array(plan["X0"])
-    body = armsafety.Body(mjcf)
+    body = armsafety.Body(mjcf, surface_step=0.008)
     body.set_baseline({n: np.radians(v) for n, v in plan["baseline_deg"].items()})
+    up = np.array(plan["up_in_torso"])
 
     def check(q_deg):
         q = np.radians(np.asarray(q_deg, float))[None]
@@ -233,6 +235,8 @@ def make_check(plan: dict, urdf: Path, mjcf: Path):
         c = float(body.clearance(q)[0])
         if c < 0.03:
             why.append(f"clearance {c * 100:.1f} cm")
+        if not ap.workspace_ok(arm, q, up)[0]:
+            why.append("outside the workspace (T2-4b)")
         return not why, why
     return check
 
@@ -249,6 +253,9 @@ def main(argv=None) -> int:
     p.add_argument("--dry-run", action="store_true")
     a = p.parse_args(argv)
     plan = json.loads(Path(a.poses).read_text())
+    if not plan.get("gate", {}).get("pass") or not plan.get("stops"):
+        print(f"{a.poses}: its gate did not pass (or it has no stops); step 91 runs only a list that passed step 90")
+        return 3
     log = Path(a.log or f"arm-session-{a.tag}.jsonl")
     ssh = Ssh()
     duration = int(plan["motion_s"] * 1.5 + 60)

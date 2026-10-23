@@ -157,3 +157,11 @@ def test_prechecks_name_every_failure():
             "joint_torques": {"RightShoulderPitch": -11.9, "RightElbowPitch": -15.0, "LeftKneePitch": -5.4},
             "desired": {"age_s": 18000.0, "advancing": False}, "disk_free_gb": 234.0}
     assert run91.prechecks(good, plan, need_gb=30.0) == []
+
+
+def test_a_plan_that_failed_its_gate_is_refused(tmp_path):
+    p = tmp_path / "poses.json"
+    p.write_text(json.dumps({"gate": {"pass": False}, "stops": [{"kind": "fit"}]}))
+    assert run91.main(["--poses", str(p), "--urdf", "u", "--mjcf", "m", "--tag", "t", "--dry-run"]) == 3
+    p.write_text(json.dumps({"gate": {"pass": True}, "stops": []}))
+    assert run91.main(["--poses", str(p), "--urdf", "u", "--mjcf", "m", "--tag", "t", "--dry-run"]) == 3

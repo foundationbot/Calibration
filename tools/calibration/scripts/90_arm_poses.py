@@ -27,9 +27,9 @@ import armchain  # noqa: E402
 import armplan as ap  # noqa: E402
 import rigmath as rm  # noqa: E402
 
-KEEP_IN_DEG, CMD_IN_DEG = 10.0, 5.0        # T2-4: desired / commanded joints this far inside the URDF range
+KEEP_IN_DEG, CMD_IN_DEG = 10.0, 5.0        # T2-4: desired / commanded joints this far inside both models' ranges
 CLEAR_M, BAND_CLEAR_M, BAND_DEG = 0.03, 0.015, 8.0
-PATH_STEP_DEG = 2.0
+PATH_STEP_DEG, PATH_MM = 2.0, 10.0          # path samples: at most this many degrees and millimetres apart
 SIGMA_PX = 0.5
 N_POSES, N_FIT = 26, 20
 KP = 100.0
@@ -80,21 +80,85 @@ def gravity_in_pelvis(snap: dict) -> np.ndarray:
     return -f / np.linalg.norm(f)
 
 
-def path_clear(body, a, b, step_deg=PATH_STEP_DEG, need=CLEAR_M) -> bool:
-    n = max(2, int(np.ceil(np.degrees(ap.move_cost(a, b)) / step_deg)) + 1)
-    Q = np.linspace(a, b, n)
-    return bool((body.clearance(Q) >= need).all())
+class Checks:
+    """T2-4 / T2-4b / T2-5 for one pose and for the straight joint path between two (review of 23 Oct, S1-S5):
+    joints inside the URDF's and the MJCF's ranges both; the gravity command inside them; the arm low and forward
+    along world up; clearance to the contact geoms and to the mesh surfaces; the same within the sag band. Paths
+    are sampled so no chain point moves more than PATH_MM between samples."""
 
+    def __init__(self, arm, body, up, g_pelvis, kp=KP):
+        self.arm, self.body, self.up, self.g, self.kp = arm, body, np.asarray(up, float), g_pelvis, kp
+        blo, bhi = body.ranges()
+        self.lower, self.upper = np.maximum(arm.lower, blo), np.minimum(arm.upper, bhi)
+        self._path = {}
 
-def band_clear(body, q, need=BAND_CLEAR_M, band_deg=BAND_DEG) -> bool:
-    Q = []
-    for ds in (-band_deg, band_deg):
-        for de in (-band_deg, band_deg):
-            x = np.array(q, float).copy()
-            x[0] += np.radians(ds)
-            x[3] += np.radians(de)
-            Q.append(x)
-    return bool((body.clearance(np.array(Q)) >= need).all())
+    def command(self, Q) -> np.ndarray:
+        Q = np.atleast_2d(Q)
+        return Q + self.body.gravity(Q, self.g) / self.kp
+
+    def limits(self, Q, keep_deg=KEEP_IN_DEG) -> np.ndarray:
+        Q = np.atleast_2d(Q)
+        k = np.radians(keep_deg)
+        return ((Q >= self.lower + k) & (Q <= self.upper - k)).all(axis=1)
+
+    def band(self, q, need=BAND_CLEAR_M, band_deg=BAND_DEG) -> float:
+        """least clearance with shoulder pitch and elbow moved +-band_deg (the corners and edge midpoints)"""
+        Q = []
+        for ds in (-band_deg, 0.0, band_deg):
+            for de in (-band_deg, 0.0, band_deg):
+                if ds or de:
+                    x = np.array(q, float).copy()
+                    x[0] += np.radians(ds)
+                    x[3] += np.radians(de)
+                    Q.append(x)
+        return float(self.body.clearance(np.array(Q)).min())
+
+    def pose(self, q) -> list:
+        q = np.asarray(q, float)
+        why = []
+        if not self.limits(q)[0]:
+            why.append(f"a joint within {KEEP_IN_DEG:.0f} deg of its range")
+        if not self.limits(self.command(q), CMD_IN_DEG)[0]:
+            why.append(f"the command within {CMD_IN_DEG:.0f} deg of a range")
+        if not ap.workspace_ok(self.arm, q[None], self.up)[0]:
+            why.append("outside the workspace (T2-4b)")
+        c = float(self.body.clearance(q[None])[0])
+        if c < CLEAR_M:
+            why.append(f"clearance {c * 100:.1f} cm")
+        b = self.band(q)
+        if b < BAND_CLEAR_M:
+            why.append(f"clearance in the sag band {b * 100:.1f} cm")
+        return why
+
+    def samples(self, a, b) -> np.ndarray:
+        n = max(2, int(np.ceil(np.degrees(ap.move_cost(a, b)) / PATH_STEP_DEG)) + 1)
+        while True:
+            Q = np.linspace(a, b, n)
+            pts = np.stack([f[:, :3, 3] for f in self.arm.frames(Q)], 1)              # (n, 7, 3)
+            tip = self.arm.T_base_tip(Q) @ np.array([0.0, 0.0, -0.25, 1.0])            # past the fingertips
+            pts = np.concatenate([pts, tip[:, None, :3]], 1)
+            if np.linalg.norm(np.diff(pts, axis=0), axis=2).max() <= PATH_MM / 1e3 or n > 4000:
+                return Q
+            n = 2 * n
+
+    def path(self, a, b, band=True) -> list:
+        key = (tuple(np.round(a, 9)), tuple(np.round(b, 9)), band)
+        if key in self._path:
+            return self._path[key]
+        Q = self.samples(np.asarray(a, float), np.asarray(b, float))
+        why = []
+        ws = ap.workspace_ok(self.arm, Q, self.up)
+        if not ws[1:-1].all():                     # the ends are judged as poses (the start is where the arm is)
+            why.append(f"{int((~ws[1:-1]).sum())} path samples outside the workspace")
+        c = self.body.clearance(Q)
+        if c.min() < CLEAR_M:
+            why.append(f"path clearance {c.min() * 100:.1f} cm")
+        if band:
+            bmin = min(self.band(q) for q in Q[1:-1]) if len(Q) > 2 else np.inf
+            if bmin < BAND_CLEAR_M:
+                why.append(f"path clearance in the sag band {bmin * 100:.1f} cm")
+        self._path[key] = why
+        return why
 
 
 def in_sight(body, q, cfg, X, P) -> bool:
@@ -106,10 +170,10 @@ def in_sight(body, q, cfg, X, P) -> bool:
                for T_SC in cfg.T_SC)
 
 
-def sample(arm, n: int, rng, keep_in_deg=KEEP_IN_DEG) -> np.ndarray:
-    lo = arm.lower + np.radians(keep_in_deg)
-    hi = arm.upper - np.radians(keep_in_deg)
-    return rng.uniform(lo, hi, (n, len(lo)))
+def gravity_in_torso(g_pelvis, spine_yaw: float) -> np.ndarray:
+    """The torso hangs from the pelvis through SpineYaw (URDF: zero rpy, axis z)."""
+    c, s = np.cos(spine_yaw), np.sin(spine_yaw)
+    return np.array([[c, s, 0.0], [-s, c, 0.0], [0.0, 0.0, 1.0]]) @ np.asarray(g_pelvis, float)
 
 
 def run(a) -> dict:
@@ -118,42 +182,48 @@ def run(a) -> dict:
     import okviscfg
     import rigcfg
     snap = json.loads(Path(a.snapshot).read_text())
-    names = list(snap["q_deg"])
+    names = snap.get("names", list(snap["q_deg"]))
     arm, neck = armchain.ArmChain(a.urdf), neckfk.NeckChain(a.urdf)
     cfg = okviscfg.load(a.config)
     grid = rigcfg.AprilGrid(a.grid_cols, a.grid_rows, a.tag_size, a.tag_spacing)
     P, _ = ap.plate_points(grid)
     qy, qp = np.radians(snap["q_deg"]["NeckYaw"]), np.radians(snap["q_deg"]["NeckPitch"])
     cams = ap.cameras_from_config(cfg, neck, qy, qp)
-    X0, prior_rep = plate_prior(dict(np.load(a.palm_corners)), names, arm, neck, cfg, grid)
+    corners = dict(np.load(a.palm_corners))
+    if corners["jq"].shape[1] != len(names):
+        raise SystemExit(f"palm corners: {corners['jq'].shape[1]} joints per sample, the snapshot names {len(names)}")
+    X0, prior_rep = plate_prior(corners, names, arm, neck, cfg, grid)
     start = np.radians([snap["q_deg"][n] for n in armchain.RIGHT_ARM])
-    body = armsafety.Body(a.mjcf)
-    body.set_baseline({n: np.radians(v) for n, v in snap["q_deg"].items()})
+    body = armsafety.Body(a.mjcf, surface_step=a.surface_step)
+    baseline = {n: np.radians(v) for n, v in snap["q_deg"].items()}
+    body.set_baseline(baseline)
     g = gravity_in_pelvis(snap)
+    up = -gravity_in_torso(g, np.radians(snap["q_deg"]["SpineYaw"]))
+    chk = Checks(arm, body, up, g)
     rng = np.random.default_rng(a.seed)
+    k = np.radians(KEEP_IN_DEG)
 
-    # the feasible set: in view (T2-3), clear (T2-4), commandable (T2-5)
-    feas, counts = [], {"sampled": 0, "in_view": 0, "workspace": 0, "clear": 0, "band": 0, "commandable": 0,
-                        "plate_sigma": 0, "in_sight": 0}
+    # the feasible set: cheap rules first, the mesh surfaces and the sag band last
+    feas, counts = [], {k_: 0 for k_ in ("sampled", "in_view", "workspace", "contact_geoms", "plate_sigma",
+                                         "commandable", "surfaces_and_band", "in_sight")}
     while counts["sampled"] < a.samples:
-        Q = sample(arm, min(a.chunk, a.samples - counts["sampled"]), rng)
+        Q = rng.uniform(chk.lower + k, chk.upper - k, (min(a.chunk, a.samples - counts["sampled"]), 7))
         counts["sampled"] += len(Q)
         Q = Q[ap.visible(ap.view(cams, ap.plate_in_torso(arm, X0, Q), P, grid))]
         counts["in_view"] += len(Q)
-        Q = Q[ap.workspace_ok(arm, Q)]
+        Q = Q[ap.workspace_ok(arm, Q, up)]
         counts["workspace"] += len(Q)
-        Q = Q[body.clearance(Q) >= CLEAR_M]
-        counts["clear"] += len(Q)
-        Q = Q[[band_clear(body, q) for q in Q]] if len(Q) else Q
-        counts["band"] += len(Q)
         if len(Q):
-            cmd = Q + body.gravity(Q, g) / KP
-            ok = ((cmd >= arm.lower + np.radians(CMD_IN_DEG)) & (cmd <= arm.upper - np.radians(CMD_IN_DEG))).all(1)
-            Q = Q[ok]
-        counts["commandable"] += len(Q)
+            Q = Q[body.contact_clearance(Q) >= CLEAR_M]
+        counts["contact_geoms"] += len(Q)
         if len(Q):
             Q = Q[ap.plate_sigma_mm(cams, ap.plate_in_torso(arm, X0, Q), P, SIGMA_PX) <= ap.LIM_PLATE_MM]
         counts["plate_sigma"] += len(Q)
+        if len(Q):
+            Q = Q[chk.limits(chk.command(Q), CMD_IN_DEG)]
+        counts["commandable"] += len(Q)
+        Q = Q[[not chk.pose(q) for q in Q]] if len(Q) else Q
+        counts["surfaces_and_band"] += len(Q)
         Q = Q[[in_sight(body, q, cfg, X0, P) for q in Q]] if len(Q) else Q
         counts["in_sight"] += len(Q)
         feas.append(Q)
@@ -163,37 +233,35 @@ def run(a) -> dict:
     v = ap.view(cams, ap.plate_in_torso(arm, X0, Q), P, grid)
     cell = ap.image_cell(v["uv"][:, 0].mean(axis=1))
     lo, hi = ap.RANGE_M[0], float(v["range_m"][:, 0].max())      # thirds of the range the feasible set reaches
-    third = np.clip(((v["range_m"][:, 0] - lo) / ((hi - lo) / 3)).astype(int), 0, 2)
+    third = np.clip(((v["range_m"][:, 0] - lo) / max((hi - lo) / 3, 1e-6)).astype(int), 0, 2)
     info = ap.information(arm, cams, X0, Q, P, SIGMA_PX)
     prior = np.diag(np.r_[[1 / 0.1 ** 2] * 3, [1 / 0.05 ** 2] * 3, [1 / 0.1 ** 2] * 3, [1 / 0.05 ** 2] * 3,
                           [1 / 0.1 ** 2] * len(ap.INNER)])
-    sel = ap.select(info, cell, third, Q, n_pick=N_POSES, min_per_cell=2, min_bottom=4, min_per_third=5,
-                    prior=prior)
+    rules = dict(min_per_cell=2, min_bottom=4, min_per_third=5)
+    sel = ap.select(info, cell, third, Q, n_pick=N_POSES, prior=prior, **rules)
     Qs = Q[sel]
-    order = ap.tour(Qs, start, allowed=lambda i, j: path_clear(body, start if i < 0 else Qs[i],
-                                                                start if j < 0 else Qs[j]))
-    repeatable = set(range(len(Qs)))
-    for _ in range(len(Qs)):
+
+    # order on the cheap path check, then verify every stop and path in full; a failing tour edge is forbidden
+    # and the tour redone, a failing repeat is drawn from another pose
+    forbid, repeatable = set(), set(range(len(Qs)))
+    for _ in range(4 * len(Qs)):
+        order = ap.tour(Qs, start, allowed=lambda i, j: (i, j) not in forbid and not chk.path(
+            start if i < 0 else Qs[i], start if j < 0 else Qs[j], band=False))
         st = ap.stops(Qs, order, start, repeatable=repeatable)
-        prev, unsafe, bad = start, [], set()
-        for i, s in enumerate(st):
-            q = np.array(s["q"])
-            if not path_clear(body, prev, q):
-                unsafe.append(f"stop {i} ({s['kind']}): path from the previous stop under {CLEAR_M * 100:.0f} cm")
-                if s["kind"] in ("pre", "repeat_same", "repeat_opp"):
-                    bad.add(s["pose"])
-            if s["kind"] == "pre" and not (body.clearance(q[None])[0] >= CLEAR_M and band_clear(body, q)):
-                unsafe.append(f"stop {i} (pre-pose of pose {s['pose']}): under the clearance")
-                bad.add(s["pose"])
-            prev = q
-        if not bad:
+        problems, drop = ap.verify(st, start, chk.pose, chk.path)
+        if not problems:
             break
-        repeatable -= bad                            # repeat other poses instead (T2-4 over T2-8's spacing)
+        route = [-1] + order + [-1]
+        for i, j in zip(route, route[1:]):
+            if chk.path(start if i < 0 else Qs[i], start if j < 0 else Qs[j]):
+                forbid |= {(i, j), (j, i)}
+        repeatable -= drop
     fit_idx = [s["pose"] for s in st if s["kind"] == "fit"]
     sig = ap.plate_sigma_mm(cams, ap.plate_in_torso(arm, X0, Qs), P, SIGMA_PX)
     gate = ap.list_gate(info[np.array(sel)[fit_idx]].sum(0), sig)
-    gate["unsafe"] = unsafe
-    gate["pass"] = gate["pass"] and not unsafe
+    gate["unsafe"] = problems
+    gate["coverage"] = ap.coverage(cell, third, sel, **rules)
+    gate["pass"] = gate["pass"] and not problems and not gate["coverage"]
     vs = ap.view(cams, ap.plate_in_torso(arm, X0, Qs), P, grid)
     R0 = (np.linalg.inv(cams[0].T_TC) @ ap.plate_in_torso(arm, X0, Qs))[:, :3, :3]
     ang = [rm.rot_angle_deg(R0[i].T @ R0[j]) for i in range(len(Qs)) for j in range(i + 1, len(Qs))]
@@ -201,27 +269,31 @@ def run(a) -> dict:
     for s in st:
         q = np.array(s["q"])
         s["ramp_s"] = round(ap.ramp_s(prev, q), 1)
-        s["q_deg"] = np.round(np.degrees(q), 2).tolist()
-        cmd = q + body.gravity(q[None], g)[0] / KP
-        s["command_deg"] = np.round(np.degrees(cmd), 2).tolist()
+        s["q_deg"] = np.round(np.degrees(q), 3).tolist()
+        s["command_deg"] = np.round(np.degrees(chk.command(q)[0]), 3).tolist()
         s["clearance_m"] = round(float(body.clearance(q[None])[0]), 3)
         if "pose" in s and s["kind"] != "pre":
-            k = s["pose"]
-            s["view"] = {"cell": int(cell[sel[k]]), "range_m": np.round(vs["range_m"][k], 3).tolist(),
-                         "facing_deg": np.round(vs["facing_deg"][k], 1).tolist(),
-                         "tag_px": np.round(vs["tag_px"][k], 1).tolist(),
-                         "margin_px": np.round(vs["margin_px"][k], 1).tolist(),
-                         "plate_sigma_mm": round(float(sig[k]), 3)}
+            kk = s["pose"]
+            s["view"] = {"cell": int(cell[sel[kk]]), "range_m": np.round(vs["range_m"][kk], 3).tolist(),
+                         "facing_deg": np.round(vs["facing_deg"][kk], 1).tolist(),
+                         "tag_px": np.round(vs["tag_px"][kk], 1).tolist(),
+                         "margin_px": np.round(vs["margin_px"][kk], 1).tolist(),
+                         "plate_sigma_mm": round(float(sig[kk]), 3)}
         total += s["ramp_s"] + a.hold_s + a.overhead_s
         prev = q
         del s["q"]
     return {
-        "step": "90_arm_poses", "joints": list(armchain.RIGHT_ARM), "kp": KP, "hold_s": a.hold_s,
+        "step": "90_arm_poses", "joints": list(armchain.RIGHT_ARM), "names": names, "kp": KP, "hold_s": a.hold_s,
         "inputs": {"urdf": sha(a.urdf)[:12], "mjcf": sha(a.mjcf)[:12], "config": sha(a.config)[:12],
                    "snapshot": sha(a.snapshot)[:12], "palm_corners": sha(a.palm_corners)[:12], "seed": a.seed},
         "neck_deg": {"NeckYaw": snap["q_deg"]["NeckYaw"], "NeckPitch": snap["q_deg"]["NeckPitch"]},
-        "start_deg": np.round(np.degrees(start), 2).tolist(),
-        "gravity_in_pelvis": np.round(g, 4).tolist(),
+        "start_deg": np.round(np.degrees(start), 3).tolist(),
+        "limits_deg": [np.degrees(chk.lower).round(2).tolist(), np.degrees(chk.upper).round(2).tolist()],
+        "gravity_in_pelvis": np.round(g, 4).tolist(), "up_in_torso": np.round(up, 4).tolist(),
+        "baseline_deg": snap["q_deg"],
+        "grid": {"cols": a.grid_cols, "rows": a.grid_rows, "tag_size": a.tag_size, "tag_spacing": a.tag_spacing},
+        "cameras": [{"T_TC": c.T_TC.tolist(), "model": c.model, "intr": c.intr.tolist(), "size": list(c.size)}
+                    for c in cams],
         "X0": X0.tolist(), "plate_prior": prior_rep,
         "feasible": counts, "range_thirds_m": [lo, hi], "cells": {int(c): int((cell == c).sum()) for c in range(9)},
         "selected_cells": {int(c): int((cell[sel] == c).sum()) for c in range(9)},
@@ -242,7 +314,7 @@ def report(r: dict) -> str:
              "predicted 1 sigma (20 fit poses, 0.5 px): " + ", ".join(f"{k} {v:.3f}" for k, v in g["sigma"].items()),
              f"plate sigma max {g.get('plate_sigma_mm_max', float('nan')):.3f} mm",
              f"stops {len(r['stops'])}, motion {r['motion_s']:.0f} s (computed: ramps + holds + overhead)",
-             f"GATE T2-9: {'PASS' if g['pass'] else 'FAIL'} {g['fails'] + g['unsafe']}"]
+             f"GATE T2-9: {'PASS' if g['pass'] else 'FAIL'} {g['fails'] + g['unsafe'] + g['coverage']}"]
     return "\n".join(lines)
 
 
@@ -262,12 +334,17 @@ def main(argv=None) -> int:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--hold-s", type=float, default=3.0)
     p.add_argument("--overhead-s", type=float, default=1.0, help="per move, on top of ramp and hold (22 Oct)")
+    p.add_argument("--surface-step", type=float, default=0.008, help="mesh-surface sampling for the clearance, m")
     p.add_argument("--out", required=True)
     a = p.parse_args(argv)
     r = run(a)
-    Path(a.out).write_text(json.dumps(r, indent=1))
     print(report(r))
-    return 0 if r["gate"]["pass"] else 1
+    if not r["gate"]["pass"]:                   # a failed list carries no stops: nothing can run it (review S4)
+        r["stops"] = []
+        Path(a.out).with_suffix(".REJECTED.json").write_text(json.dumps(r, indent=1))
+        return 1
+    Path(a.out).write_text(json.dumps(r, indent=1))
+    return 0
 
 
 if __name__ == "__main__":

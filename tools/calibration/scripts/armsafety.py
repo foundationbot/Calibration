@@ -1,8 +1,10 @@
 """The arm session's safety and sag checks on the robot's MuJoCo model (MJCF; decisions T2-4, T2-5 of
 docs/superpowers/plans/2026-10-22-phantom12-arm-session.md rev 3).
 
-clearance: the least distance between the arm's contact geometry (every geom with contacts in the subtree from
-`root`) and every other contact geom of the robot, the rest of the body held at a baseline pose. gravity: the
+clearance: the least distance between the arm and the rest of the robot (held at a baseline pose), the smaller of
+two: between the contact geoms (capsules and boxes; they leave ~9 cm of wrist uncovered), and, with surface_step,
+between points on the visual meshes' surfaces (every surface_step m; the arm's links in skip_surface excepted: the
+shoulder's first link sits 1.3-1.7 cm from the torso shell in every pose). gravity: the
 joint torques that hold the arm still against gravity (MuJoCo's bias force at zero velocity), with gravity given
 in the floating base's frame (the robot hangs, leaning; the pelvis IMU gives the direction).
 
@@ -21,7 +23,9 @@ from armchain import RIGHT_ARM  # noqa: E402
 
 
 class Body:
-    def __init__(self, xml: Path, root: str = "RightShoulderPitchLink", joints=RIGHT_ARM, distmax: float = 0.3):
+    def __init__(self, xml: Path, root: str = "RightShoulderPitchLink", joints=RIGHT_ARM, distmax: float = 0.3,
+                 surface_step=None, skip_surface=("RightShoulderPitchLink",), surface_group: int = 2,
+                 surface_cap: float = 0.1):
         import mujoco
         self.mj = mujoco
         self.m = mujoco.MjModel.from_xml_path(str(xml))
@@ -49,6 +53,16 @@ class Body:
         self._free = [int(self.m.jnt_qposadr[j]) for j in range(self.m.njnt)
                       if self.m.jnt_type[j] == mujoco.mjtJoint.mjJNT_FREE]
         self.baseline = self.d.qpos.copy()
+        self.jnt = [mujoco.mj_name2id(self.m, mujoco.mjtObj.mjOBJ_JOINT, n) for n in joints]
+        self._surf, self._tree, self.surface_cap = None, None, surface_cap
+        if surface_step:
+            skip = {mujoco.mj_name2id(self.m, mujoco.mjtObj.mjOBJ_BODY, n) for n in skip_surface}
+            meshes = [g for g in range(self.m.ngeom) if self.m.geom_type[g] == mujoco.mjtGeom.mjGEOM_MESH
+                      and self.m.geom_group[g] == surface_group]
+            self._surf = {g: _surface_points(self.m, g, surface_step) for g in meshes}
+            self._arm_mesh = [g for g in meshes if int(self.m.geom_bodyid[g]) in sub
+                              and int(self.m.geom_bodyid[g]) not in skip]
+            self._other_mesh = [g for g in meshes if int(self.m.geom_bodyid[g]) not in sub]
 
     def _name(self, g) -> str:
         return self.m.geom(g).name or f"geom{g}"
@@ -59,6 +73,7 @@ class Body:
             j = self.mj.mj_name2id(self.m, self.mj.mjtObj.mjOBJ_JOINT, n)
             if j >= 0:
                 self.baseline[self.m.jnt_qposadr[j]] = v
+        self._tree = None
 
     def _pose(self, q) -> None:
         self.d.qpos[:] = self.baseline
@@ -71,13 +86,45 @@ class Body:
             for b in self._other:
                 yield a, b, self.mj.mj_geomDistance(self.m, self.d, a, b, self.distmax, fromto)
 
-    def clearance(self, Q) -> np.ndarray:
-        """(N,) least arm-to-body distance (m) at arm angles Q (N, n); distmax when nothing is closer; < 0 inside."""
+    def ranges(self) -> tuple:
+        """(lower, upper) rad of the arm's joints in the model; an unlimited joint is unbounded."""
+        lim = np.array([self.m.jnt_range[j] if self.m.jnt_limited[j] else (-np.inf, np.inf) for j in self.jnt])
+        return lim[:, 0], lim[:, 1]
+
+    def _world(self, g) -> np.ndarray:
+        return self._surf[g] @ self.d.geom_xmat[g].reshape(3, 3).T + self.d.geom_xpos[g]
+
+    def surface_clearance(self, Q) -> np.ndarray:
+        """(N,) least distance (m) between surface points of the arm's meshes and of the rest of the robot's;
+        surface_cap when nothing is closer (the search stops there: only centimetres matter)."""
+        from scipy.spatial import cKDTree
+        if self._surf is None:
+            raise ValueError("no surface points: construct with surface_step")
+        if self._tree is None:
+            self._pose(np.zeros(len(self.qadr)))            # the rest of the body does not move with the arm
+            self._tree = cKDTree(np.vstack([self._world(g) for g in self._other_mesh]))
+        out = []
+        for q in np.atleast_2d(Q):
+            self._pose(q)
+            d = self._tree.query(np.vstack([self._world(g) for g in self._arm_mesh]),
+                                 distance_upper_bound=self.surface_cap)[0]
+            out.append(float(min(d.min(), self.surface_cap)))
+        return np.array(out)
+
+    def contact_clearance(self, Q) -> np.ndarray:
+        """(N,) least distance (m) between the arm's and the body's contact geoms; distmax when nothing is closer;
+        < 0 inside."""
         out = []
         for q in np.atleast_2d(Q):
             self._pose(q)
             out.append(min((dist for _, _, dist in self._pairs()), default=self.distmax))
         return np.array(out)
+
+    def clearance(self, Q) -> np.ndarray:
+        """(N,) least arm-to-body distance (m) at arm angles Q (N, n): contact_clearance and, with surface points,
+        the smaller of that and surface_clearance."""
+        out = self.contact_clearance(Q)
+        return np.minimum(out, self.surface_clearance(Q)) if self._surf is not None else out
 
     def closest(self, q) -> tuple:
         """(arm geom, other geom) of the least distance at arm angles q."""
@@ -144,4 +191,21 @@ class Body:
                 start = start + u * step
                 gone += step
         return True
+
+
+def _surface_points(m, g, step: float) -> np.ndarray:
+    """A mesh geom's vertices and points spread over its triangles about every `step` m, thinned to one per
+    step-sized cell, in the geom's frame."""
+    mid = m.geom_dataid[g]
+    V = m.mesh_vert[m.mesh_vertadr[mid]:m.mesh_vertadr[mid] + m.mesh_vertnum[mid]]
+    F = m.mesh_face[m.mesh_faceadr[mid]:m.mesh_faceadr[mid] + m.mesh_facenum[mid]]
+    A, B, C = V[F[:, 0]], V[F[:, 1]], V[F[:, 2]]
+    area = 0.5 * np.linalg.norm(np.cross(B - A, C - A), axis=1)
+    n = np.maximum(1, np.ceil(2.0 * area / step ** 2)).astype(int)
+    idx = np.repeat(np.arange(len(F)), n)
+    r1, r2 = np.random.default_rng(0).random((2, len(idx)))
+    s = np.sqrt(r1)
+    P = np.vstack([V, (1 - s)[:, None] * A[idx] + (s * (1 - r2))[:, None] * B[idx] + (s * r2)[:, None] * C[idx]])
+    _, keep = np.unique(np.floor(P / step).astype(np.int64), axis=0, return_index=True)
+    return P[np.sort(keep)]
 

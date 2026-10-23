@@ -102,3 +102,49 @@ def test_sightline_is_blocked_by_a_body_part_but_not_by_see_through_ones(tmp_pat
     assert b.sightline_clear(np.array([0.0]), eye, np.array([[-0.9, 0.0, 0.0]]), see_through=("Base",))
     assert not b.sightline_clear(np.array([0.0]), eye, np.array([[0.4, 0.0, 0.0], [0.985, 0.0, 0.0]]),
                                  see_through=("Base",))
+
+
+CUBES = """<mujoco>
+  <compiler angle="radian"/>
+  <asset>
+    <mesh name="cube" vertex="-0.05 -0.05 -0.05  0.05 -0.05 -0.05  0.05 0.05 -0.05  -0.05 0.05 -0.05
+                               -0.05 -0.05 0.05  0.05 -0.05 0.05  0.05 0.05 0.05  -0.05 0.05 0.05"/>
+  </asset>
+  <worldbody>
+    <body name="Base">
+      <freejoint name="root"/>
+      <geom name="wall" type="mesh" mesh="cube" group="2" contype="0" conaffinity="0" mass="1"/>
+      <body name="Mount" pos="0 0 0">
+        <joint name="J0" axis="0 0 1" range="-3 3"/>
+        <geom name="mount" type="mesh" mesh="cube" pos="0.06 0 0" group="2" contype="0" conaffinity="0" mass="0.1"/>
+        <body name="Arm" pos="0 0 0">
+          <joint name="J1" type="slide" axis="1 0 0" range="0 1"/>
+          <geom name="hand" type="mesh" mesh="cube" pos="0.3 0 0" group="2" contype="0" conaffinity="0" mass="0.1"/>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+</mujoco>"""
+
+
+def test_surface_clearance_is_the_gap_between_mesh_surfaces_skipping_the_mount(tmp_path):
+    """Two 10 cm cubes, 'hand' slid along x: the faces are 0.3 - 0.1 + J1 apart. 'mount' touches 'wall' (0.01 m
+    apart) but is skipped, as the shoulder's first link is on the robot."""
+    p = tmp_path / "c.xml"
+    p.write_text(CUBES)
+    b = armsafety.Body(p, root="Mount", joints=("J0", "J1"), surface_step=0.004, skip_surface=("Mount",),
+                       surface_cap=0.5)
+    d = b.surface_clearance(np.array([[0.0, 0.0], [0.0, 0.15]]))
+    assert np.allclose(d, [0.2, 0.35], atol=0.004)
+    capped = armsafety.Body(p, root="Mount", joints=("J0", "J1"), surface_step=0.004, skip_surface=("Mount",))
+    assert np.allclose(capped.surface_clearance(np.array([[0.0, 0.0], [0.0, 0.15]])), [0.1, 0.1])
+    assert np.isclose(b.clearance(np.array([[0.0, 0.0]]))[0], 0.2, atol=0.004)   # no contact geoms: the surfaces
+    b2 = armsafety.Body(p, root="Mount", joints=("J0", "J1"), surface_step=0.004)
+    assert b2.surface_clearance(np.array([[0.0, 0.0]]))[0] < 0.012
+
+
+def test_joint_ranges_come_from_the_model(tmp_path):
+    p = tmp_path / "c.xml"
+    p.write_text(CUBES)
+    lo, hi = armsafety.Body(p, root="Mount", joints=("J0", "J1")).ranges()
+    assert np.allclose(lo, [-3, 0]) and np.allclose(hi, [3, 1])

@@ -265,3 +265,47 @@ def test_detect_plate_keeps_only_the_plates_tags():
 def test_detect_plate_finds_nothing_when_only_the_board_is_in_view():
     img, _, _ = _scene(plate=False)
     assert armplan.detect_plate(GRID, img) == {}
+
+
+def test_workspace_measures_below_along_gravity():
+    """A pose whose elbow sits well below the shoulder in torso z, but forward of it: with the torso leaning back
+    30 deg its front rises (world up tips towards torso +x), which lifts the forward elbow past the limit."""
+    arm = armchain.ArmChain(URDF)
+    q = np.radians([-60.0, 0.0, 0.0, -10.0, 0.0, 0.0, 0.0])
+    fr = arm.frames(q[None])
+    drop = fr[0][0, 2, 3] - fr[3][0, 2, 3]
+    assert drop > armplan.ELBOW_BELOW_M
+    up = rm.rot_axis((0, 1, 0), np.radians(30)) @ np.array([0, 0, 1.0])      # leaning back: up tips towards +x
+    assert armplan.workspace_ok(arm, q[None]).tolist() == [True]
+    assert armplan.workspace_ok(arm, q[None], up=up).tolist() == [False]
+
+
+def test_select_caps_a_cell_rule_by_what_the_candidates_reach():
+    info = np.stack([np.eye(2)] * 10)
+    cell = np.array([0] * 9 + [4])                         # cell 4 reachable by one candidate only
+    Q = np.radians(np.arange(10)[:, None] * np.array([10.0, 0, 0, 0, 0, 0, 0]))
+    sel = armplan.select(info, cell, np.zeros(10, int), Q, n_pick=3, min_per_cell=2, min_bottom=0,
+                         min_per_third=0, prior=np.eye(2))
+    assert 9 in sel                                        # its one candidate is taken
+
+
+def test_coverage_names_each_unmet_rule():
+    cell = np.array([0, 0, 1, 6, 6, 8, 4])
+    third = np.array([0, 0, 0, 1, 1, 2, 2])
+    sel = [0, 2, 3]
+    miss = armplan.coverage(cell, third, sel, min_per_cell=2, min_bottom=3, min_per_third=1)
+    assert "cell 0: 1 of 2" in miss and "cell 6: 1 of 2" in miss and "cell 1: 1 of 1" not in " ".join(miss)
+    assert any(m.startswith("bottom corners: 1 of 3") for m in miss) and "third 2: 0 of 1" in miss
+    assert armplan.coverage(cell, third, list(range(7)), 1, 3, 1) == []
+
+
+def test_verify_checks_every_stop_and_path_and_names_the_repeats_to_drop():
+    st = [{"kind": "fit", "pose": 0, "q": [0.0] * 7}, {"kind": "pre", "pose": 0, "q": [0.1] * 7},
+          {"kind": "repeat_same", "pose": 0, "q": [0.0] * 7}, {"kind": "heldout", "pose": 1, "q": [0.2] * 7},
+          {"kind": "return", "q": [0.3] * 7}]
+    bad_pose = lambda q: ["too close"] if np.isclose(q[0], 0.1) or np.isclose(q[0], 0.3) else []
+    bad_path = lambda a, b: ["path under 3 cm"] if np.isclose(b[0], 0.2) else []
+    problems, drop = armplan.verify(st, np.zeros(7), bad_pose, bad_path)
+    assert drop == {0}                                     # the pre-pose of pose 0's repeat failed
+    assert any("stop 1 (pre" in p for p in problems) and any("stop 3 (heldout" in p for p in problems)
+    assert not any("stop 4" in p for p in problems)        # the return is the start pose: its path only

@@ -115,13 +115,15 @@ def visible(v: dict, margin_px=MARGIN_PX, range_m=RANGE_M, max_facing_deg=MAX_FA
     return ok.all(axis=1)
 
 
-def workspace_ok(arm, Q) -> np.ndarray:
+def workspace_ok(arm, Q, up=(0.0, 0.0, 1.0)) -> np.ndarray:
     """T2-4b (rev 3 amendment): (N,) the elbow ELBOW_BELOW_M under the shoulder joint, the wrist not above it,
     shoulder roll >= MIN_ROLL_DEG and shoulder pitch <= MAX_PITCH_DEG (forward), so the arm stays out of the
-    unmodelled hoist rigging over the shoulders."""
+    unmodelled hoist rigging over the shoulders. Heights along `up`, world up in the torso frame (the robot hangs
+    leaning: minus gravity, from the IMU)."""
     Q = np.atleast_2d(np.asarray(Q, float))
+    u = np.asarray(up, float) / np.linalg.norm(up)
     fr = arm.frames(Q)
-    zs, ze, zw = fr[0][:, 2, 3], fr[3][:, 2, 3], fr[5][:, 2, 3]
+    zs, ze, zw = (fr[i][:, :3, 3] @ u for i in (0, 3, 5))
     return ((ze <= zs - ELBOW_BELOW_M) & (zw <= zs) & (Q[:, 1] >= np.radians(MIN_ROLL_DEG))
             & (Q[:, 0] <= np.radians(MAX_PITCH_DEG)))
 
@@ -202,11 +204,11 @@ def select(info, cell, third, Q, n_pick: int, min_per_cell: int, min_bottom: int
     only candidates meeting the most unmet rules compete; among them the largest log det of the information so far
     wins. Rules: min_per_cell in every image cell that at least min_per_cell candidates reach; min_bottom in
     BOTTOM_CORNERS together; min_per_third in each range third (each capped by what the candidates allow). Two
-    picks differ by at least min_sep_deg in some joint."""
+    picks differ by at least min_sep_deg in some joint. coverage() re-checks the rules on the result."""
     cell, third, Q = np.asarray(cell), np.asarray(third), np.asarray(Q, float)
     n = len(info)
     reach = {c: int((cell == c).sum()) for c in range(9)}
-    need_cell = {c: min_per_cell for c in range(9) if min_per_cell > 0 and reach[c] >= min_per_cell}
+    need_cell = {c: min(min_per_cell, reach[c]) for c in range(9) if min_per_cell > 0 and reach[c] > 0}
     need_bottom = min(min_bottom, int(np.isin(cell, BOTTOM_CORNERS).sum()))
     need_third = {t: min(min_per_third, int((third == t).sum())) for t in range(3)}
     A = np.array(prior, float).copy()
@@ -231,11 +233,51 @@ def select(info, cell, third, Q, n_pick: int, min_per_cell: int, min_bottom: int
         pool = avail & (helps == helps[avail].max()) if helps[avail].max() > 0 else avail
         idx = np.flatnonzero(pool)
         gain = np.linalg.slogdet(A[None] + info[idx])[1]
-        best = int(idx[np.argmax(gain)])
+        if not np.isfinite(gain).any():
+            raise ValueError("no candidate has a finite information gain (NaN pixels?)")
+        best = int(idx[np.nanargmax(np.where(np.isfinite(gain), gain, np.nan))])
         sel.append(best)
         taken[best] = True
         A = A + info[best]
     return sel
+
+
+def coverage(cell, third, sel, min_per_cell: int, min_bottom: int, min_per_third: int) -> list:
+    """T2-6's rules on a selection, capped by what the candidates (cell, third: (N,)) reach: the unmet ones, named."""
+    cell, third, sel = np.asarray(cell), np.asarray(third), list(sel)
+    miss = []
+    for c in range(9):
+        need = min(min_per_cell, int((cell == c).sum()))
+        got = int((cell[sel] == c).sum())
+        if got < need:
+            miss.append(f"cell {c}: {got} of {need}")
+    need = min(min_bottom, int(np.isin(cell, BOTTOM_CORNERS).sum()))
+    got = int(np.isin(cell[sel], BOTTOM_CORNERS).sum())
+    if got < need:
+        miss.append(f"bottom corners: {got} of {need}")
+    for t in range(3):
+        need, got = min(min_per_third, int((third == t).sum())), int((third[sel] == t).sum())
+        if got < need:
+            miss.append(f"third {t}: {got} of {need}")
+    return miss
+
+
+def verify(stops_, start, pose_problems, path_problems) -> tuple:
+    """Every stop's pose (pose_problems(q) -> [reasons]; the return is the start pose, where the arm already is,
+    so only its path) and every move's path from the previous stop (path_problems(a, b) -> [reasons]).
+    -> (problems, poses whose repeat must be dropped: a failing pre-pose, repeat, or path into either)."""
+    problems, drop = [], set()
+    prev = np.asarray(start, float)
+    for i, s in enumerate(stops_):
+        q = np.asarray(s["q"], float)
+        why = ([] if s["kind"] == "return" else list(pose_problems(q))) + list(path_problems(prev, q))
+        if why:
+            problems.append(f"stop {i} ({s['kind']}{'' if 'pose' not in s else ' of pose %d' % s['pose']}): "
+                            + "; ".join(why))
+            if s["kind"] in ("pre", "repeat_same", "repeat_opp"):
+                drop.add(s["pose"])
+        prev = q
+    return problems, drop
 
 
 def move_cost(a, b) -> float:
