@@ -208,6 +208,32 @@ def _path_why(leg) -> list:
     return _W["chk"].path(a, b, known_a=ka, known_b=kb)
 
 
+def parse_freeze(items) -> dict:
+    """['RightWristRoll=15.4', ...] -> {joint index: rad}: joints held at one angle for the whole sweep (a plate taped
+    across the wrist is rigid only while wrist roll and gripper yaw stay put)."""
+    out = {}
+    for it in items or []:
+        name, _, val = it.partition("=")
+        if name not in armchain.RIGHT_ARM or not val:
+            raise SystemExit(f"--freeze {it!r}: want <right-arm joint>=<deg>, joints {armchain.RIGHT_ARM}")
+        out[armchain.RIGHT_ARM.index(name)] = float(np.radians(float(val)))
+    return out
+
+
+def observable_offsets(frozen: dict) -> tuple:
+    """armplan.INNER without the frozen joints: a joint that never moves has its zero offset absorbed by X."""
+    return tuple(j for j in ap.INNER if j not in frozen)
+
+
+def sample(arm, n: int, rng, keep_in_deg=KEEP_IN_DEG, frozen=None, lower=None, upper=None) -> np.ndarray:
+    lo = (arm.lower if lower is None else lower) + np.radians(keep_in_deg)
+    hi = (arm.upper if upper is None else upper) - np.radians(keep_in_deg)
+    Q = rng.uniform(lo, hi, (n, len(lo)))
+    for j, v in (frozen or {}).items():
+        Q[:, j] = v
+    return Q
+
+
 def in_sight(body, q, cfg, X, P) -> bool:
     """Both cameras see every plate corner past the robot's own meshes (MJCF frames: the Head body carries
     T_BS · T_SC, the gripper link carries X)."""
@@ -248,7 +274,8 @@ def run(a) -> dict:
     up = -gravity_in_torso(g, np.radians(snap["q_deg"]["SpineYaw"]))
     chk = Checks(arm, body, up, g)
     rng = np.random.default_rng(a.seed)
-    k = np.radians(KEEP_IN_DEG)
+    frozen = parse_freeze(a.freeze)
+    offsets = observable_offsets(frozen)
     pool = None
     if a.workers > 1:                           # the slow checks (mesh surfaces, the sag band) in parallel
         import multiprocessing as mp
@@ -264,7 +291,8 @@ def run(a) -> dict:
         if str(z["key"]) == cache_key(a):
             feas, counts = [z["Q"]], json.loads(str(z["counts"]))
     while counts["sampled"] < a.samples:
-        Q = rng.uniform(chk.lower + k, chk.upper - k, (min(a.chunk, a.samples - counts["sampled"]), 7))
+        Q = sample(arm, min(a.chunk, a.samples - counts["sampled"]), rng, frozen=frozen, lower=chk.lower,
+                   upper=chk.upper)
         counts["sampled"] += len(Q)
         Q = Q[ap.visible(ap.view(cams, ap.plate_in_torso(arm, X0, Q), P, grid))]
         counts["in_view"] += len(Q)
@@ -295,9 +323,9 @@ def run(a) -> dict:
     cell = ap.image_cell(v["uv"][:, 0].mean(axis=1))
     lo, hi = ap.RANGE_M[0], float(v["range_m"][:, 0].max())      # thirds of the range the feasible set reaches
     third = np.clip(((v["range_m"][:, 0] - lo) / max((hi - lo) / 3, 1e-6)).astype(int), 0, 2)
-    info = ap.information(arm, cams, X0, Q, P, SIGMA_PX)
+    info = ap.information(arm, cams, X0, Q, P, SIGMA_PX, offsets=offsets)
     prior = np.diag(np.r_[[1 / 0.1 ** 2] * 3, [1 / 0.05 ** 2] * 3, [1 / 0.1 ** 2] * 3, [1 / 0.05 ** 2] * 3,
-                          [1 / 0.1 ** 2] * len(ap.INNER)])
+                          [1 / 0.1 ** 2] * len(offsets)])
     rules = dict(min_per_cell=2, min_bottom=4, min_per_third=5)
     sel = ap.select(info, cell, third, Q, n_pick=N_POSES, prior=prior, **rules)
     Qs = Q[sel]
@@ -354,7 +382,7 @@ def run(a) -> dict:
         pool.close()
     fit_idx = [s["pose"] for s in st if s["kind"] == "fit"]
     sig = ap.plate_sigma_mm(cams, ap.plate_in_torso(arm, X0, Qs), P, SIGMA_PX)
-    gate = ap.list_gate(info[np.array(sel)[fit_idx]].sum(0), sig)
+    gate = ap.list_gate(info[np.array(sel)[fit_idx]].sum(0), sig, offsets=offsets)
     gate["unsafe"] = problems
     gate["coverage"] = ap.coverage(cell, third, sel, **rules)
     gate["pass"] = gate["pass"] and not problems and not gate["coverage"]
@@ -381,6 +409,8 @@ def run(a) -> dict:
         del s["q"]
     return {
         "step": "90_arm_poses", "joints": list(armchain.RIGHT_ARM), "names": names, "kp": KP, "hold_s": a.hold_s,
+        "frozen_deg": {armchain.RIGHT_ARM[j]: float(np.degrees(v)) for j, v in frozen.items()},
+        "offsets": list(offsets),
         "inputs": {"urdf": sha(a.urdf)[:12], "mjcf": sha(a.mjcf)[:12], "config": sha(a.config)[:12],
                    "snapshot": sha(a.snapshot)[:12], "palm_corners": sha(a.palm_corners)[:12], "seed": a.seed,
                    "mujoco": __import__("mujoco").__version__},
@@ -435,6 +465,7 @@ def main(argv=None) -> int:
     p.add_argument("--overhead-s", type=float, default=1.0, help="per move, on top of ramp and hold (22 Oct)")
     p.add_argument("--surface-step", type=float, default=0.008, help="mesh-surface sampling for the clearance, m")
     p.add_argument("--workers", type=int, default=1, help="processes for the per-pose and path checks")
+    p.add_argument("--freeze", action="append", default=[], help="<right-arm joint>=<deg>, held for the whole sweep")
     p.add_argument("--feasible-cache", default=None, help="npz to keep the feasible set in (reused if inputs match)")
     p.add_argument("--out", required=True)
     a = p.parse_args(argv)

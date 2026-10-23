@@ -94,10 +94,11 @@ def run(a) -> dict:
     rig = af.rig_from_config(cfg)
     arm, neck = armchain.ArmChain(a.urdf), neckfk.NeckChain(a.urdf)
     X0 = np.array(plan["X0"])
+    offsets = tuple(plan.get("offsets", ap.INNER))           # step 90 drops frozen joints' offsets
 
     fits, held = {}, {}
     for m in af.ORDER:
-        fits[m] = af.fit(obs, arm, neck, rig, m, X0, holds=set(fit_h))
+        fits[m] = af.fit(obs, arm, neck, rig, m, X0, holds=set(fit_h), offsets=offsets)
         held[m] = af.plate_errors(obs, arm, neck, rig, fits[m], holds=ho_h,
                                   centre=np.mean(ap.plate_points(grid)[0], axis=0))
     heldout_rms = {m: rms(held[m].values()) for m in af.ORDER}
@@ -110,8 +111,8 @@ def run(a) -> dict:
     floor = rms(same) / np.sqrt(2) if len(same) >= 2 else float("nan")       # fewer than 2 pairs: not measured
     half = len(fit_h) // 2
     fixed = {"dT": P["dT"], "offsets": P["offsets"]}
-    Xa = af.fit(obs, arm, neck, rig, "M0", P["X"], holds=set(fit_h[:half]), fixed=fixed)["X"]
-    Xb = af.fit(obs, arm, neck, rig, "M0", P["X"], holds=set(fit_h[half:]), fixed=fixed)["X"]
+    Xa = af.fit(obs, arm, neck, rig, "M0", P["X"], holds=set(fit_h[:half]), fixed=fixed, offsets=offsets)["X"]
+    Xb = af.fit(obs, arm, neck, rig, "M0", P["X"], holds=set(fit_h[half:]), fixed=fixed, offsets=offsets)["X"]
     slip_mm = float(np.linalg.norm((Xa[:3, :3] @ c + Xa[:3, 3]) - (Xb[:3, :3] @ c + Xb[:3, 3])) * 1e3)
     slip_deg = rm.rot_angle_deg(Xa[:3, :3].T @ Xb[:3, :3])
 
@@ -153,7 +154,7 @@ def run(a) -> dict:
         "fits": {m: {"rms_px": f["rms_px"], "within_1px": f["within_1px"], "n_corners": f["n_corners"],
                      "X": f["X"].tolist(), "dT": f["dT"].tolist(),
                      "dT_mm": float(np.linalg.norm(f["dT"][:3, 3]) * 1e3), "dT_deg": rm.rot_angle_deg(f["dT"][:3, :3]),
-                     "offsets_deg": dict(zip([armchain.RIGHT_ARM[j] for j in ap.INNER],
+                     "offsets_deg": dict(zip([armchain.RIGHT_ARM[j] for j in f["offset_joints"]],
                                              np.degrees(f["offsets"]).round(4).tolist()))}
                  for m, f in fits.items()},
         "heldout_mm": {m: {str(h): round(v, 3) for h, v in held[m].items()} for m in af.ORDER},

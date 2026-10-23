@@ -24,7 +24,11 @@ import lensmodel  # noqa: E402
 import rigmath as rm  # noqa: E402
 from armplan import INNER  # noqa: E402
 
-MODELS = {"M0": 6, "M1": 12, "M2": 12 + len(INNER)}
+MODELS = {"M0": 6, "M1": 12, "M2": 12 + len(INNER)}    # M2's size with the default offsets; fit() sizes it per call
+
+
+def n_params(model: str, offsets=INNER) -> int:
+    return {"M0": 6, "M1": 12, "M2": 12 + len(tuple(offsets))}[model]
 ORDER = ("M0", "M1", "M2")
 CHOOSE_MM = 0.5                 # rev 2: the smallest model within this of the best held-out RMS wins
 LOSS_PX = 1.0                   # soft-L1 scale: a corner off by more than ~1 px counts less
@@ -131,9 +135,9 @@ class _Stack:
         self.hold = np.array([f.hold for f in obs])
         self.rig = rig
 
-    def pixels(self, arm, X, dT, off) -> np.ndarray:
+    def pixels(self, arm, X, dT, off, joints=INNER) -> np.ndarray:
         q = self.q.copy()
-        q[:, list(INNER)] += off
+        q[:, list(joints)] += off
         T = _inv(dT[None] @ self.T_TC) @ arm.T_base_tip(q) @ X
         Pc = np.einsum("nij,nj->ni", T[self.fi, :3, :3], self.P) + T[self.fi, :3, 3]
         uv = np.empty((len(Pc), 2))
@@ -151,33 +155,36 @@ def _inv(T):
     return out
 
 
-def _unpack(p, model, X0):
+def _unpack(p, model, X0, k=len(INNER)):
     X = X0 @ rm.transform(rm.exp_rot(p[0:3]), p[3:6])
     dT = rm.transform(rm.exp_rot(p[6:9]), p[9:12]) if model != "M0" else np.eye(4)
-    off = p[12:] if model == "M2" else np.zeros(len(INNER))
+    off = p[12:12 + k] if model == "M2" else np.zeros(k)
     return X, dT, off
 
 
-def fit(obs, arm, neck, rig, model: str, X0, holds=None, fixed=None) -> dict:
+def fit(obs, arm, neck, rig, model: str, X0, holds=None, fixed=None, offsets=INNER) -> dict:
     """Fit a model to the frames of `holds` (None: all). fixed: {'dT':..., 'offsets':...} held at given values
     (for the plate-slip check: X alone, the rest from the full fit). -> X, dT, offsets, rms_px, n_corners."""
     from scipy.optimize import least_squares
     sel = [f for f in obs if holds is None or f.hold in holds]
     S = _Stack(sel, neck, rig)
-    n = MODELS[model]
+    offsets = tuple(offsets)
+    k = len(offsets)
+    n, nmax = n_params(model, offsets), n_params("M2", offsets)
     fx = fixed or {}
 
     def res(p):
-        X, dT, off = _unpack(np.r_[p, np.zeros(MODELS["M2"] - n)], model, X0)
+        X, dT, off = _unpack(np.r_[p, np.zeros(nmax - n)], model, X0, k)
         dT = fx.get("dT", dT)
         off = fx.get("offsets", off)
-        return (S.pixels(arm, X, dT, off) - S.uv).ravel()
+        return (S.pixels(arm, X, dT, off, offsets) - S.uv).ravel()
 
     r = least_squares(res, np.zeros(n), loss="soft_l1", f_scale=LOSS_PX, x_scale=np.r_[[0.01] * 3, [0.005] * 3,
-                      [0.01] * 3, [0.005] * 3, [0.01] * len(INNER)][:n], method="trf")
-    X, dT, off = _unpack(np.r_[r.x, np.zeros(MODELS["M2"] - n)], model, X0)
+                      [0.01] * 3, [0.005] * 3, [0.01] * k][:n], method="trf")
+    X, dT, off = _unpack(np.r_[r.x, np.zeros(nmax - n)], model, X0, k)
     e = r.fun.reshape(-1, 2)
     return {"model": model, "X": X, "dT": fx.get("dT", dT), "offsets": fx.get("offsets", off),
+            "offset_joints": list(offsets),
             "rms_px": float(np.sqrt(np.mean(np.sum(e ** 2, axis=1)))), "n_corners": len(e),
             "within_1px": float(np.mean(np.hypot(e[:, 0], e[:, 1]) <= 1.0)), "x": r.x.tolist()}
 
@@ -191,17 +198,18 @@ def plate_offsets(obs, arm, neck, rig, params: dict, holds=None, centre=(0.0495,
     out = {}
     hs = sorted({f.hold for f in obs}) if holds is None else holds
     X, dT, off = params["X"], params["dT"], params["offsets"]
+    joints = tuple(params.get("offset_joints", INNER))
     for h in hs:
         sel = [f for f in obs if f.hold == h]
         if not sel:
             continue
         S = _Stack(sel, neck, rig)
         c = np.asarray(centre, float)
-        r = least_squares(lambda e: (S.pixels(arm, X @ rm.transform(rm.exp_rot(e[:3]), e[3:]), dT, off)
+        r = least_squares(lambda e: (S.pixels(arm, X @ rm.transform(rm.exp_rot(e[:3]), e[3:]), dT, off, joints)
                                      - S.uv).ravel(), np.zeros(6), loss="soft_l1", f_scale=LOSS_PX)
         E = rm.transform(rm.exp_rot(r.x[:3]), r.x[3:])
         q = S.q.mean(axis=0).copy()
-        q[list(INNER)] += off
+        q[list(joints)] += off
         T = arm.T_base_tip(q) @ X
         out[h] = (T[:3, :3] @ (E[:3, :3] @ c + E[:3, 3] - c)) * 1e3
     return out

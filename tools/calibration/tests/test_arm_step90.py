@@ -136,3 +136,16 @@ def test_the_band_is_friction_plus_a_share_of_the_gravity_command_capped():
     assert np.isclose(b[0], step90.BAND_FRICTION_DEG + step90.BAND_GRAVITY_SHARE * np.degrees(0.08), atol=1e-9)
     assert np.isclose(b[1], step90.BAND_FRICTION_DEG) and np.isclose(b[3], step90.BAND_DEG)
     assert np.isclose(b[2], step90.FLAT_ABORT_DEG) and np.isclose(b[4], step90.FLAT_ABORT_DEG)
+
+
+def test_frozen_joints_are_sampled_fixed_and_leave_the_offsets():
+    """A plate taped across the wrist is rigid only while wrist roll and gripper yaw stay put: --freeze holds them,
+    and their zero offsets (unobservable then) leave the model."""
+    arm = armchain.ArmChain(URDF)
+    frozen = step90.parse_freeze(["RightWristRoll=15.4", "RightGripperYaw=-56.25"])
+    assert frozen == {5: np.radians(15.4), 6: np.radians(-56.25)}
+    Q = step90.sample(arm, 50, np.random.default_rng(0), frozen=frozen)
+    assert np.allclose(Q[:, 5], np.radians(15.4)) and np.allclose(Q[:, 6], np.radians(-56.25))
+    assert step90.observable_offsets(frozen) == (1, 2, 3, 4)
+    with pytest.raises(SystemExit):
+        step90.parse_freeze(["RightElbow=3"])

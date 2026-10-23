@@ -189,3 +189,16 @@ def test_board_scale_pairs_the_cameras_by_the_nearest_stamp():
             f.t += 300_000
     s = armfit.board_scale_pct(obs, rig, GRID)
     assert sorted(s) == [0, 1, 2] and all(abs(v) < 0.01 for v in s.values())
+
+
+def test_m2_fits_only_the_offsets_the_plan_lists():
+    """With wrist roll and gripper yaw frozen, step 90 lists offsets (1, 2, 3, 4); M2 then has 16 parameters and
+    plate_offsets applies them to the same joints."""
+    arm, neck, rig, P = _rig()
+    off = np.radians([0.0, 0.0, 0.6, 0.0, 0.0])
+    obs = _session(arm, neck, rig, P, (X_TRUE, np.eye(4), off), n_poses=20, px=0.05, spread=0.15)
+    m2 = armfit.fit(obs, arm, neck, rig, "M2", X_TRUE, offsets=(1, 2, 3, 4))
+    assert len(m2["offsets"]) == 4 and m2["offset_joints"] == [1, 2, 3, 4]
+    assert abs(np.degrees(m2["offsets"][2]) - 0.6) < 0.05 and m2["rms_px"] < 0.3
+    errs = armfit.plate_errors(obs, arm, neck, rig, m2, holds=[0, 1])
+    assert max(errs.values()) < 0.3
