@@ -241,3 +241,13 @@ def test_a_real_run_will_not_append_to_an_existing_log(tmp_path):
     with pytest.raises(SystemExit):
         run91.log_path(str(p), "t", dry=False)
     assert run91.log_path(None, "t", dry=True).name.endswith(".dry.jsonl")
+
+
+def test_a_stop_aborts_at_its_own_band(tmp_path):
+    """step 90 writes each stop's landing band (abort_deg): a 3 deg elbow miss is fine under the flat 8 deg, not
+    under a stop band of 2.5 deg."""
+    plan = _plan(1)
+    plan["stops"][0]["abort_deg"] = [8.0, 8.0, 5.0, 2.5, 5.0, 5.0, 5.0]
+    robot = FakeRobot(off_deg=(3.0, 0, 0, 0.0, 0, 0, 0))      # elbow: command -3 + 0 = 3 deg short of desired
+    with pytest.raises(run91.Abort, match=r"RightElbowPitch.*band 2\.5"):
+        _run(robot, plan, tmp_path)

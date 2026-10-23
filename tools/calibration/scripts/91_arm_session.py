@@ -150,7 +150,7 @@ class Session:
             raise Abort(f"rc {rc} from {cmd.split()[0]}: {out.strip()[-300:]}")
         return out
 
-    def _move(self, i: int, target, ramp_s: float, desired) -> np.ndarray:
+    def _move(self, i: int, target, ramp_s: float, desired, abort=ABORT_DEG) -> np.ndarray:
         why = self.path_check(self.at, desired)
         if why:
             raise Abort(f"stop {i}: the path from where the arm stands to the stop fails: {'; '.join(why)}")
@@ -164,8 +164,8 @@ class Session:
         self._log(event="move", stop=i, command=cmd, t0_ns=t0, target_deg=list(map(float, target)),
                   reached_deg=reached.tolist(), result="\n".join(ln for ln in out.splitlines() if "RESULT" in ln))
         off = np.abs(reached - np.asarray(desired, float))
-        if (off > ABORT_DEG).any():
-            bad = ", ".join(f"{RIGHT_ARM[j]} {off[j]:.1f} deg" for j in np.flatnonzero(off > ABORT_DEG))
+        if (off > abort).any():
+            bad = ", ".join(f"{RIGHT_ARM[j]} {off[j]:.1f} deg (band {abort[j]:.1f})" for j in np.flatnonzero(off > abort))
             raise Abort(f"stop {i}: the arm stopped outside the band step 90 checked ({bad}); holding here")
         return reached
 
@@ -178,12 +178,13 @@ class Session:
         ok, more = self.check(reached)
         return (not why and ok), why + list(more)
 
-    def _correction(self, target, desired, reached):
+    def _correction(self, target, desired, reached, abort=ABORT_DEG):
         """(new target, None) or (None, why not)."""
         corr = np.asarray(desired, float) - reached
-        if (np.abs(corr) > CORRECTION_CAP_DEG).any():
+        cap = np.minimum(CORRECTION_CAP_DEG, abort)
+        if (np.abs(corr) > cap).any():
             return None, "correction over its cap: " + ", ".join(
-                f"{RIGHT_ARM[j]} {corr[j]:+.1f} deg" for j in np.flatnonzero(np.abs(corr) > CORRECTION_CAP_DEG))
+                f"{RIGHT_ARM[j]} {corr[j]:+.1f} deg" for j in np.flatnonzero(np.abs(corr) > cap))
         new = np.asarray(target, float) + corr
         lo, hi = self.limits[0] + CMD_IN_DEG, self.limits[1] - CMD_IN_DEG
         if (new < lo).any() or (new > hi).any():
@@ -194,17 +195,18 @@ class Session:
     def sweep(self) -> None:
         for i, s in enumerate(self.plan["stops"]):
             desired, target = np.array(s["q_deg"], float), np.array(s["command_deg"], float)
-            reached = self._move(i, target, float(s["ramp_s"]), desired)
+            abort = np.minimum(ABORT_DEG, np.array(s.get("abort_deg", ABORT_DEG), float))   # the band step 90 checked
+            reached = self._move(i, target, float(s["ramp_s"]), desired, abort)
             row = {"event": "stop", "stop": i, "kind": s["kind"], "pose": s.get("pose"), "corrections": 0,
                    "status": "ok", "why": [], "reached_first_deg": reached.tolist()}
             if s["kind"] in MEASURED:
                 ok, why = self._judge(desired, reached)
                 if not ok:
-                    new, no = self._correction(target, desired, reached)
+                    new, no = self._correction(target, desired, reached, abort)
                     if new is None:
                         row["status"], why = "skipped", why + [no]
                     else:
-                        reached = self._move(i, new, 6.0, desired)
+                        reached = self._move(i, new, 6.0, desired, abort)
                         row["corrections"] = 1
                         ok, why = self._judge(desired, reached)
                         if not ok:
@@ -342,7 +344,7 @@ def make_path_check(plan: dict, urdf: Path, mjcf: Path):
     body = armsafety.Body(mjcf, surface_step=0.008)
     body.set_baseline({n: np.radians(v) for n, v in plan["baseline_deg"].items()})
     chk = s90.Checks(armchain.ArmChain(urdf), body, plan["up_in_torso"], plan["gravity_in_pelvis"], kp=plan["kp"])
-    return lambda a, b: chk.path(np.radians(a), np.radians(b))
+    return lambda a, b: chk.path(np.radians(a), np.radians(b), known_a=True)   # a = where the arm stands, measured
 
 
 def main(argv=None) -> int:

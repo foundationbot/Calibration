@@ -30,6 +30,7 @@ import rigmath as rm  # noqa: E402
 
 KEEP_IN_DEG, CMD_IN_DEG = 10.0, 5.0        # T2-4: desired / commanded joints this far inside both models' ranges
 CLEAR_M, BAND_CLEAR_M, BAND_DEG = 0.03, 0.015, 8.0
+BAND_FRICTION_DEG, BAND_GRAVITY_SHARE, FLAT_ABORT_DEG = 5.0, 0.3, 5.0     # the per-pose landing band (Checks.band_deg)
 BAND_JOINTS = (0, 1, 3)                     # shoulder pitch, shoulder roll, elbow: gravity commands up to ~10 deg
 PATH_STEP_DEG, PATH_MM = 2.0, 10.0          # path samples: at most this many degrees and millimetres apart
 SIGMA_PX = 0.5
@@ -109,14 +110,26 @@ class Checks:
         k = np.radians(keep_deg)
         return ((Q >= self.lower + k) & (Q <= self.upper - k)).all(axis=1)
 
-    def band(self, q, need=BAND_CLEAR_M, band_deg=BAND_DEG) -> float:
-        """least clearance with the BAND_JOINTS (shoulder pitch, shoulder roll, elbow: the joints whose gravity
-        command reaches ~10 deg) moved by 0 or +-band_deg each (every corner, edge and face of the box)"""
+    def band_deg(self, q) -> np.ndarray:
+        """(7,) how far each joint may land from the desired pose: for BAND_JOINTS, BAND_FRICTION_DEG plus
+        BAND_GRAVITY_SHARE of the joint's gravity command at q, at most BAND_DEG (22 Oct-23 Oct: the friction band is
+        ~5 deg at kp 100; the gravity model is off by up to ~30 %); the other joints FLAT_ABORT_DEG (step 91 aborts
+        there; they carry little gravity and are not swept in the clearance band)."""
+        g = np.degrees(np.abs(self.body.gravity(np.asarray(q, float)[None], self.g)[0] / self.kp))
+        out = np.full(7, FLAT_ABORT_DEG)
+        j = list(BAND_JOINTS)
+        out[j] = np.minimum(BAND_DEG, BAND_FRICTION_DEG + BAND_GRAVITY_SHARE * g[j])
+        return out
+
+    def band(self, q, need=BAND_CLEAR_M, scale: float = 1.0) -> float:
+        """least clearance with the BAND_JOINTS moved by 0 or +- scale * their band_deg each (every corner, edge and
+        face of the box)"""
+        w = scale * self.band_deg(q)[list(BAND_JOINTS)]
         Q = []
-        for d in itertools.product((-band_deg, 0.0, band_deg), repeat=len(BAND_JOINTS)):
+        for d in itertools.product((-1.0, 0.0, 1.0), repeat=len(BAND_JOINTS)):
             if any(d):
                 x = np.array(q, float).copy()
-                x[list(BAND_JOINTS)] += np.radians(d)
+                x[list(BAND_JOINTS)] += np.radians(np.array(d) * w)
                 Q.append(x)
         return float(self.body.clearance(np.array(Q)).min())
 
@@ -148,8 +161,10 @@ class Checks:
                 return Q
             n = 2 * n
 
-    def path(self, a, b, band=True) -> list:
-        key = (tuple(np.round(a, 9)), tuple(np.round(b, 9)), band)
+    def path(self, a, b, band=True, known_a=False, known_b=False) -> list:
+        """problems on the straight joint path a -> b. known_a / known_b: that end is a pose the arm actually stands
+        at (measured), with no landing band: the band tapers linearly to nothing there."""
+        key = (tuple(np.round(a, 9)), tuple(np.round(b, 9)), band, known_a, known_b)
         if key in self._path:
             return self._path[key]
         Q = self.samples(np.asarray(a, float), np.asarray(b, float))
@@ -161,7 +176,9 @@ class Checks:
         if c.min() < CLEAR_M:
             why.append(f"path clearance {c.min() * 100:.1f} cm")
         if band:
-            bmin = min(self.band(q) for q in Q[1:-1]) if len(Q) > 2 else np.inf
+            t = np.linspace(0.0, 1.0, len(Q))
+            w = (t if known_a else 1.0) * ((1.0 - t) if known_b else 1.0) * np.ones(len(Q))
+            bmin = min(self.band(q, scale=x) for q, x in zip(Q[1:-1], w[1:-1])) if len(Q) > 2 else np.inf
             if bmin < BAND_CLEAR_M:
                 why.append(f"path clearance in the sag band {bmin * 100:.1f} cm")
         self._path[key] = why
@@ -187,7 +204,8 @@ def _pose_why(q) -> list:
 
 
 def _path_why(leg) -> list:
-    return _W["chk"].path(*leg)
+    a, b, ka, kb = leg
+    return _W["chk"].path(a, b, known_a=ka, known_b=kb)
 
 
 def in_sight(body, q, cfg, X, P) -> bool:
@@ -290,11 +308,13 @@ def run(a) -> dict:
         """every stop's pose problems and every move's path problems, in parallel when a pool is up"""
         qs = [np.asarray(x["q"], float) for x in st]
         legs = list(zip([start] + qs[:-1], qs))
+        at_start = lambda q: bool(np.allclose(q, start))                            # noqa: E731
+        legs4 = [(x, y, at_start(x), at_start(y)) for x, y in legs]                 # the start pose is measured
         if pool:
             pp = pool.map(_pose_why, qs, chunksize=1)
-            lp = pool.map(_path_why, legs, chunksize=1)
+            lp = pool.map(_path_why, legs4, chunksize=1)
         else:
-            pp, lp = [chk.pose(q) for q in qs], [chk.path(x, y) for x, y in legs]
+            pp, lp = [chk.pose(q) for q in qs], [chk.path(*leg[:2], known_a=leg[2], known_b=leg[3]) for leg in legs4]
         key = lambda *v: tuple(np.round(np.concatenate(v), 9))                     # noqa: E731
         pd = {key(q): w for q, w in zip(qs, pp)}
         ld = {key(x, y): w for (x, y), w in zip(legs, lp)}
@@ -323,7 +343,8 @@ def run(a) -> dict:
         route = [-1] + order + [-1]
         new = set()
         for i, j in zip(route, route[1:]):
-            if (i, j) not in forbid and chk.path(start if i < 0 else Qs[i], start if j < 0 else Qs[j]):
+            if (i, j) not in forbid and chk.path(start if i < 0 else Qs[i], start if j < 0 else Qs[j],
+                                                 known_a=i < 0, known_b=j < 0):
                 new |= {(i, j), (j, i)}
         if not drop and not new:
             break                                             # nothing left to change: the gate reports it
@@ -346,6 +367,7 @@ def run(a) -> dict:
         s["ramp_s"] = round(ap.ramp_s(prev, q), 1)
         s["q_deg"] = np.round(np.degrees(q), 3).tolist()
         s["command_deg"] = np.round(np.degrees(chk.command(q)[0]), 3).tolist()
+        s["abort_deg"] = np.round(chk.band_deg(q), 2).tolist()      # the landing band the checks covered here
         s["clearance_m"] = round(float(body.clearance(q[None])[0]), 3)
         if "pose" in s and s["kind"] != "pre":
             kk = s["pose"]

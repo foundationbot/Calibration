@@ -110,5 +110,29 @@ def test_the_sag_band_covers_shoulder_roll_too():
             return np.where(Q[:, 1] < np.radians(-40), 0.01, 0.10)
     c = step90.Checks(armchain.ArmChain(URDF), RollBody(), up=(0, 0, 1), g_pelvis=(0, 0, -1))
     q = START.copy()
-    q[1] = np.radians(-35.0)
+    q[1] = np.radians(-37.0)                       # no gravity on roll here: its band is 5 deg, reaching -42
     assert any("sag band 1.0" in w for w in c.pose(q))
+    q[1] = np.radians(-30.0)                       # -35 at most: clear
+    assert not any("sag band" in w for w in c.pose(q))
+
+
+def test_the_band_tapers_to_nothing_at_a_measured_end():
+    """A path from (or to) a pose the arm actually stands at has no landing band at that end: near it the band
+    shrinks linearly. Elbow at -95: its full band (6 deg here) reaches the close zone beyond -100, a tapered one
+    there does not."""
+    c = _chk()
+    a, b = START.copy(), START.copy()
+    a[3], b[3] = np.radians(-95.0), np.radians(-60.0)
+    assert any("sag band" in w for w in c.path(a, b))
+    assert not any("sag band" in w for w in c.path(a, b, known_a=True))
+    assert not any("sag band" in w for w in c.path(b, a, known_b=True))
+
+
+def test_the_band_is_friction_plus_a_share_of_the_gravity_command_capped():
+    """Per pose and joint: BAND_FRICTION_DEG + BAND_GRAVITY_SHARE * |gravity command|, at most BAND_DEG; the joints
+    outside BAND_JOINTS keep the runner's flat abort."""
+    c = _chk(torque=(-8.0, 0, 0, -40.0, 0, 0, 0))     # kp 100: pitch 4.6 deg, elbow 22.9 deg of gravity command
+    b = c.band_deg(START)
+    assert np.isclose(b[0], step90.BAND_FRICTION_DEG + step90.BAND_GRAVITY_SHARE * np.degrees(0.08), atol=1e-9)
+    assert np.isclose(b[1], step90.BAND_FRICTION_DEG) and np.isclose(b[3], step90.BAND_DEG)
+    assert np.isclose(b[2], step90.FLAT_ABORT_DEG) and np.isclose(b[4], step90.FLAT_ABORT_DEG)

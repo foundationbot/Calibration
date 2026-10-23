@@ -378,7 +378,7 @@ def _stops_inline(Q, order, start, held_every, n_same, n_opp, repeatable) -> lis
     prev -> k -> prev -> k (the same move again), opposite side k -> next -> k -> next (the same path reversed)."""
     order = list(order)
     kind_at = ["heldout" if pos % held_every == held_every - 1 else "fit" for pos in range(len(order))]
-    cand = [pos for pos in range(len(order) - 1) if kind_at[pos] == "fit"
+    cand = [pos for pos in range(1, len(order) - 1) if kind_at[pos] == "fit"
             and (repeatable is None or order[pos] in repeatable)]
     n_rep = n_same + n_opp
     if len(cand) < n_rep:
