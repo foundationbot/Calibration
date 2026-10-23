@@ -341,6 +341,7 @@ def main(argv=None) -> int:
     print(report(r))
     if not r["gate"]["pass"]:                   # a failed list carries no stops: nothing can run it (review S4)
         r["stops"] = []
+        Path(a.out).unlink(missing_ok=True)     # nor an older list left at the same path (review 2, S6)
         Path(a.out).with_suffix(".REJECTED.json").write_text(json.dumps(r, indent=1))
         return 1
     Path(a.out).write_text(json.dumps(r, indent=1))

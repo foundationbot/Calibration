@@ -182,22 +182,26 @@ class AprilGrid:
         out = {}
         if ids is None:
             return out
-        crit = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 50, 0.001)
         for quad, tid in zip(corners, ids.ravel()):
             if not 0 <= int(tid) < self.n_tags:
                 continue
-            q = quad.reshape(4, 2).astype(np.float32)
-            edge = float(np.mean(np.linalg.norm(np.roll(q, -1, axis=0) - q, axis=1)))
-            # the window must reach the junction from ArUco's guess (~4 % of the tag
-            # edge off on a Kalibr board) yet stay inside the corner square
-            win = int(np.clip(round(0.3 * edge * self.spacing), 3, 10))
-            ref = cv2.cornerSubPix(gray, q.reshape(-1, 1, 2).copy(), (win, win), (-1, -1),
-                                   crit).reshape(4, 2)
-            moved = np.linalg.norm(ref - q, axis=1)
-            for k in range(4):
-                if moved[k] <= 2 * win + 1:
-                    out[(int(tid), k)] = (float(ref[k, 0]), float(ref[k, 1]))
+            for k, uv in self.refine(gray, quad).items():
+                out[(int(tid), k)] = uv
         return out
+
+    def refine(self, gray, quad) -> dict:
+        """{k: (u, v)}: one ArUco quad's corners re-found at their X-junctions (detect's docstring)."""
+        import cv2
+        crit = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 50, 0.001)
+        q = np.asarray(quad).reshape(4, 2).astype(np.float32)
+        edge = float(np.mean(np.linalg.norm(np.roll(q, -1, axis=0) - q, axis=1)))
+        # the window must reach the junction from ArUco's guess (~4 % of the tag
+        # edge off on a Kalibr board) yet stay inside the corner square
+        win = int(np.clip(round(0.3 * edge * self.spacing), 3, 10))
+        ref = cv2.cornerSubPix(gray, q.reshape(-1, 1, 2).copy(), (win, win), (-1, -1),
+                               crit).reshape(4, 2)
+        moved = np.linalg.norm(ref - q, axis=1)
+        return {k: (float(ref[k, 0]), float(ref[k, 1])) for k in range(4) if moved[k] <= 2 * win + 1}
 
     def __repr__(self) -> str:
         return (f"aprilgrid {self.cols}x{self.rows} tags, {self.tag_size*1000:g} mm, "

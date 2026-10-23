@@ -94,6 +94,7 @@ def test_a_failed_gate_writes_no_runnable_list(tmp_path, monkeypatch):
     monkeypatch.setattr(step90, "run", lambda a: dict(fake))
     monkeypatch.setattr(step90, "report", lambda r: "")
     argv = ["--urdf", "u", "--mjcf", "m", "--config", "c", "--snapshot", "s", "--palm-corners", "p", "--out", str(out)]
+    out.write_text('{"gate": {"pass": true}, "stops": [{"k": 1}]}')      # an older list that passed
     assert step90.main(argv) == 1
     assert not out.exists()
     rej = json.loads(out.with_suffix(".REJECTED.json").read_text())

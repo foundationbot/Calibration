@@ -396,14 +396,16 @@ PLATE_FIT_FRAC = 0.08           # layout check: homography rms under this fracti
 def detect_plate(grid, gray) -> dict:
     """The plate's corners {(tag, k): (u, v)} when another grid with the same tag ids is in view too (phantom12: the
     7x5 board's tags 0-8). AprilGrid.detect keeps one detection per id, so it can mix the two. Here every ArUco quad
-    with a plate id is a candidate; the set of at least PLATE_MIN_TAGS tags, one per id, whose raw corners fit the
-    plate's own layout by one homography (rms < PLATE_FIT_FRAC of a tag side) wins, most tags first; every other quad
-    is painted out and the plate's corners are refined by AprilGrid.detect on that image. {} when no set fits."""
+    with a plate id is a candidate; the set of at least PLATE_MIN_TAGS tags, one per id, spanning two rows and two
+    columns of the plate (a row of another grid's tags fits any one row), whose raw corners fit the plate's layout by
+    one homography (rms < PLATE_FIT_FRAC of a tag side) wins, most tags first. Only its quads are refined, on the
+    image as it is (AprilGrid.refine): nothing is painted, so a neighbour cannot pull a corner. {} when no set fits."""
     import itertools
 
     import cv2
     p = cv2.aruco.DetectorParameters()
     p.markerBorderBits = grid.border_bits
+    p.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_NONE
     det = cv2.aruco.ArucoDetector(cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36h11), p)
     corners, ids, _ = det.detectMarkers(gray)
     if ids is None:
@@ -413,7 +415,8 @@ def detect_plate(grid, gray) -> dict:
     best = None
     for pick in itertools.product(*[[None] + cand[t] for t in range(grid.n_tags)]):
         tags = [t for t in range(grid.n_tags) if pick[t] is not None]
-        if len(tags) < PLATE_MIN_TAGS:
+        rc = [grid.tag_rc(t) for t in tags]
+        if len(tags) < PLATE_MIN_TAGS or len({r for r, _ in rc}) < 2 or len({c for _, c in rc}) < 2:
             continue
         obj = np.concatenate([grid.obj_points(t)[:, :2] for t in tags])
         img = np.concatenate([pick[t] for t in tags])
@@ -428,13 +431,4 @@ def detect_plate(grid, gray) -> dict:
     if best is None:
         return {}
     tags, _, pick = best
-    keep = [pick[t] for t in tags]
-    out = gray.copy()
-    fill = int(np.median(gray))
-    for _, q in quads:
-        if not any(q is k for k in keep):
-            c = q.mean(0)
-            cv2.fillConvexPoly(out, np.round(c + 1.3 * (q - c)).astype(np.int32), fill)
-    found = grid.detect(out)
-    return {(t, k): uv for (t, k), uv in found.items() if t in tags
-            and np.linalg.norm(np.asarray(uv) - pick[t][k]) < 0.25 * np.linalg.norm(pick[t][1] - pick[t][0])}
+    return {(t, k): uv for t in tags for k, uv in grid.refine(gray, pick[t]).items()}

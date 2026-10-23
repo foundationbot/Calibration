@@ -56,7 +56,7 @@ def _session(arm, neck, rig, P, truth, n_poses=16, frames=6, px=0.2, seed=0, spr
                 T_TC = dT @ neck.T_TB(0.0, 0.35) @ rig.T_HC[c]
                 Pc = (rm.inv(T_TC) @ T_TP @ np.c_[P, np.ones(len(P))].T).T[:, :3]
                 uv = armplan.lensmodel.project(rig.lens[c][0], rig.lens[c][1], Pc) + rng.normal(0, px, (len(P), 2))
-                obs.append(armfit.Frame(hold=h, cam=c, t=h * 1000 + f, q_arm=qf, q_neck=(0.0, 0.35), P=P, uv=uv))
+                obs.append(armfit.Frame(hold=h, cam=c, t=h * 10_000_000_000 + f * 70_000_000, q_arm=qf, q_neck=(0.0, 0.35), P=P, uv=uv))
     return obs
 
 
@@ -66,8 +66,9 @@ def test_holds_are_the_still_stretches_of_the_arm():
     s = t / 1e9
     q[:, 0] = np.interp(s, [0, 3, 6, 9, 12, 15, 20], [0, 0, 0.5, 0.5, 1.0, 1.0, 1.0])
     holds = armfit.holds_from_joints(t, q, min_s=1.5)
-    got = [(round(a / 1e9, 1), round(b / 1e9, 1)) for a, b in holds]
-    assert got == [(0.0, 3.0), (6.0, 9.0), (12.0, 20.0)]
+    want = [(0.0, 3.0), (6.0, 9.0), (12.0, 20.0)]
+    assert len(holds) == 3                                  # edges within half the speed window (0.15 s)
+    assert all(abs(a / 1e9 - wa) <= 0.16 and abs(b / 1e9 - wb) <= 0.16 for (a, b), (wa, wb) in zip(holds, want))
 
 
 def test_m0_recovers_the_plate_and_leaves_noise_when_the_chain_is_right():
@@ -152,5 +153,39 @@ def test_holds_need_no_sample_inside_the_speed_window():
     t = np.arange(0, 20e9, 20e6).astype(np.int64)
     q = np.zeros((len(t), 7))
     q[:, 0] = np.interp(t / 1e9, [0, 3, 6, 9, 12, 20], [0, 0, 0.5, 0.5, 1.0, 1.0])
-    got = [(round(a / 1e9, 1), round(b / 1e9, 1)) for a, b in armfit.holds_from_joints(t, q, min_s=1.5)]
-    assert got == [(0.0, 3.0), (6.0, 9.0), (12.0, 20.0)]
+    holds = armfit.holds_from_joints(t, q, min_s=1.5)
+    want = [(0.0, 3.0), (6.0, 9.0), (12.0, 20.0)]
+    assert len(holds) == 3
+    assert all(abs(a / 1e9 - wa) <= 0.16 and abs(b / 1e9 - wb) <= 0.16 for (a, b), (wa, wb) in zip(holds, want))
+
+
+def test_holds_survive_encoder_jitter_and_still_split_at_a_slow_correction():
+    """Review 2, W3: real /joints jitter by an encoder step (~0.01 deg) from sample to sample; a hold must stay one
+    hold. A correction (4 deg in 6 s, the slowest move step 91 sends) must still split two holds."""
+    rng = np.random.default_rng(3)
+    t = np.arange(0, 30e9, 2e6).astype(np.int64)
+    s = t / 1e9
+    q = np.zeros((len(t), 7))
+    q[:, 3] = np.radians(np.interp(s, [0, 10, 16, 30], [0, 0, 4.0, 4.0]))
+    q += np.radians(0.01) * rng.integers(-1, 2, q.shape)
+    got = [(round(a / 1e9), round(b / 1e9)) for a, b in armfit.holds_from_joints(t, q, min_s=1.5)]
+    assert got == [(0, 10), (16, 30)]
+
+
+def test_a_missing_noise_floor_or_slip_is_inconclusive():
+    h = {"M0": 1.0, "M1": 0.9, "M2": 0.9}
+    assert armfit.verdict({"noise_floor_mm": float("nan"), "slip_mm": 0.1, "slip_deg": 0.01,
+                           "heldout_rms_mm": h})["verdict"] == "INCONCLUSIVE"
+    assert armfit.verdict({"noise_floor_mm": 0.3, "slip_mm": float("nan"), "slip_deg": 0.01,
+                           "heldout_rms_mm": h})["verdict"] == "INCONCLUSIVE"
+
+
+def test_board_scale_pairs_the_cameras_by_the_nearest_stamp():
+    """Review 2, W2: the record app stamps each camera with its own capture time; camera 1 here 0.3 ms later."""
+    arm, neck, rig, P = _rig()
+    obs = _session(arm, neck, rig, P, (X_TRUE, np.eye(4), np.zeros(5)), n_poses=3, px=0.0)
+    for f in obs:
+        if f.cam == 1:
+            f.t += 300_000
+    s = armfit.board_scale_pct(obs, rig, GRID)
+    assert sorted(s) == [0, 1, 2] and all(abs(v) < 0.01 for v in s.values())

@@ -74,7 +74,7 @@ def sweep(tmp_path_factory):
             t += 20_000_000
         for k in range(150):                                         # a 3 s hold at 50 Hz, images at 10 Hz
             row = base.copy()
-            row[ia] = q
+            row[ia] = q + np.radians(0.01) * rng.integers(-1, 2, 7)          # encoder steps
             jt.append(t)
             jq.append(row)
             if k % 5 == 2:
@@ -84,7 +84,7 @@ def sweep(tmp_path_factory):
                     Pc = (T[:3, :3] @ P.T).T + T[:3, 3]
                     uv = armplan.lensmodel.project("KB4T", rig.lens[c][1], Pc) + rng.normal(0, 0.15, (16, 2))
                     for (tag, kk), (u, v) in zip(keys, uv):
-                        rows.append((c, t, tag, kk, u, v))
+                        rows.append((c, t + c * 300_000, tag, kk, u, v))    # camera 1 stamped 0.3 ms later
             t += 20_000_000
         stops.append({"event": "stop", "stop": i, "kind": kind, "pose": i if i < 20 else [0, 4, 8][i - 20],
                       "status": "ok", "corrections": 0, "why": [], "reached_deg": np.degrees(q).tolist()})
@@ -94,7 +94,10 @@ def sweep(tmp_path_factory):
     np.savez(dump, cam=r[:, 0].astype(int), t=r[:, 1].astype(np.int64), tag=r[:, 2].astype(int),
              k=r[:, 3].astype(int), u=r[:, 4], v=r[:, 5], jt=np.array(jt, np.int64), jq=np.array(jq))
     log = tmp / "log.jsonl"
-    log.write_text("".join(json.dumps(s) + "\n" for s in stops))
+    dry = [{**s_, "dry_run": True} for s_ in stops]                     # a dry run logged first, as step 91 might
+    log.write_text(json.dumps({"event": "start", "dry_run": True}) + "\n"
+                   + "".join(json.dumps(s_) + "\n" for s_ in dry)
+                   + json.dumps({"event": "start"}) + "\n" + "".join(json.dumps(s_) + "\n" for s_ in stops))
     plan = tmp / "poses.json"
     X0 = X @ rm.transform(rm.rot_axis((1, 0, 0), 0.01), (0.003, 0.002, -0.002))
     plan.write_text(json.dumps({"names": NAMES, "grid": {"cols": 2, "rows": 2, "tag_size": 0.045, "tag_spacing": 0.2},
@@ -109,6 +112,7 @@ def sweep(tmp_path_factory):
 def test_every_hold_is_found_and_matched(sweep):
     r, _, _ = sweep
     assert r["holds_matched"] == 23 and r["fit_holds"] == 15 and r["heldout_holds"] == 5
+    assert r["unmatched_stops"] == []
 
 
 def test_m0_misses_by_millimetres_and_m1_finds_the_camera_offset(sweep):
@@ -125,5 +129,14 @@ def test_repeats_slip_and_scale_are_small_on_a_clean_sweep(sweep):
     r, _, _ = sweep
     assert len(r["same_side_mm"]) == 2 and len(r["opposite_side_mm"]) == 1
     assert r["noise_floor_mm"] < 0.3 and r["slip_mm"] < 0.5 and r["slip_deg"] < 0.1
+    assert len(r["board_scale_pct"]) == 23
     assert all(abs(v["median_pct"]) < 0.2 for v in r["board_scale_by_cell"].values())
     assert r["encoder_side_mm_per_Nm"] is None                      # no MJCF given: not measured
+
+
+def test_only_the_last_real_runs_stops_are_read():
+    rows = [{"event": "start", "dry_run": True}, {"event": "stop", "stop": 0, "dry_run": True},
+            {"event": "start"}, {"event": "stop", "stop": 0, "tag": "aborted run"}, {"event": "abort"},
+            {"event": "start"}, {"event": "move"}, {"event": "stop", "stop": 0, "tag": "real"},
+            {"event": "stop", "stop": 1, "dry_run": True}]
+    assert step92.real_stops(rows) == [{"event": "stop", "stop": 0, "tag": "real"}]

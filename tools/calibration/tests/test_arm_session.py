@@ -80,12 +80,13 @@ def _plan(n=3):
                   "ramp_s": 6.0})
     stops.append({"kind": "return", "q_deg": start, "command_deg": (np.array(start) + [-4, 0, 0, -3, 0, 0, 0]).tolist(),
                   "ramp_s": 6.0})
-    return {"start_deg": start, "kp": 100.0, "hold_s": 3.0, "stops": stops}
+    lim = [[-170.0, -150, -60, -125, -150, -25, -150], [60.0, 10, 60, 0, 150, 95, 150]]   # commands >= 5 inside
+    return {"start_deg": start, "kp": 100.0, "hold_s": 3.0, "stops": stops, "limits_deg": lim}
 
 
-def _run(robot, plan, tmp_path, check=lambda q: (True, [])):
+def _run(robot, plan, tmp_path, check=lambda q: (True, []), path_check=lambda a, b: []):
     log = tmp_path / "log.jsonl"
-    s = run91.Session(plan, robot, check=check, log_path=log, tag="t", burst_n=10)
+    s = run91.Session(plan, robot, check=check, log_path=log, tag="t", burst_n=10, path_check=path_check)
     s.sweep()
     return [json.loads(x) for x in log.read_text().splitlines()]
 
@@ -102,7 +103,7 @@ def test_a_pose_reached_within_4_deg_is_kept_and_burst_once(tmp_path):
 
 
 def test_a_pose_missed_by_more_than_4_deg_is_corrected_once_by_the_miss(tmp_path):
-    robot = FakeRobot(off_deg=(-6.0, 0, 0, 0, 0, 0, 0))       # shoulder pitch stops 10 deg off the desired pose
+    robot = FakeRobot(off_deg=(-3.0, 0, 0, 0, 0, 0, 0))       # shoulder pitch stops 7 deg off the desired pose
     plan = _plan(1)
     log = _run(robot, plan, tmp_path)
     m = [r for r in log if r["event"] == "stop"][0]
@@ -136,27 +137,42 @@ def test_a_failed_remote_call_aborts(tmp_path):
 
 def test_dry_run_sends_nothing_and_logs_the_commands(tmp_path):
     log = tmp_path / "log.jsonl"
-    s = run91.Session(_plan(2), run91.DryRun(), check=lambda q: (True, []), log_path=log, tag="t", burst_n=10)
+    s = run91.Session(_plan(2), run91.DryRun(), check=lambda q: (True, []), log_path=log, tag="t", burst_n=10,
+                      path_check=lambda a, b: [])
     s.sweep()
     rows = [json.loads(x) for x in log.read_text().splitlines()]
     assert all(r.get("dry_run") for r in rows if r["event"] == "stop")
     assert any("dma_motor_motion" in r.get("command", "") for r in rows)
+    assert all(r["corrections"] == 0 for r in rows if r["event"] == "stop")      # it lands where the plan expects
+
+
+PLAN_START = [-42.6, -4.8, 47.5, -92.3, -135.7, 21.2, 19.8]
+GOOD_SNAP = {"q_deg": {**dict(zip(RIGHT_ARM, PLAN_START)), "NeckYaw": -0.4, "NeckPitch": 20.3,
+                       "LeftShoulderPitch": -11.3, "SpineYaw": 1.7, "LeftKneePitch": 32.8},
+             "joint_torques": {"RightShoulderPitch": -11.9, "RightElbowPitch": -15.0, "LeftKneePitch": -5.4},
+             "imu": {"Pelvis": {"accel_x": -0.72, "accel_y": 2.02, "accel_z": 9.53}},
+             "actuals_age_s": 0.01, "desired": {"age_s": 18000.0, "advancing": False}, "disk_free_gb": 234.0}
+PLAN_PRE = {"start_deg": PLAN_START, "neck_deg": {"NeckYaw": -0.4, "NeckPitch": 20.3},
+            "baseline_deg": {**dict(zip(RIGHT_ARM, PLAN_START)), "NeckYaw": -0.4, "NeckPitch": 20.3,
+                             "LeftShoulderPitch": -11.3, "SpineYaw": 1.7, "LeftKneePitch": 32.8},
+            "gravity_in_pelvis": [0.2073, 0.0743, -0.9755]}
+
+
+def test_prechecks_pass_on_the_robot_as_planned():
+    assert run91.prechecks(GOOD_SNAP, PLAN_PRE, need_gb=30.0) == []
 
 
 def test_prechecks_name_every_failure():
-    snap = {"q_deg": {**{n: 0.0 for n in RIGHT_ARM}, "NeckYaw": -0.4, "NeckPitch": 20.3},
-            "joint_torques": {"RightShoulderPitch": 0.2, "RightElbowPitch": 0.1, "LeftKneePitch": 12.0},
-            "desired": {"age_s": 5.0, "advancing": True}, "disk_free_gb": 10.0}
-    plan = {"start_deg": [-42.6, -4.8, 47.5, -92.3, -135.7, 21.2, 19.8],
-            "neck_deg": {"NeckYaw": -0.4, "NeckPitch": 20.3}}
-    why = run91.prechecks(snap, plan, need_gb=30.0)
-    text = " | ".join(why)
-    for word in ("/desired", "start pose", "motors", "LeftKneePitch", "disk"):
+    snap = json.loads(json.dumps(GOOD_SNAP))
+    snap["q_deg"].update({n: 0.0 for n in RIGHT_ARM})
+    snap["q_deg"]["LeftShoulderPitch"] = -30.0                     # the left arm moved since the plan
+    snap["joint_torques"].update({"RightShoulderPitch": 0.2, "RightElbowPitch": 0.1, "LeftKneePitch": 12.0})
+    snap["imu"]["Pelvis"] = {"accel_x": 0.0, "accel_y": 0.0, "accel_z": 9.81}   # gravity 12 deg off the plan's
+    snap.update({"actuals_age_s": 4.0, "desired": {"age_s": 5.0, "advancing": True}, "disk_free_gb": 10.0})
+    text = " | ".join(run91.prechecks(snap, PLAN_PRE, need_gb=30.0))
+    for word in ("/desired", "start pose", "motors", "LeftKneePitch", "disk", "LeftShoulderPitch", "gravity",
+                 "/actuals"):
         assert word in text
-    good = {"q_deg": {**dict(zip(RIGHT_ARM, plan["start_deg"])), "NeckYaw": -0.4, "NeckPitch": 20.3},
-            "joint_torques": {"RightShoulderPitch": -11.9, "RightElbowPitch": -15.0, "LeftKneePitch": -5.4},
-            "desired": {"age_s": 18000.0, "advancing": False}, "disk_free_gb": 234.0}
-    assert run91.prechecks(good, plan, need_gb=30.0) == []
 
 
 def test_a_plan_that_failed_its_gate_is_refused(tmp_path):
@@ -165,3 +181,63 @@ def test_a_plan_that_failed_its_gate_is_refused(tmp_path):
     assert run91.main(["--poses", str(p), "--urdf", "u", "--mjcf", "m", "--tag", "t", "--dry-run"]) == 3
     p.write_text(json.dumps({"gate": {"pass": True}, "stops": []}))
     assert run91.main(["--poses", str(p), "--urdf", "u", "--mjcf", "m", "--tag", "t", "--dry-run"]) == 3
+
+
+def test_a_correction_beyond_its_cap_or_the_ranges_is_not_sent(tmp_path):
+    """Review 2, S1: the wrist misses by 5 deg (over its 4 deg cap): skipped, nothing more sent for it."""
+    robot = FakeRobot(off_deg=(0, 0, 0, 0, 5.0, 0, 0))
+    log = _run(robot, _plan(1), tmp_path)
+    m = [r for r in log if r["event"] == "stop"][0]
+    assert m["status"] == "skipped" and m["corrections"] == 0 and any("cap" in w for w in m["why"])
+    assert len([c for c in robot.calls if c.startswith("dma_motor_motion")]) == 4     # fit, pre, repeat, return
+    plan = _plan(1)
+    plan["limits_deg"][1][0] = plan["stops"][0]["command_deg"][0] + 6.0     # shoulder pitch: 6 deg of room
+    robot = FakeRobot(off_deg=(-3.0, 0, 0, 0, 0, 0, 0))                     # correction +7 would leave 1 deg
+    second = tmp_path / "second"
+    second.mkdir()
+    m = [r for r in _run(robot, plan, second) if r["event"] == "stop"][0]
+    assert m["status"] == "skipped" and any("range" in w for w in m["why"])
+
+
+def test_each_joint_aborts_at_its_own_band(tmp_path):
+    robot = FakeRobot(off_deg=(0, 0, 0, 0, 0, 6.0, 0))           # wrist roll 6 deg off: past its 5 deg
+    with pytest.raises(run91.Abort, match="RightWristRoll"):
+        _run(robot, _plan(1), tmp_path)
+
+
+def test_the_path_from_where_the_arm_stands_is_checked_before_each_move(tmp_path):
+    robot = FakeRobot(off_deg=(1.0, 0, 0, 1.0, 0, 0, 0))
+    calls = []
+
+    def path_check(a, b):
+        calls.append((list(a), list(b)))
+        return ["path clearance 2.0 cm"] if len(calls) == 2 else []
+    with pytest.raises(run91.Abort, match="path"):
+        _run(robot, _plan(3), tmp_path, path_check=path_check)
+    assert len([c for c in robot.calls if c.startswith("dma_motor_motion")]) == 1
+    assert np.allclose(calls[1][0], np.array(_plan(3)["stops"][0]["command_deg"]) + [1, 0, 0, 1, 0, 0, 0])
+
+
+def test_result_lines_must_echo_the_target_and_be_finite():
+    t = [-50.0, -5, 45, -100, -135, 21, 20]
+    with pytest.raises(run91.Abort, match="target"):
+        run91.parse_result(result_text(t, t), JIDX, sent=np.array(t) + [0, 0, 0, 0.5, 0, 0, 0])
+    bad = result_text(t, t).replace("ss_err=0.000", "ss_err=nan", 1)
+    with pytest.raises(run91.Abort, match="finite"):
+        run91.parse_result(bad, JIDX, sent=np.array(t))
+
+
+def test_a_motion_command_outside_the_ranges_or_not_finite_is_refused():
+    lim = [[-170.0] * 7, [170.0] * 7]
+    with pytest.raises(run91.Abort):
+        run91.motion_command([float("nan")] + [0.0] * 6, 6.0, 3.0, 100.0, limits=lim)
+    with pytest.raises(run91.Abort):
+        run91.motion_command([171.0] + [0.0] * 6, 6.0, 3.0, 100.0, limits=lim)
+
+
+def test_a_real_run_will_not_append_to_an_existing_log(tmp_path):
+    p = tmp_path / "arm-session-t.jsonl"
+    p.write_text("{}\n")
+    with pytest.raises(SystemExit):
+        run91.log_path(str(p), "t", dry=False)
+    assert run91.log_path(None, "t", dry=True).name.endswith(".dry.jsonl")

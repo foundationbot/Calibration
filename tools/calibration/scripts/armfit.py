@@ -56,9 +56,13 @@ def rig_from_config(cfg, size=(1280, 800)) -> Rig:
                 for K, D in zip(cfg.K, cfg.D)], tuple(size))
 
 
-def holds_from_joints(t, q, min_s: float = 1.5, max_deg_s: float = 0.5, window_s: float = 0.02) -> list:
-    """[(t0, t1)] ns: stretches of at least min_s in which no arm joint moves faster than max_deg_s (speed by a
-    centred difference over window_s)."""
+def holds_from_joints(t, q, min_s: float = 1.5, max_deg_s: float = 0.3, window_s: float = 0.3,
+                      merge_deg: float = 0.05, merge_gap_s: float = 1.0) -> list:
+    """[(t0, t1)] ns: stretches of at least min_s in which no arm joint moves faster than max_deg_s, the speed by a
+    centred difference over window_s (at least the neighbouring samples). The window is wide because the encoders
+    step by ~0.01 deg from sample to sample (review 2, W3; necktake.py uses +-0.15 s too); the limit is under the
+    slowest move step 91 sends (a 4 deg correction in 6 s, 0.67 deg/s). Neighbouring stretches less than merge_gap_s
+    apart whose mean joints agree within merge_deg are one hold."""
     t, q = np.asarray(t, np.int64), np.asarray(q, float)
     half = window_s / 2 * 1e9
     i = np.arange(len(t))
@@ -68,18 +72,26 @@ def holds_from_joints(t, q, min_s: float = 1.5, max_deg_s: float = 0.5, window_s
     with np.errstate(invalid="ignore", divide="ignore"):
         speed = np.degrees(np.abs(q[hi] - q[lo]).max(axis=1)) / np.where(dt > 0, dt, np.nan)
     still = np.nan_to_num(speed, nan=np.inf) <= max_deg_s                        # unknown speed: not still
-    out, i = [], 0
-    while i < len(t):
-        if not still[i]:
-            i += 1
-            continue
-        j = i
-        while j + 1 < len(t) and still[j + 1]:
+    runs, j = [], 0
+    while j < len(t):
+        if not still[j]:
             j += 1
-        if (t[j] - t[i]) / 1e9 >= min_s:
-            out.append((int(t[i]), int(t[j])))
-        i = j + 1
-    return out
+            continue
+        k = j
+        while k + 1 < len(t) and still[k + 1]:
+            k += 1
+        runs.append([j, k])
+        j = k + 1
+    merged = []
+    for a, b in runs:
+        if merged:
+            pa, pb = merged[-1]
+            close = np.degrees(np.abs(q[pa:pb + 1].mean(0) - q[a:b + 1].mean(0)).max()) <= merge_deg
+            if (t[a] - t[pb]) / 1e9 <= merge_gap_s and close:
+                merged[-1][1] = b
+                continue
+        merged.append([a, b])
+    return [(int(t[a]), int(t[b])) for a, b in merged if (t[b] - t[a]) / 1e9 >= min_s]
 
 
 def frames_from_dump(d: dict, holds: list, names: list, arm_names, grid) -> list:
@@ -170,10 +182,11 @@ def fit(obs, arm, neck, rig, model: str, X0, holds=None, fixed=None) -> dict:
             "within_1px": float(np.mean(np.hypot(e[:, 0], e[:, 1]) <= 1.0)), "x": r.x.tolist()}
 
 
-def plate_offsets(obs, arm, neck, rig, params: dict, holds=None) -> dict:
+def plate_offsets(obs, arm, neck, rig, params: dict, holds=None, centre=(0.0495, 0.0495, 0.0)) -> dict:
     """{hold: (3,) mm}: per hold, the rigid correction E (plate frame) that makes T_T,tip(q_f + δ) · X · E fit the
-    hold's pixels in both cameras through ΔT; reported as where E moves the plate's centre, in the torso frame at the
-    hold's mean joints. Zero when the model is right; what a grasp would miss when it is not."""
+    hold's pixels in both cameras through ΔT; reported as where E moves the plate's centre (`centre`, board frame:
+    the mean of armplan.plate_points; the default is the 2x2 45 mm plate's), in the torso frame at the hold's mean
+    joints. Zero when the model is right; what a grasp would miss when it is not."""
     from scipy.optimize import least_squares
     out = {}
     hs = sorted({f.hold for f in obs}) if holds is None else holds
@@ -183,7 +196,7 @@ def plate_offsets(obs, arm, neck, rig, params: dict, holds=None) -> dict:
         if not sel:
             continue
         S = _Stack(sel, neck, rig)
-        c = np.mean(sel[0].P, axis=0) if len(sel[0].P) == 16 else np.array([0.0495, 0.0495, 0.0])
+        c = np.asarray(centre, float)
         r = least_squares(lambda e: (S.pixels(arm, X @ rm.transform(rm.exp_rot(e[:3]), e[3:]), dT, off)
                                      - S.uv).ravel(), np.zeros(6), loss="soft_l1", f_scale=LOSS_PX)
         E = rm.transform(rm.exp_rot(r.x[:3]), r.x[3:])
@@ -194,9 +207,9 @@ def plate_offsets(obs, arm, neck, rig, params: dict, holds=None) -> dict:
     return out
 
 
-def plate_errors(obs, arm, neck, rig, params: dict, holds=None) -> dict:
+def plate_errors(obs, arm, neck, rig, params: dict, holds=None, centre=(0.0495, 0.0495, 0.0)) -> dict:
     """{hold: mm}: the length of plate_offsets."""
-    return {h: float(np.linalg.norm(v)) for h, v in plate_offsets(obs, arm, neck, rig, params, holds).items()}
+    return {h: float(np.linalg.norm(v)) for h, v in plate_offsets(obs, arm, neck, rig, params, holds, centre).items()}
 
 
 def choose(heldout_rms_mm: dict) -> str:
@@ -217,32 +230,41 @@ def _triangulate(r0, r1, T01):
     return 0.5 * (r0 * s[:, None] + (o1 + d1 * u[:, None]))
 
 
+PAIR_NS = 2_000_000             # a camera-1 image within this of a camera-0 image is its stereo partner
+
+
 def board_scale_pct(obs, rig, grid, holds=None) -> dict:
-    """{hold: %}: per hold the plate's corners triangulated in stereo through the rig (pairs of a camera-0 and a
-    camera-1 image with the same stamp, corners seen in both) and their pairwise distances against the board's:
-    (scale - 1) * 100, the median over the hold's pairs. Positive = the plate measures too large = depth too far."""
+    """{hold: %}: per hold the plate's corners triangulated in stereo through the rig and their pairwise distances
+    against the board's: (scale - 1) * 100, the median over the hold's pairs. Positive = the plate measures too
+    large = depth too far. A camera-0 image pairs with the hold's camera-1 image nearest in time, within PAIR_NS (the
+    record app stamps each camera with its own capture time; step 15 pairs the same way)."""
     T01 = rm.inv(rig.T_HC[0]) @ rig.T_HC[1]
     by = {}
     for f in obs:
         if holds is None or f.hold in holds:
-            by.setdefault((f.hold, f.t), {})[f.cam] = f
+            by.setdefault(f.hold, ([], []))[f.cam].append(f)
     out = {}
-    for (h, _), pair in sorted(by.items()):
-        if 0 not in pair or 1 not in pair:
+    for h, (c0, c1) in sorted(by.items()):
+        if not c1:
             continue
-        a, b = pair[0], pair[1]
-        ka = {tuple(np.round(p, 6)): i for i, p in enumerate(a.P)}
-        common = [(ka[tuple(np.round(p, 6))], j) for j, p in enumerate(b.P) if tuple(np.round(p, 6)) in ka]
-        if len(common) < 4:
-            continue
-        ia, ib = np.array(common).T
-        r0 = lensmodel.unproject(rig.lens[0][0], rig.lens[0][1], a.uv[ia])
-        r1 = lensmodel.unproject(rig.lens[1][0], rig.lens[1][1], b.uv[ib])
-        X = _triangulate(r0, r1, T01)
-        Pb = a.P[ia]
-        i, j = np.triu_indices(len(ia), 1)
-        dm, dt = np.linalg.norm(X[i] - X[j], axis=1), np.linalg.norm(Pb[i] - Pb[j], axis=1)
-        out.setdefault(h, []).append((dm.sum() / dt.sum() - 1.0) * 100.0)
+        t1 = np.array([f.t for f in c1], np.int64)
+        for a in c0:
+            j = int(np.argmin(np.abs(t1 - a.t)))
+            if abs(int(t1[j]) - a.t) > PAIR_NS:
+                continue
+            b = c1[j]
+            ka = {tuple(np.round(p, 6)): i for i, p in enumerate(a.P)}
+            common = [(ka[tuple(np.round(p, 6))], k) for k, p in enumerate(b.P) if tuple(np.round(p, 6)) in ka]
+            if len(common) < 4:
+                continue
+            ia, ib = np.array(common).T
+            r0 = lensmodel.unproject(rig.lens[0][0], rig.lens[0][1], a.uv[ia])
+            r1 = lensmodel.unproject(rig.lens[1][0], rig.lens[1][1], b.uv[ib])
+            X = _triangulate(r0, r1, T01)
+            Pb = a.P[ia]
+            i, k = np.triu_indices(len(ia), 1)
+            dm, dt = np.linalg.norm(X[i] - X[k], axis=1), np.linalg.norm(Pb[i] - Pb[k], axis=1)
+            out.setdefault(h, []).append((dm.sum() / dt.sum() - 1.0) * 100.0)
     return {h: float(np.median(v)) for h, v in out.items()}
 
 
@@ -274,6 +296,8 @@ def verdict(d: dict) -> dict:
     """Decision 5 (rev 2): the session valid (noise floor <= 1 mm; plate slip <= 1 mm / 0.2 deg), then M0 within
     3 mm = the URDF suffices; else the chosen model within 3 mm = calibrated, within 5 mm = acceptable, beyond =
     the model misses something."""
+    if not all(np.isfinite([d["slip_mm"], d["slip_deg"], d["noise_floor_mm"]])):
+        return {"verdict": "INCONCLUSIVE", "model": None}          # not measured is not passed (review 2, W1)
     if d["slip_mm"] > 1.0 or d["slip_deg"] > 0.2:
         return {"verdict": "VOID (plate slipped)", "model": None}
     if d["noise_floor_mm"] > 1.0:

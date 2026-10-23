@@ -20,7 +20,7 @@ def main():
     s = dma_ipc.SensorQueue("/actuals", wait=False).read_latest()
     if s is None:
         raise SystemExit("/actuals not published")
-    out = {"t_ns": s.timestamp_ns, "names": names,
+    out = {"t_ns": s.timestamp_ns, "actuals_age_s": (time.time_ns() - s.timestamp_ns) / 1e9, "names": names,
            "q_deg": {n: math.degrees(float(s.joint_positions[i])) for i, n in enumerate(names)},
            "joint_torques": {n: float(s.joint_torques[i]) for i, n in enumerate(names)}, "imu": {}}
     for k, n in enumerate(imus):

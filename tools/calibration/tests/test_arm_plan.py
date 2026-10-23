@@ -309,3 +309,34 @@ def test_verify_checks_every_stop_and_path_and_names_the_repeats_to_drop():
     assert drop == {0}                                     # the pre-pose of pose 0's repeat failed
     assert any("stop 1 (pre" in p for p in problems) and any("stop 3 (heldout" in p for p in problems)
     assert not any("stop 4" in p for p in problems)        # the return is the start pose: its path only
+
+
+def test_a_foreign_tag_next_to_the_plate_does_not_move_its_corners():
+    """Review 2, W6: painting other tags out moved a plate corner by 4.3 px when a foreign tag sat 4 px away."""
+    cv2 = pytest.importorskip("cv2")
+    d = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36h11)
+    img = np.full((800, 1280), 255, np.uint8)
+    pl = _paste_grid(img, 2, 2, 90, 18, 250, 400, range(4))
+    ref = GRID.detect(img)
+    x1, y1 = pl[1]
+    img[y1 + 20:y1 + 80, x1 + 94:x1 + 154] = cv2.rotate(cv2.aruco.generateImageMarker(d, 20, 60, borderBits=2),
+                                                        cv2.ROTATE_180)
+    found = armplan.detect_plate(GRID, img)
+    assert set(found) == set(ref)
+    assert max(np.hypot(*(np.array(found[k]) - np.array(ref[k]))) for k in ref) < 0.05
+
+
+def test_an_l_of_plate_tags_beats_a_row_of_board_tags():
+    """Review 2, W7: a 3x3 plate showing 3 tags in an L, and a 7x5 board (same id range, same spacing ratio) whose
+    tags 0, 1, 2 sit in one row: the chosen set must span two rows and two columns of the plate."""
+    cv2 = pytest.importorskip("cv2")
+    g3 = rigcfg.AprilGrid(3, 3, 0.03, 0.2)
+    img = np.full((800, 1280), 255, np.uint8)
+    _paste_grid(img, 7, 5, 50, 10, 100, 20, range(35))
+    pl = np.full((400, 400), 255, np.uint8)
+    _paste_grid(pl, 3, 3, 80, 16, 40, 40, [0, 1, 3])
+    H = np.array([[0.9, 0.15, 0], [-0.05, 0.85, 0], [0.0004, 0.0002, 1.0]])
+    img[380:780, 700:1100] = cv2.warpPerspective(pl, H, (400, 400), borderValue=255)
+    found = armplan.detect_plate(g3, img)
+    assert sorted({t for t, _ in found}) == [0, 1, 3]
+    assert all(u > 690 and v > 370 for (_, _), (u, v) in found.items())
