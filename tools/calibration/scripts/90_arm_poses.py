@@ -221,8 +221,11 @@ def parse_freeze(items) -> dict:
 
 
 def observable_offsets(frozen: dict) -> tuple:
-    """armplan.INNER without the frozen joints: a joint that never moves has its zero offset absorbed by X."""
-    return tuple(j for j in ap.INNER if j not in frozen)
+    """The zero offsets one neck pose can see: the moving joints but the first (its offset is a fixed rotation of the
+    whole arm in the torso: ΔT) and the last (a fixed rotation of everything after it: X); a frozen joint never
+    moves, so its offset is X's too. No frozen joint: armplan.INNER."""
+    moving = [j for j in range(len(armchain.RIGHT_ARM)) if j not in frozen]
+    return tuple(moving[1:-1])
 
 
 def sample(arm, n: int, rng, keep_in_deg=KEEP_IN_DEG, frozen=None, lower=None, upper=None) -> np.ndarray:

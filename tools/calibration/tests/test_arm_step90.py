@@ -146,6 +146,7 @@ def test_frozen_joints_are_sampled_fixed_and_leave_the_offsets():
     assert frozen == {5: np.radians(15.4), 6: np.radians(-56.25)}
     Q = step90.sample(arm, 50, np.random.default_rng(0), frozen=frozen)
     assert np.allclose(Q[:, 5], np.radians(15.4)) and np.allclose(Q[:, 6], np.radians(-56.25))
-    assert step90.observable_offsets(frozen) == (1, 2, 3, 4)
+    assert step90.observable_offsets(frozen) == (1, 2, 3)        # wrist yaw is now the last joint that moves
+    assert step90.observable_offsets({}) == (1, 2, 3, 4, 5)
     with pytest.raises(SystemExit):
         step90.parse_freeze(["RightElbow=3"])
