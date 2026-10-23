@@ -183,6 +183,7 @@ def test_reports_are_strict_json_when_a_hold_has_no_rms(tmp_path, monkeypatch):
     monkeypatch.setattr(m66.sf, "hold_rms", lambda *a: {h: (np.inf if h == 3 else v) for h, v in real(*a).items()})
     fit = json.loads((P / "fit.json").read_text())
     fit["dropped_holds"] = [[7, None]]
+    fit["dropped_far_holds"] = [[9, 1.52]]                # step 45's depth gate (22 Oct): listed with its depth
     report = tmp_path / "fit-report.json"
     report.write_text(json.dumps(fit))
     cal = S.write_calibration(tmp_path / "true.json", "KB4T", [S.I0, S.I1], S.C_TRUE)
@@ -194,5 +195,6 @@ def test_reports_are_strict_json_when_a_hold_has_no_rms(tmp_path, monkeypatch):
     rep = json.loads((tmp_path / "v" / "report.json").read_text(), parse_constant=refuse)
     assert [(f["hold"], f["rms_px"]) for f in rep["test_flagged"]] == [(3, None)]
     md = (tmp_path / "v" / "report.md").read_text()
-    assert "| fit | 7 | - | no corner within 20 px | dropped by step 45 |" in md
+    assert "| fit | 7 | - | no corner within 20 px | dropped by step 45: rms |" in md
+    assert "| fit | 9 | - |" in md and "| dropped by step 45: board at 1.52 m |" in md
     assert "| no corner within 20 px | flagged: board or calibration bad here |" in md
