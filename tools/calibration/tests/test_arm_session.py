@@ -251,3 +251,22 @@ def test_a_stop_aborts_at_its_own_band(tmp_path):
     robot = FakeRobot(off_deg=(3.0, 0, 0, 0.0, 0, 0, 0))      # elbow: command -3 + 0 = 3 deg short of desired
     with pytest.raises(run91.Abort, match=r"RightElbowPitch.*band 2\.5"):
         _run(robot, plan, tmp_path)
+
+
+def test_a_target_at_a_rounding_half_still_echoes(tmp_path):
+    """The dry run of 23 Oct 08:50: the command printed 120.255 as 120.25 while the echo check expected 120.26."""
+    plan = _plan(1)
+    for s in plan["stops"]:
+        s["command_deg"][6] = 120.255
+        s["q_deg"][6] = 120.255
+    robot = FakeRobot(off_deg=(1.0, 0, 0, 1.0, 0, 0, 0))
+    log = _run(robot, plan, tmp_path)
+    assert [r for r in log if r["event"] == "stop"][0]["status"] == "ok"
+
+
+def test_a_plan_made_with_another_mujoco_is_refused(tmp_path):
+    """23 Oct 09:10: MuJoCo 3.7 returned 0 for a box-box distance that 3.17 (step 90's) measured as 4 cm; the
+    runner's path checks must use the physics the plan was checked with."""
+    p = tmp_path / "poses.json"
+    p.write_text(json.dumps({"gate": {"pass": True}, "stops": [{"kind": "fit"}], "inputs": {"mujoco": "0.0.1"}}))
+    assert run91.main(["--poses", str(p), "--urdf", "u", "--mjcf", "m", "--tag", "t", "--dry-run"]) == 3

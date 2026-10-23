@@ -382,7 +382,8 @@ def run(a) -> dict:
     return {
         "step": "90_arm_poses", "joints": list(armchain.RIGHT_ARM), "names": names, "kp": KP, "hold_s": a.hold_s,
         "inputs": {"urdf": sha(a.urdf)[:12], "mjcf": sha(a.mjcf)[:12], "config": sha(a.config)[:12],
-                   "snapshot": sha(a.snapshot)[:12], "palm_corners": sha(a.palm_corners)[:12], "seed": a.seed},
+                   "snapshot": sha(a.snapshot)[:12], "palm_corners": sha(a.palm_corners)[:12], "seed": a.seed,
+                   "mujoco": __import__("mujoco").__version__},
         "neck_deg": {"NeckYaw": snap["q_deg"]["NeckYaw"], "NeckPitch": snap["q_deg"]["NeckPitch"]},
         "start_deg": np.round(np.degrees(start), 3).tolist(),
         "limits_deg": [np.degrees(chk.lower).round(2).tolist(), np.degrees(chk.upper).round(2).tolist()],

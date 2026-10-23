@@ -159,7 +159,8 @@ class Session:
             self.remote.landing = desired
         t0 = time.time_ns()
         out = self._call(cmd, ramp_s + self.hold + 30.0)
-        reached = parse_result(out, self.jidx, sent=np.round(np.asarray(target, float), 2))
+        sent = np.array([float(kv.split("=")[1]) for kv in cmd.split('"')[1].split(",")])   # exactly as printed
+        reached = parse_result(out, self.jidx, sent=sent)
         self.at = reached
         self._log(event="move", stop=i, command=cmd, t0_ns=t0, target_deg=list(map(float, target)),
                   reached_deg=reached.tolist(), result="\n".join(ln for ln in out.splitlines() if "RESULT" in ln))
@@ -361,6 +362,11 @@ def main(argv=None) -> int:
     plan = json.loads(Path(a.poses).read_text())
     if not plan.get("gate", {}).get("pass") or not plan.get("stops"):
         print(f"{a.poses}: its gate did not pass (or it has no stops); step 91 runs only a list that passed step 90")
+        return 3
+    import mujoco
+    if plan.get("inputs", {}).get("mujoco") != mujoco.__version__:
+        print(f"MuJoCo {mujoco.__version__} here, {plan.get('inputs', {}).get('mujoco')} in step 90: the path checks must "
+              "use the same physics (3.7 measured a box-box distance as 0 that 3.17 measured as 4 cm)")
         return 3
     for k, f in (("urdf", a.urdf), ("mjcf", a.mjcf)):
         if hashlib.sha256(Path(f).read_bytes()).hexdigest()[:12] != plan["inputs"][k]:
