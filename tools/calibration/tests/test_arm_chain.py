@@ -97,15 +97,15 @@ def test_a_broken_chain_is_refused(syn):
         armchain.ArmChain(syn, ("B", "C"), base="Torso")
 
 
-def _armfk_22oct(sp, sr, sy, ep, wy, wr, gy):
-    """arm-session/tools/armfk.py's arm(), 22 Oct, written out by hand from the URDF numbers: the gripper link in
-    the torso."""
+def _armfk_816(sp, sr, sy, ep, wy, wr, gy):
+    """arm-session/tools/armfk.py's arm(), written out by hand from the URDF numbers with #816's RightShoulderPitch
+    origin (measured 23 Oct; was -0.02 -0.1 0.214): the gripper link in the torso."""
     def T(xyz=(0, 0, 0), R=np.eye(3)):
         M = np.eye(4); M[:3, :3] = R; M[:3, 3] = xyz; return M  # noqa: E702
     def Rx(a): c, s = np.cos(a), np.sin(a); return np.array([[1, 0, 0], [0, c, -s], [0, s, c]])  # noqa: E702
     def Ry(a): c, s = np.cos(a), np.sin(a); return np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]])  # noqa: E702
     def Rz(a): c, s = np.cos(a), np.sin(a); return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])  # noqa: E702
-    M = T((-0.02, -0.1, 0.214), Rx(-0.698132)) @ T(R=Ry(sp))
+    M = T((-0.015, -0.1034, 0.2823), Rx(-0.698132)) @ T(R=Ry(sp))
     M = M @ T((0, -0.15676, -0.013), Rx(0.698132)) @ T(R=Rx(sr))
     M = M @ T((0, -0.035, 0)) @ T(R=Rz(sy))
     M = M @ T((0.015, 0, -0.3127)) @ T(R=Ry(ep))
@@ -117,7 +117,7 @@ def _armfk_22oct(sp, sr, sy, ep, wy, wr, gy):
 def test_phantom_right_arm_matches_the_hand_written_fk():
     c = armchain.ArmChain(URDF, armchain.RIGHT_ARM, base="Torso")
     for q in np.random.default_rng(2).uniform(-1.5, 1.5, (6, 7)):
-        assert np.allclose(c.T_base_tip(q), _armfk_22oct(*q), atol=1e-12)
+        assert np.allclose(c.T_base_tip(q), _armfk_816(*q), atol=1e-12)
     assert c.tip == "RightGripperYawLink"
     assert np.isclose(c.lower[3], -2.35619) and np.isclose(c.upper[3], 0.174532925)
 
