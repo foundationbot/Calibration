@@ -329,8 +329,8 @@ def run(a) -> dict:
     info = ap.information(arm, cams, X0, Q, P, SIGMA_PX, offsets=offsets)
     prior = np.diag(np.r_[[1 / 0.1 ** 2] * 3, [1 / 0.05 ** 2] * 3, [1 / 0.1 ** 2] * 3, [1 / 0.05 ** 2] * 3,
                           [1 / 0.1 ** 2] * len(offsets)])
-    rules = dict(min_per_cell=2, min_bottom=4, min_per_third=5)
-    sel = ap.select(info, cell, third, Q, n_pick=N_POSES, prior=prior, **rules)
+    rules = dict(min_per_cell=a.min_per_cell, min_bottom=a.min_bottom, min_per_third=a.min_per_third)
+    sel = ap.select(info, cell, third, Q, n_pick=a.n_poses, prior=prior, **rules)
     Qs = Q[sel]
 
     # order on the cheap path check, then verify every stop and path in full; a failing tour edge is forbidden
@@ -352,19 +352,19 @@ def run(a) -> dict:
         return (lambda q: pd[key(np.asarray(q, float))]), (lambda x, y: ld[key(np.asarray(x, float),
                                                                                  np.asarray(y, float))])
 
-    forbid, repeatable, problems, n_opp = set(), set(range(len(Qs))), [], N_OPP
+    forbid, repeatable, problems, n_opp = set(), set(range(len(Qs))), [], a.n_opp
     for it in range(4 * len(Qs)):
         order = ap.tour(Qs, start, allowed=lambda i, j: (i, j) not in forbid and not chk.path(
             start if i < 0 else Qs[i], start if j < 0 else Qs[j], band=False))
         st = None
-        for n_opp in range(N_OPP, -1, -1):                   # opposite-side repeats (play) give way first
+        for n_opp in range(a.n_opp, -1, -1):                 # opposite-side repeats (play) give way first
             try:
-                st = ap.stops(Qs, order, start, n_same=N_SAME, n_opp=n_opp, repeatable=repeatable, pre="inline")
+                st = ap.stops(Qs, order, start, n_same=a.n_same, n_opp=n_opp, repeatable=repeatable, pre="inline")
                 break
             except ValueError:
                 continue
         if st is None:
-            problems = [f"no room for {N_SAME} same-side repeats among the poses that can be repeated safely"]
+            problems = [f"no room for {a.n_same} same-side repeats among the poses that can be repeated safely"]
             break
         problems, drop = ap.verify(st, start, *lookups(st))
         print(f"verify {it}: {len(problems)} problems, {len(repeatable)} repeatable, {n_opp} opposite repeats",
@@ -386,6 +386,10 @@ def run(a) -> dict:
     fit_idx = [s["pose"] for s in st if s["kind"] == "fit"]
     sig = ap.plate_sigma_mm(cams, ap.plate_in_torso(arm, X0, Qs), P, SIGMA_PX)
     gate = ap.list_gate(info[np.array(sel)[fit_idx]].sum(0), sig, offsets=offsets)
+    if a.x_nuisance:                       # an add-on sweep: its plate placement X is fitted per sweep, not reported
+        gate["x_not_gated"] = [f for f in gate["fails"] if f.startswith("X ")]
+        gate["fails"] = [f for f in gate["fails"] if not f.startswith("X ")]
+        gate["pass"] = not gate["fails"] and gate.get("sigma") != {}
     gate["unsafe"] = problems
     gate["coverage"] = ap.coverage(cell, third, sel, **rules)
     gate["pass"] = gate["pass"] and not problems and not gate["coverage"]
@@ -430,7 +434,7 @@ def run(a) -> dict:
         "selected_cells": {int(c): int((cell[sel] == c).sum()) for c in range(9)},
         "selected_thirds": {int(t): int((third[sel] == t).sum()) for t in range(3)},
         "orientation_pairwise_deg": {"min": float(min(ang)), "median": float(np.median(ang))},
-        "repeats": {"same": N_SAME, "opposite": n_opp, "pre": "inline: the tour's own moves"},
+        "repeats": {"same": a.n_same, "opposite": n_opp, "pre": "inline: the tour's own moves"},
         "gate": gate, "motion_s": round(total, 1), "stops": st,
     }
 
@@ -469,6 +473,14 @@ def main(argv=None) -> int:
     p.add_argument("--surface-step", type=float, default=0.008, help="mesh-surface sampling for the clearance, m")
     p.add_argument("--workers", type=int, default=1, help="processes for the per-pose and path checks")
     p.add_argument("--freeze", action="append", default=[], help="<right-arm joint>=<deg>, held for the whole sweep")
+    p.add_argument("--n-poses", type=int, default=N_POSES)
+    p.add_argument("--n-same", type=int, default=N_SAME, help="same-side repeats (the noise floor)")
+    p.add_argument("--n-opp", type=int, default=N_OPP, help="opposite-side repeats (play)")
+    p.add_argument("--min-per-cell", type=int, default=2)
+    p.add_argument("--min-bottom", type=int, default=4)
+    p.add_argument("--min-per-third", type=int, default=5)
+    p.add_argument("--x-nuisance", action="store_true", help="an add-on sweep fitted jointly with others, each with its "
+                   "own plate placement X: X's precision is not gated (dT, offsets and every safety check still are)")
     p.add_argument("--feasible-cache", default=None, help="npz to keep the feasible set in (reused if inputs match)")
     p.add_argument("--out", required=True)
     a = p.parse_args(argv)
