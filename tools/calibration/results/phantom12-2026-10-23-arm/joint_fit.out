@@ -1,0 +1,13 @@
+neck pitch deg: 1023c 24.0, 1023d 28.4
+1023c alone: 8 fit holds | rms 1.89 px | dT xyz mm [-26.5, 5.3, -8.7] 0.27 deg | leave-one-out RMS 2.63 max 5.71 mm | repeats/held-out (unfitted) [0.39, 0.97, 2.71, 1.12]
+1023d alone: 6 fit holds | rms 1.75 px | dT xyz mm [-25.4, 7.6, -6.2] 0.36 deg | leave-one-out RMS 1.85 max 3.02 mm | repeats/held-out (unfitted) [1.25, 3.51]
+joint: 14 fit holds | rms 2.95 px | dT xyz mm [-27.7, 3.9, -7.1] 0.41 deg | leave-one-out RMS 4.98 max 11.70 mm | repeats/held-out (unfitted) [2.36, 4.23, 6.01, 4.23, 2.32, 5.87]
+joint M0 (no dT) rms 13.74 px
+dT difference between sessions: 3.6 mm, 0.45 deg
+joint dT 4x4: [[0.999979, -0.002019, 0.006127, -0.027712], [0.002038, 0.999993, -0.003179, 0.003926], [-0.006121, 0.003192, 0.999976, -0.007084], [0.0, 0.0, 0.0, 1.0]]
+--- with the MJCF shoulder/neck origins
+joint M0 (no dT) rms 3.18 px
+1023c alone: 8 fit holds | rms 1.89 px | dT xyz mm [-1.4, 2.1, 0.7] 0.27 deg | leave-one-out RMS 2.63 max 5.71 mm | repeats/held-out (unfitted) [0.39, 0.97, 2.71, 1.12]
+1023d alone: 6 fit holds | rms 1.75 px | dT xyz mm [-0.7, 4.3, 3.0] 0.36 deg | leave-one-out RMS 1.85 max 3.02 mm | repeats/held-out (unfitted) [1.25, 3.51]
+joint: 14 fit holds | rms 2.95 px | dT xyz mm [-3.1, 0.8, 2.1] 0.41 deg | leave-one-out RMS 4.98 max 11.70 mm | repeats/held-out (unfitted) [2.36, 4.23, 6.01, 4.23, 2.32, 5.87]
+dT difference between sessions: 3.3 mm, 0.45 deg

@@ -46,3 +46,23 @@ Files:
 - `still_refit.py`: the still-frame refit with leave-one-out;
 - `poses-1023c.json`: the plan (step 90);
 - `arm-session-1023c.jsonl`: the step-91 log.
+
+## Update, 23 Oct ~17:30: sweep 1023d (head pitch 28.4°) and both sweeps together (`joint_fit.py`, `joint_fit.out`)
+
+1023d stopped at stop 13 (the fifth cable drop). 6 fit holds plus 2 repeats were kept.
+
+| fit | dT (x, y, z) mm, angle | leave-one-out RMS / max |
+|---|---|---|
+| 1023c alone (pitch 24°) | (−26.5, +5.3, −8.7), 0.27° | 2.6 / 5.7 mm |
+| 1023d alone (pitch 28°) | (−25.4, +7.6, −6.2), 0.36° | 1.9 / 3.0 mm |
+| both, one dT | (−27.7, +3.9, −7.1), 0.41° | 5.0 / 11.7 mm |
+| **URDF with the MJCF shoulder/neck origins (NeckPitch y kept 0.01), no dT** | none | M0 3.2 px (URDF as is: 13.7 px) |
+| the same, with dT | (−1…−3, +1…+4, +1…+3), 0.3-0.4° | as above |
+
+- **The URDF's shoulder and neck origins carry ~90 % of the error.** With the MJCF's values (keeping NeckPitch
+  y = 0.01) the remaining correction is ≤ ~5 mm / 0.4°.
+- A residual ~0.4° differs between head pitch 24° and 28°, so one fixed dT does not cover both head angles to
+  3 mm. Pinning that down (a neck-pitch-dependent term) needs more head angles: a working arm.
+- **Recommended:** fix the URDF's RightShoulderPitch / NeckYaw / NeckPitch origins to
+  `-0.015 -0.1034 0.2823` / `-0.015 0 0.3815` / `0.025 0.01 0.1927`. Then, at a given head angle, apply that
+  session's small dT for ~2-3 mm.
