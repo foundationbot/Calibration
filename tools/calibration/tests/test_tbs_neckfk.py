@@ -58,14 +58,14 @@ def test_chain_reads_the_two_neck_joints():
 def test_zero_pose_is_the_sum_of_the_joint_offsets():
     T = neckfk.NeckChain(URDF).T_TB(0.0, 0.0)
     assert np.allclose(T[:3, :3], np.eye(3))
-    assert np.allclose(T[:3, 3], [0.005 + 0.025, 0.0 + 0.01, 0.307953 + 0.207252])
+    assert np.allclose(T[:3, 3], [-0.015 + 0.025, 0.0 + 0.01, 0.3815 + 0.1927])
 
 
 def test_yaw_comes_before_pitch():
     """Yaw turns the pitch joint's offset about the torso's z; pitch turns about Head y."""
     c = neckfk.NeckChain(URDF)
     T = c.T_TB(0.4, 0.3)
-    assert np.allclose(T[:3, 3], [0.005, 0, 0.307953] + rm.rot_axis([0, 0, 1], 0.4) @ [0.025, 0.01, 0.207252])
+    assert np.allclose(T[:3, 3], [-0.015, 0, 0.3815] + rm.rot_axis([0, 0, 1], 0.4) @ [0.025, 0.01, 0.1927])
     assert np.allclose(T[:3, :3], rm.rot_axis([0, 0, 1], 0.4) @ rm.rot_axis([0, 1, 0], 0.3))
     assert np.allclose(c.T_TB(0, 0)[:3, :3].T @ c.T_TB(0, 0.3)[:3, :3], rm.rot_axis([0, 1, 0], 0.3))
 
