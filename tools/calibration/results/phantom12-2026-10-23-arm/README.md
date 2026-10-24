@@ -66,3 +66,25 @@ Files:
 - **Recommended:** fix the URDF's RightShoulderPitch / NeckYaw / NeckPitch origins to
   `-0.015 -0.1034 0.2823` / `-0.015 0 0.3815` / `0.025 0.01 0.1927`. Then, at a given head angle, apply that
   session's small dT for ~2-3 mm.
+
+## Update, 23 Oct ~18:00: the plate moved between the sweeps (`tilt_spread.py`, `joint2.py`, `joint2.out`)
+
+- Within each sweep the plate's fitted tilt is pinned to ≤ 0.36° (leave one pose out). Between 1023c and 1023d it
+  differs by 2.5-3.3°: the plate moved. The user confirmed the tape was not tight; the arm dropped limp in a fault
+  between the sweeps. The centre moved ~1 mm.
+- The joint fit above used one X for both sweeps, so its "one dT can't cover both head angles" came from the plate
+  moving. With **a separate X per sweep and one shared dT** (unseen poses: leave-one-out plus the unfitted
+  repeats, n = 20):
+
+| chain | dT | RMS | max | within 5 mm |
+|---|---|---|---|---|
+| URDF as is | none | 15.6 mm | 29.4 mm | 1/20 |
+| URDF as is | (−26.4, +5.5, −7.9) mm, 0.22° | 2.6 mm | 5.6 mm | 17/20 |
+| **fixed origins** | none | **3.9 mm** | 6.7 mm | 16/20 |
+| **fixed origins** | **(−1.4, +2.3, +1.4) mm, 0.22°** | **2.6 mm** | 5.6 mm | 17/20 |
+
+**Bottom line (head pitch 24° and 28°):**
+- fix the three URDF origins: ~4 mm RMS;
+- add the small shared dT: ~2.6 mm RMS, worst 5.6 mm.
+- The 5 mm goal is met on RMS; 3/20 poses exceed it, consistent with the plate rocking within a sweep.
+- Not reviewed independently yet (the method was, earlier today).

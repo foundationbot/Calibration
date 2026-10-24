@@ -1,0 +1,4 @@
+URDF as is, no dT: rms 13.29 px | dT [0.0, 0.0, 0.0] mm 0.00 deg | unseen poses (n=20): RMS 15.6 max 29.4 mm, within 5 mm 1/20
+URDF as is, shared dT: rms 1.88 px | dT [-26.4, 5.5, -7.9] mm 0.22 deg | unseen poses (n=20): RMS 2.6 max 5.6 mm, within 5 mm 17/20
+fixed origins, no dT: rms 2.38 px | dT [0.0, 0.0, 0.0] mm 0.00 deg | unseen poses (n=20): RMS 3.9 max 6.7 mm, within 5 mm 16/20
+fixed origins, shared dT: rms 1.88 px | dT [-1.4, 2.3, 1.4] mm 0.22 deg | unseen poses (n=20): RMS 2.6 max 5.6 mm, within 5 mm 17/20
