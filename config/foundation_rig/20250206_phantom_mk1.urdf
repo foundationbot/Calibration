@@ -5,7 +5,7 @@
 	
     <!-- NECK JOINTS -->
     <joint name="NeckYaw" type="revolute">
-        <origin rpy="0 0 0" xyz="0.005 0 0.307953"/> <!-- placeholder for the joint location -->
+        <origin rpy="0 0 0" xyz="-0.015 0 0.3815"/> <!-- measured on phantom12 23 Oct 2026 (camera-to-arm sweeps; matches the MJCF's 2026-07-11 skeleton value); was 0.005 0 0.307953 -->
         <axis xyz="0 0 1"/>
         <parent link="Torso"/>
         <child link="NeckYawLink"/>
@@ -13,7 +13,7 @@
         <dynamics damping="0.05" friction="0.0"/>
     </joint>
     <joint name="NeckPitch" type="revolute">
-        <origin rpy="0 0 0" xyz="0.025 0.01 0.207252" />
+        <origin rpy="0 0 0" xyz="0.025 0.01 0.1927" /> <!-- z from the MJCF skeleton value, y kept (the 23 Oct fit supports 0.01, not the MJCF's 0); was 0.025 0.01 0.207252 -->
         <axis xyz="0 1 0" />
         <parent link="NeckYawLink" />
         <child link="Head" />
@@ -740,7 +740,7 @@
 
     <!-- Left Arm -->
     <joint name="LeftShoulderPitch" type="revolute">
-        <origin xyz="-0.02 0.1 0.214" rpy="0.698132 0.0 0.0"/>
+        <origin xyz="-0.015 0.1034 0.2823" rpy="0.698132 0.0 0.0"/> <!-- the right shoulder's 23 Oct value mirrored, as the MJCF has it (NOT measured on the left arm); was -0.02 0.1 0.214 -->
         <axis xyz="0.0 1.0 0.0"/>
         <parent link="Torso"/>
         <child link="LeftShoulderPitchLink"/>
@@ -1004,7 +1004,7 @@
 
     <!-- Right Arm -->
     <joint name="RightShoulderPitch" type="revolute">
-        <origin xyz="-0.02 -0.1 0.214" rpy="-0.698132 0.0 0.0"/>
+        <origin xyz="-0.015 -0.1034 0.2823" rpy="-0.698132 0.0 0.0"/> <!-- measured on phantom12 23 Oct 2026 (matches the MJCF); was -0.02 -0.1 0.214 -->
         <axis xyz="0.0 1.0 0.0"/>
         <parent link="Torso"/>
         <child link="RightShoulderPitchLink"/>
