@@ -267,6 +267,7 @@ def test_a_target_at_a_rounding_half_still_echoes(tmp_path):
 def test_a_plan_made_with_another_mujoco_is_refused(tmp_path):
     """23 Oct 09:10: MuJoCo 3.7 returned 0 for a box-box distance that 3.17 (step 90's) measured as 4 cm; the
     runner's path checks must use the physics the plan was checked with."""
+    pytest.importorskip("mujoco")
     p = tmp_path / "poses.json"
     p.write_text(json.dumps({"gate": {"pass": True}, "stops": [{"kind": "fit"}], "inputs": {"mujoco": "0.0.1"}}))
     assert run91.main(["--poses", str(p), "--urdf", "u", "--mjcf", "m", "--tag", "t", "--dry-run"]) == 3
