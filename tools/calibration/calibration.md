@@ -160,6 +160,47 @@ so candidates are compared on identical data: `depth_scale2.py <camchain> 4 <out
 with distance means a disparity offset (a tiny relative yaw between the cameras), and appears
 when the fit is pulled by data the model cannot fit (§8.2).
 
+## 5b. Drift check (step 67): has the head moved since its calibration?
+
+**Why:** on phantom12, camera 1 sat rolled −0.36° against its calibration from 19 Oct (mid lens take) to 21 Oct and
+nobody noticed for two days. Depth read ≈ 2 % per 100 px too near below the image centre. Then it went back by
+itself. Cause unknown (`docs/superpowers/plans/2026-10-21-phantom12-fit-c.md`, on the stereo-depth-eval branch).
+
+**When to run it:**
+- after anyone handles the head;
+- after a power-up;
+- before a grasp session that trusts depth;
+- before deploying any calibration.
+
+**How:**
+1. Put the board on its stand ~0.7-1.0 m from the head, roughly centred in the image, and keep it still.
+2. Keep the board within ~150 px sideways and ~100 px vertically of the image centre (off-centre a lens
+   mismatch reads as pitch). Record 30 s: the record pod, as in the Fit C plan's Task 1, with the user's yes.
+3. Run:
+   ```
+   python 67_drift_check.py --session <take>/session.mcap --config /etc/phantomos/okvis/<the file robot.env names> \
+       --rig config/rig-phantom12.yaml
+   ```
+   Step 15's corner dump runs inside it; 30 s of recording took 44 s on Thor.
+
+**What it says:**
+- **OK:** camera 1's roll within 0.10° and pitch within 0.03° of the calibration, and the board's depth error within
+  1 % (judged at 0.4-1.3 m).
+- **DRIFTED:** one of those limits is broken. The report names which:
+  - roll: the 19 Oct kind of event;
+  - pitch: a constant vertical offset between the images;
+  - depth: a yaw or baseline change.
+  - Do not trust depth; record a neck grid and follow the Fit C plan's §4 table.
+- **NO RESULT:** too few still pairs, or the board too small or off-centre. At an edge, roll and yaw cannot be told
+  apart (the 21 Oct 18:11 recording). Move the board and record again.
+- **Exit codes:** 0 OK, 1 DRIFTED, 2 NO RESULT, 3 an error. Exit 1 never means a crash.
+
+**How it measures:**
+- roll and pitch from the epipolar coplanarity of the corners' rays, with the calibration's own lenses; it needs no
+  board size and is blind to yaw;
+- depth as board scale − 1 (as step 66), median over the still pairs.
+- Plan with the decisions and their reasons: `docs/superpowers/plans/2026-10-22-phantom12-drift-check.md`.
+
 ## 6. Camera–IMU: how it was done (phantom12, 2026-10-15)
 
 - **Board** fixed on a wall or stand, well lit, **1.0–1.2 m** from the head, and **the whole
