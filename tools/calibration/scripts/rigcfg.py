@@ -216,11 +216,18 @@ def board_from_target(t: dict):
     sys.exit(f"ERROR: target_type {kind!r} is not supported (checkerboard or aprilgrid)")
 
 
-# KB4T lens steps: defaults of the rig file's gates (values of 20 Oct, calibration.md section 4b)
+# KB4T lens steps: defaults of the rig file's gates (values of 20 Oct, calibration.md section 4b; the two hold gates
+# of 22 Oct, docs/superpowers/plans/2026-10-22-lens-hold-gate.md rule Z)
 LENS_GATES = {
-    "lens_hold_rms_max_px": 0.6,    # a hold's rigid-board pixel rms above this: dropped from the fit sweep (step
-                                    # 45), flagged and still judged on the test sweep (step 66) (phantom12: near
-                                    # boards 0.30-0.42 px, the bad far boards 0.67-1.13 px)
+    "lens_hold_rms_max_px": 1.8,    # a hold's rigid-board pixel rms above this: a gross misfit, dropped from the fit
+                                    # sweep (step 45), flagged and still judged on the test sweep (step 66). The
+                                    # smallest 0.05 px step with <= 1 % of good holds above it (phantom12, Fit C on
+                                    # 98 held-out neck poses: p50 0.42, p95 1.05, max 1.78 px). Was 0.6 (20 Oct): it
+                                    # dropped 15 % of those good holds, edge boards that fit worse with every lens
+    "lens_hold_max_z_m": 1.3,       # a hold whose board centre sits deeper than this (median camera-0 z): dropped
+                                    # from the fit sweep (step 45). The far boards (1.4-2.0 m) fit 2-4x worse than
+                                    # near ones in the same image area and read depth tens of % off, cause unknown;
+                                    # their rms overlaps good edge holds' (far take p50 1.3 px), so depth catches them
     "lens_bad_hold_max_frac": 0.20,  # more of the fit sweep's holds dropped than this: step 45 rejects the recording
     "lens_repeat_max_pct": 0.5,     # split-half fits differing by more at 1 m: the cell is "unconstrained"
     "lens_pass_pct": 0.5,           # step 66: |median depth error| limit per cell x distance entry

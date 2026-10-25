@@ -46,15 +46,30 @@ def test_the_report_reads_as_the_user_asks(passed):
     assert md.count("How to read it:") == tables == 7 and "one-sample" in md                 # one list per table
 
 
+def _rig_with_gate(tmp_path, rms_px):
+    """phantom12's rig file with lens_hold_rms_max_px set to rms_px"""
+    import shutil
+    import yaml
+    cfg = tmp_path / "config"
+    shutil.copytree(S.PKG / "config", cfg)
+    p = cfg / "rig-phantom12.yaml"
+    d = yaml.safe_load(p.read_text())
+    d["gates"]["lens_hold_rms_max_px"] = rms_px
+    p.write_text(yaml.safe_dump(d))
+    return p
+
+
 def test_a_kb4_refit_fails_the_same_test_sweep(tmp_path):
     """the p1, p2 mutation seen by the validation itself (20 Oct scratch run: -2.1 % at the centre). This code's KB4
     refit reads depth +1.6 % at 0.5 m and -2.4 % at 1 m near the centre, crossing zero near 0.7 m, so the test sweep's
     0.6-0.9 m cells read little (centre -0.2 %, right -0.8 %), and the near bottom-right corner reads +1.5 %. Its
-    holds there fit a rigid board worse than 0.6 px with this calibration: they are flagged and still judged
-    (dropping them, as step 66 first did, left the corner "not validated" and hid its failure)"""
+    holds there fit a rigid board worse than 0.6 px with this calibration: with the gate at 0.6 px (a rig copy; the
+    default is 1.8 px since 22 Oct) they are flagged and still judged (dropping them, as step 66 first did, left the
+    corner "not validated" and hid its failure)"""
     _, r4 = S.nominal_fit("KB4")
     cal = S.write_calibration(tmp_path / "kb4.json", "KB4", r4["intr"], r4["C"])
-    assert m66.main([str(cal), str(S.pipeline() / "test.npz"), str(tmp_path / "v"), "--rig", str(S.RIG12)]) == 1
+    rig = _rig_with_gate(tmp_path, 0.6)
+    assert m66.main([str(cal), str(S.pipeline() / "test.npz"), str(tmp_path / "v"), "--rig", str(rig)]) == 1
     rep = json.loads((tmp_path / "v" / "report.json").read_text())
     assert rep["verdict"] == "FAIL"
     tab = {(r["cell"], tuple(r["dist_m"])): r for r in rep["table"]}
@@ -65,10 +80,10 @@ def test_a_kb4_refit_fails_the_same_test_sweep(tmp_path):
 
 
 def test_a_flagged_test_hold_is_listed_and_still_judged(tmp_path):
-    """3 of 10 holds noisier than the 0.6 px gate (30 %, more than step 45 would accept on a fit sweep): flagged per
-    cell, counted and judged; the test recording is not rejected"""
+    """3 of 10 holds noisier than the 1.8 px gate (1.4 px per axis, ~2 px rms; 30 %, more than step 45 would accept on
+    a fit sweep): flagged per cell, counted and judged; the test recording is not rejected"""
     d = S.views([S.I0, S.I1], S.C_TRUE, 10, seed=41, targets=[(643, 385)], z_range=(0.6, 0.9),
-                noisy_holds=(0, 3, 6))
+                noisy_holds=(0, 3, 6), noisy=1.4)
     np.savez_compressed(tmp_path / "t.npz", **d)
     cal = S.write_calibration(tmp_path / "true.json", "KB4T", [S.I0, S.I1], S.C_TRUE)
     assert m66.main([str(cal), str(tmp_path / "t.npz"), str(tmp_path / "v"), "--rig", str(S.RIG12)]) == 0
@@ -76,7 +91,7 @@ def test_a_flagged_test_hold_is_listed_and_still_judged(tmp_path):
     centre = [r for r in rep["table"] if r["cell"] == "centre"]
     assert [(r["dist_m"], r["holds"], r["flagged_holds"], r["ok"]) for r in centre] == [([0.6, 0.9], 10, [0, 3, 6], True)]
     assert [(f["hold"], f["cells"]) for f in rep["test_flagged"]] == [(0, ["centre"]), (3, ["centre"]), (6, ["centre"])]
-    assert all(f["rms_px"] > 0.6 for f in rep["test_flagged"]) and "rejected" not in rep["reason"]
+    assert all(f["rms_px"] > 1.8 for f in rep["test_flagged"]) and "rejected" not in rep["reason"]
     md = (tmp_path / "v" / "report.md").read_text()
     assert md.count("flagged: board or calibration bad here") == 3 and "| 10 (3 flagged) |" in md
 
@@ -168,6 +183,7 @@ def test_reports_are_strict_json_when_a_hold_has_no_rms(tmp_path, monkeypatch):
     monkeypatch.setattr(m66.sf, "hold_rms", lambda *a: {h: (np.inf if h == 3 else v) for h, v in real(*a).items()})
     fit = json.loads((P / "fit.json").read_text())
     fit["dropped_holds"] = [[7, None]]
+    fit["dropped_far_holds"] = [[9, 1.52]]                # step 45's depth gate (22 Oct): listed with its depth
     report = tmp_path / "fit-report.json"
     report.write_text(json.dumps(fit))
     cal = S.write_calibration(tmp_path / "true.json", "KB4T", [S.I0, S.I1], S.C_TRUE)
@@ -179,5 +195,6 @@ def test_reports_are_strict_json_when_a_hold_has_no_rms(tmp_path, monkeypatch):
     rep = json.loads((tmp_path / "v" / "report.json").read_text(), parse_constant=refuse)
     assert [(f["hold"], f["rms_px"]) for f in rep["test_flagged"]] == [(3, None)]
     md = (tmp_path / "v" / "report.md").read_text()
-    assert "| fit | 7 | - | no corner within 20 px | dropped by step 45 |" in md
+    assert "| fit | 7 | - | no corner within 20 px | dropped by step 45: rms |" in md
+    assert "| fit | 9 | - |" in md and "| dropped by step 45: board at 1.52 m |" in md
     assert "| no corner within 20 px | flagged: board or calibration bad here |" in md
