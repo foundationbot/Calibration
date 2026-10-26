@@ -1,0 +1,29 @@
+{
+ "neck_deg": {
+  "NeckYaw": -0.39987774718748065,
+  "NeckPitch": 28.39262680423757
+ },
+ "moves": [
+  {
+   "k": 1,
+   "name": "lift-Right",
+   "deg": [
+    -20.0,
+    -10.0,
+    10.0,
+    -40.0,
+    102.55,
+    16.8,
+    -55.91
+   ],
+   "burst": false,
+   "path_min_clear_m": 0.0297,
+   "end_clear_m": 0.0428,
+   "in_mjcf_range": true,
+   "max_travel_deg": 23.9,
+   "path_min_clear_m_full": -0.0091,
+   "start_in_contact": true,
+   "exception": "user's yes 25 Oct: lift-off from contact; clearance rises monotonically to 2.5 cm within 15 % and stays >= 2.97 cm"
+  }
+ ]
+}

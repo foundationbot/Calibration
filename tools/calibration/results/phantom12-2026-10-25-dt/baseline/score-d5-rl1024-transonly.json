@@ -1,0 +1,299 @@
+{
+ "method": "readB-neck-transonly-Right",
+ "reference": "B1",
+ "B1": {
+  "captures": {
+   "rl1024-k03-d0-p23": {
+    "wrist_mm": 2.17,
+    "rot_deg": 0.19,
+    "pass": true,
+    "counted": false
+   },
+   "rl1024-k03-d0-p28": {
+    "wrist_mm": 2.06,
+    "rot_deg": 0.188,
+    "pass": true,
+    "counted": false
+   },
+   "rl1024-k04-d1-p28": {
+    "wrist_mm": 1.94,
+    "rot_deg": 0.189,
+    "pass": true,
+    "counted": true
+   },
+   "rl1024-k07-d4-p23": {
+    "wrist_mm": 1.87,
+    "rot_deg": 0.189,
+    "pass": true,
+    "counted": true
+   },
+   "rl1024-k07-d4-p28": {
+    "wrist_mm": 1.76,
+    "rot_deg": 0.189,
+    "pass": true,
+    "counted": false
+   },
+   "rl1024-k18-c12-p28": {
+    "wrist_mm": 1.8,
+    "rot_deg": 0.189,
+    "pass": true,
+    "counted": false
+   },
+   "rl1024-k19-c13-p28": {
+    "wrist_mm": 1.98,
+    "rot_deg": 0.188,
+    "pass": true,
+    "counted": true
+   },
+   "rl1024-k22-c16-p23": {
+    "wrist_mm": 2.04,
+    "rot_deg": 0.186,
+    "pass": true,
+    "counted": false
+   },
+   "rl1024-k22-c16-p28": {
+    "wrist_mm": 1.96,
+    "rot_deg": 0.193,
+    "pass": true,
+    "counted": false
+   }
+  },
+  "missing": [
+   "arm-1023c-00-p6",
+   "arm-1023c-01-p15",
+   "arm-1023c-03-p15",
+   "arm-1023c-04-p3",
+   "arm-1023c-05-p16",
+   "arm-1023c-06-p12",
+   "arm-1023c-07-p14",
+   "arm-1023c-09-p14",
+   "arm-1023c-12-p9",
+   "arm-1023c-13-p24",
+   "arm-1023c-15-p24",
+   "arm-1023c-16-p17",
+   "arm-1023d-00-p21",
+   "arm-1023d-01-p5",
+   "arm-1023d-03-p5",
+   "arm-1023d-04-p23",
+   "arm-1023d-06-p14",
+   "arm-1023d-07-p10",
+   "arm-1023d-09-p10",
+   "arm-1023d-12-p4",
+   "rv1024-d0-p18",
+   "rv1024-d0-p23",
+   "rv1024-d0-p28",
+   "rv1024-d1-p18",
+   "rv1024-d1-p23",
+   "rv1024-d1-p28",
+   "rv1024-d4-p18",
+   "rv1024-d4-p23",
+   "rv1024-d4-p28"
+  ],
+  "held_out": 3,
+  "held_out_pass": 3,
+  "gate": {
+   "mm": 3.0,
+   "deg": 0.3,
+   "share": 0.8,
+   "min_held_out": 3
+  },
+  "verdict": "PASS"
+ },
+ "M1": {
+  "captures": {
+   "rl1024-k03-d0-p23": {
+    "wrist_mm": 2.87,
+    "rot_deg": 0.142,
+    "pass": true,
+    "counted": false
+   },
+   "rl1024-k03-d0-p28": {
+    "wrist_mm": 2.7,
+    "rot_deg": 0.141,
+    "pass": true,
+    "counted": false
+   },
+   "rl1024-k04-d1-p28": {
+    "wrist_mm": 2.6,
+    "rot_deg": 0.141,
+    "pass": true,
+    "counted": true
+   },
+   "rl1024-k07-d4-p23": {
+    "wrist_mm": 2.6,
+    "rot_deg": 0.141,
+    "pass": true,
+    "counted": true
+   },
+   "rl1024-k07-d4-p28": {
+    "wrist_mm": 2.4,
+    "rot_deg": 0.142,
+    "pass": true,
+    "counted": false
+   },
+   "rl1024-k18-c12-p28": {
+    "wrist_mm": 2.52,
+    "rot_deg": 0.142,
+    "pass": true,
+    "counted": false
+   },
+   "rl1024-k19-c13-p28": {
+    "wrist_mm": 2.6,
+    "rot_deg": 0.14,
+    "pass": true,
+    "counted": true
+   },
+   "rl1024-k22-c16-p23": {
+    "wrist_mm": 2.71,
+    "rot_deg": 0.138,
+    "pass": true,
+    "counted": false
+   },
+   "rl1024-k22-c16-p28": {
+    "wrist_mm": 2.54,
+    "rot_deg": 0.145,
+    "pass": true,
+    "counted": false
+   }
+  },
+  "missing": [
+   "arm-1023c-00-p6",
+   "arm-1023c-01-p15",
+   "arm-1023c-03-p15",
+   "arm-1023c-04-p3",
+   "arm-1023c-05-p16",
+   "arm-1023c-06-p12",
+   "arm-1023c-07-p14",
+   "arm-1023c-09-p14",
+   "arm-1023c-12-p9",
+   "arm-1023c-13-p24",
+   "arm-1023c-15-p24",
+   "arm-1023c-16-p17",
+   "arm-1023d-00-p21",
+   "arm-1023d-01-p5",
+   "arm-1023d-03-p5",
+   "arm-1023d-04-p23",
+   "arm-1023d-06-p14",
+   "arm-1023d-07-p10",
+   "arm-1023d-09-p10",
+   "arm-1023d-12-p4",
+   "rv1024-d0-p18",
+   "rv1024-d0-p23",
+   "rv1024-d0-p28",
+   "rv1024-d1-p18",
+   "rv1024-d1-p23",
+   "rv1024-d1-p28",
+   "rv1024-d4-p18",
+   "rv1024-d4-p23",
+   "rv1024-d4-p28"
+  ],
+  "held_out": 3,
+  "held_out_pass": 3,
+  "gate": {
+   "mm": 3.0,
+   "deg": 0.3,
+   "share": 0.8,
+   "min_held_out": 3
+  },
+  "verdict": "PASS"
+ },
+ "M0": {
+  "captures": {
+   "rl1024-k03-d0-p23": {
+    "wrist_mm": 3.64,
+    "rot_deg": 0.004,
+    "pass": false,
+    "counted": false
+   },
+   "rl1024-k03-d0-p28": {
+    "wrist_mm": 3.63,
+    "rot_deg": 0.004,
+    "pass": false,
+    "counted": false
+   },
+   "rl1024-k04-d1-p28": {
+    "wrist_mm": 3.63,
+    "rot_deg": 0.001,
+    "pass": false,
+    "counted": true
+   },
+   "rl1024-k07-d4-p23": {
+    "wrist_mm": 3.62,
+    "rot_deg": 0.003,
+    "pass": false,
+    "counted": true
+   },
+   "rl1024-k07-d4-p28": {
+    "wrist_mm": 3.63,
+    "rot_deg": 0.004,
+    "pass": false,
+    "counted": false
+   },
+   "rl1024-k18-c12-p28": {
+    "wrist_mm": 3.62,
+    "rot_deg": 0.002,
+    "pass": false,
+    "counted": false
+   },
+   "rl1024-k19-c13-p28": {
+    "wrist_mm": 3.64,
+    "rot_deg": 0.003,
+    "pass": false,
+    "counted": true
+   },
+   "rl1024-k22-c16-p23": {
+    "wrist_mm": 3.62,
+    "rot_deg": 0.003,
+    "pass": false,
+    "counted": false
+   },
+   "rl1024-k22-c16-p28": {
+    "wrist_mm": 3.62,
+    "rot_deg": 0.009,
+    "pass": false,
+    "counted": false
+   }
+  },
+  "missing": [
+   "arm-1023c-00-p6",
+   "arm-1023c-01-p15",
+   "arm-1023c-03-p15",
+   "arm-1023c-04-p3",
+   "arm-1023c-05-p16",
+   "arm-1023c-06-p12",
+   "arm-1023c-07-p14",
+   "arm-1023c-09-p14",
+   "arm-1023c-12-p9",
+   "arm-1023c-13-p24",
+   "arm-1023c-15-p24",
+   "arm-1023c-16-p17",
+   "arm-1023d-00-p21",
+   "arm-1023d-01-p5",
+   "arm-1023d-03-p5",
+   "arm-1023d-04-p23",
+   "arm-1023d-06-p14",
+   "arm-1023d-07-p10",
+   "arm-1023d-09-p10",
+   "arm-1023d-12-p4",
+   "rv1024-d0-p18",
+   "rv1024-d0-p23",
+   "rv1024-d0-p28",
+   "rv1024-d1-p18",
+   "rv1024-d1-p23",
+   "rv1024-d1-p28",
+   "rv1024-d4-p18",
+   "rv1024-d4-p23",
+   "rv1024-d4-p28"
+  ],
+  "held_out": 3,
+  "held_out_pass": 0,
+  "gate": {
+   "mm": 3.0,
+   "deg": 0.3,
+   "share": 0.8,
+   "min_held_out": 3
+  },
+  "verdict": "FAIL"
+ },
+ "unknown_captures": []
+}

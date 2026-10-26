@@ -125,7 +125,7 @@ values of the rig file (defaults shown); the distance bins are fixed (`scripts/l
    three heights and the neck's reach (head-down limits yaw at the coupled stop; grid rows 18-34 deg off-axis) kept
    board centres in the middle band and at the sides; only the noisy 1.6 m boards were centred in a corner, and the
    bottom strip beyond 300 px came from one placement and never reached 8 holds (`handoff-lens-eval.md`
-   §0, §4, on branch `feat/kaustabh-stereo-depth-eval`). There, two fits on nearly the same data differ by up to 6 % at 1 m. A hand-held board goes wherever the
+   §0, §4, on branch `feat/*-stereo-depth-eval`). There, two fits on nearly the same data differ by up to 6 % at 1 m. A hand-held board goes wherever the
    map is empty.
 6. **Watch the live coverage map** (step 06) during each sweep; one run per sweep. A cell is done at `--target` holds
    in at least one distance bin, by default `lens_min_holds` + 4 = 12: step 66 judges an entry from 8 holds
@@ -473,7 +473,7 @@ and pairs cam 0 <- DMA 1, cam 1 <- DMA 2; SLAM latency p50 149–163 ms (old con
   sphere, EUCM) would let the edges be used. Kalibr fits some of these; OKVIS would need to
   support the chosen one, including the depth-mode rectification.
 - **Hand-eye / `T_BS` for phantom12 (needed: §7). Decided 2026-10-16: test before fixing;
-  T_BS tests planned (`docs/superpowers/plans/2026-10-16-phantom12-tbs-tests.md` on branch `feat/kaustabh-stereo-depth-eval`). Revised after
+  T_BS tests planned (`docs/superpowers/plans/2026-10-16-phantom12-tbs-tests.md` on branch `feat/*-stereo-depth-eval`). Revised after
   the plan's review the same evening (`handoff-tbs.md` §8 on that branch; protocol §6b; outcome 16 Oct: hand-held cannot reach 0.3°, the per-hold head-vs-encoder error is ~0.4°, powered neck next; the rest of this bullet is the superseded first plan): test 1 becomes the hand-eye fit itself
   (its spread was ~4× less sensitive than its gate implied), the decision gate is 0.3° and 3 mm on
   the fitted camera-in-Head against the config (~5 mm at the gripper at 0.85 m), two takes, poses

@@ -1,0 +1,209 @@
+{
+ "method": "read B ef5b025f blind (e60ce2e6) chain",
+ "reference": "B1",
+ "B1": {
+  "captures": {
+   "rl1024-k04-d1-p28": {
+    "wrist_mm": 3.39,
+    "rot_deg": 0.189,
+    "pass": false,
+    "counted": true
+   },
+   "rl1024-k07-d4-p23": {
+    "wrist_mm": 3.3,
+    "rot_deg": 0.189,
+    "pass": false,
+    "counted": true
+   },
+   "rl1024-k19-c13-p28": {
+    "wrist_mm": 3.34,
+    "rot_deg": 0.188,
+    "pass": false,
+    "counted": true
+   }
+  },
+  "missing": [
+   "arm-1023c-00-p6",
+   "arm-1023c-01-p15",
+   "arm-1023c-03-p15",
+   "arm-1023c-04-p3",
+   "arm-1023c-05-p16",
+   "arm-1023c-06-p12",
+   "arm-1023c-07-p14",
+   "arm-1023c-09-p14",
+   "arm-1023c-12-p9",
+   "arm-1023c-13-p24",
+   "arm-1023c-15-p24",
+   "arm-1023c-16-p17",
+   "arm-1023d-00-p21",
+   "arm-1023d-01-p5",
+   "arm-1023d-03-p5",
+   "arm-1023d-04-p23",
+   "arm-1023d-06-p14",
+   "arm-1023d-07-p10",
+   "arm-1023d-09-p10",
+   "arm-1023d-12-p4",
+   "rl1024-k03-d0-p23",
+   "rl1024-k03-d0-p28",
+   "rl1024-k07-d4-p28",
+   "rl1024-k18-c12-p28",
+   "rl1024-k22-c16-p23",
+   "rl1024-k22-c16-p28",
+   "rv1024-d0-p18",
+   "rv1024-d0-p23",
+   "rv1024-d0-p28",
+   "rv1024-d1-p18",
+   "rv1024-d1-p23",
+   "rv1024-d1-p28",
+   "rv1024-d4-p18",
+   "rv1024-d4-p23",
+   "rv1024-d4-p28"
+  ],
+  "held_out": 3,
+  "held_out_pass": 0,
+  "gate": {
+   "mm": 3.0,
+   "deg": 0.3,
+   "share": 0.8,
+   "min_held_out": 3
+  },
+  "verdict": "FAIL"
+ },
+ "M1": {
+  "captures": {
+   "rl1024-k04-d1-p28": {
+    "wrist_mm": 4.33,
+    "rot_deg": 0.141,
+    "pass": false,
+    "counted": true
+   },
+   "rl1024-k07-d4-p23": {
+    "wrist_mm": 4.26,
+    "rot_deg": 0.141,
+    "pass": false,
+    "counted": true
+   },
+   "rl1024-k19-c13-p28": {
+    "wrist_mm": 4.28,
+    "rot_deg": 0.14,
+    "pass": false,
+    "counted": true
+   }
+  },
+  "missing": [
+   "arm-1023c-00-p6",
+   "arm-1023c-01-p15",
+   "arm-1023c-03-p15",
+   "arm-1023c-04-p3",
+   "arm-1023c-05-p16",
+   "arm-1023c-06-p12",
+   "arm-1023c-07-p14",
+   "arm-1023c-09-p14",
+   "arm-1023c-12-p9",
+   "arm-1023c-13-p24",
+   "arm-1023c-15-p24",
+   "arm-1023c-16-p17",
+   "arm-1023d-00-p21",
+   "arm-1023d-01-p5",
+   "arm-1023d-03-p5",
+   "arm-1023d-04-p23",
+   "arm-1023d-06-p14",
+   "arm-1023d-07-p10",
+   "arm-1023d-09-p10",
+   "arm-1023d-12-p4",
+   "rl1024-k03-d0-p23",
+   "rl1024-k03-d0-p28",
+   "rl1024-k07-d4-p28",
+   "rl1024-k18-c12-p28",
+   "rl1024-k22-c16-p23",
+   "rl1024-k22-c16-p28",
+   "rv1024-d0-p18",
+   "rv1024-d0-p23",
+   "rv1024-d0-p28",
+   "rv1024-d1-p18",
+   "rv1024-d1-p23",
+   "rv1024-d1-p28",
+   "rv1024-d4-p18",
+   "rv1024-d4-p23",
+   "rv1024-d4-p28"
+  ],
+  "held_out": 3,
+  "held_out_pass": 0,
+  "gate": {
+   "mm": 3.0,
+   "deg": 0.3,
+   "share": 0.8,
+   "min_held_out": 3
+  },
+  "verdict": "FAIL"
+ },
+ "M0": {
+  "captures": {
+   "rl1024-k04-d1-p28": {
+    "wrist_mm": 0.01,
+    "rot_deg": 0.001,
+    "pass": true,
+    "counted": true
+   },
+   "rl1024-k07-d4-p23": {
+    "wrist_mm": 0.03,
+    "rot_deg": 0.003,
+    "pass": true,
+    "counted": true
+   },
+   "rl1024-k19-c13-p28": {
+    "wrist_mm": 0.01,
+    "rot_deg": 0.003,
+    "pass": true,
+    "counted": true
+   }
+  },
+  "missing": [
+   "arm-1023c-00-p6",
+   "arm-1023c-01-p15",
+   "arm-1023c-03-p15",
+   "arm-1023c-04-p3",
+   "arm-1023c-05-p16",
+   "arm-1023c-06-p12",
+   "arm-1023c-07-p14",
+   "arm-1023c-09-p14",
+   "arm-1023c-12-p9",
+   "arm-1023c-13-p24",
+   "arm-1023c-15-p24",
+   "arm-1023c-16-p17",
+   "arm-1023d-00-p21",
+   "arm-1023d-01-p5",
+   "arm-1023d-03-p5",
+   "arm-1023d-04-p23",
+   "arm-1023d-06-p14",
+   "arm-1023d-07-p10",
+   "arm-1023d-09-p10",
+   "arm-1023d-12-p4",
+   "rl1024-k03-d0-p23",
+   "rl1024-k03-d0-p28",
+   "rl1024-k07-d4-p28",
+   "rl1024-k18-c12-p28",
+   "rl1024-k22-c16-p23",
+   "rl1024-k22-c16-p28",
+   "rv1024-d0-p18",
+   "rv1024-d0-p23",
+   "rv1024-d0-p28",
+   "rv1024-d1-p18",
+   "rv1024-d1-p23",
+   "rv1024-d1-p28",
+   "rv1024-d4-p18",
+   "rv1024-d4-p23",
+   "rv1024-d4-p28"
+  ],
+  "held_out": 3,
+  "held_out_pass": 3,
+  "gate": {
+   "mm": 3.0,
+   "deg": 0.3,
+   "share": 0.8,
+   "min_held_out": 3
+  },
+  "verdict": "PASS"
+ },
+ "unknown_captures": []
+}

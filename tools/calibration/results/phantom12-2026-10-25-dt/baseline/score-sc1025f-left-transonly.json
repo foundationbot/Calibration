@@ -1,0 +1,299 @@
+{
+ "B1": {
+  "captures": {
+   "sc1025f-left-03-1023d_0": {
+    "wrist_mm": 3.26,
+    "rot_deg": 0.188,
+    "pass": false,
+    "counted": false
+   },
+   "sc1025f-left-04-1023d_1": {
+    "wrist_mm": 3.18,
+    "rot_deg": 0.186,
+    "pass": false,
+    "counted": false
+   },
+   "sc1025f-left-05-1023d_2": {
+    "wrist_mm": 3.26,
+    "rot_deg": 0.188,
+    "pass": false,
+    "counted": false
+   },
+   "sc1025f-left-06-1023d_3": {
+    "wrist_mm": 3.19,
+    "rot_deg": 0.188,
+    "pass": false,
+    "counted": true
+   },
+   "sc1025f-left-07-1023d_4": {
+    "wrist_mm": 3.04,
+    "rot_deg": 0.188,
+    "pass": false,
+    "counted": false
+   },
+   "sc1025f-left-18-1023c_12": {
+    "wrist_mm": 3.26,
+    "rot_deg": 0.189,
+    "pass": false,
+    "counted": true
+   },
+   "sc1025f-left-19-1023c_13": {
+    "wrist_mm": 3.12,
+    "rot_deg": 0.189,
+    "pass": false,
+    "counted": false
+   },
+   "sc1025f-left-20-1023c_14": {
+    "wrist_mm": 3.24,
+    "rot_deg": 0.189,
+    "pass": false,
+    "counted": false
+   },
+   "sc1025f-left-21-1023c_15": {
+    "wrist_mm": 3.11,
+    "rot_deg": 0.189,
+    "pass": false,
+    "counted": false
+   },
+   "sc1025f-left-22-1023c_16": {
+    "wrist_mm": 2.99,
+    "rot_deg": 0.188,
+    "pass": true,
+    "counted": true
+   }
+  },
+  "missing": [],
+  "held_out": 3,
+  "held_out_pass": 1,
+  "gate": {
+   "mm": 3.0,
+   "deg": 0.3,
+   "share": 0.8,
+   "min_held_out": 3
+  },
+  "verdict": "FAIL"
+ },
+ "chain": {
+  "captures": {
+   "sc1025f-left-03-1023d_0": {
+    "wrist_mm": 1.96,
+    "rot_deg": 0.001,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025f-left-04-1023d_1": {
+    "wrist_mm": 1.96,
+    "rot_deg": 0.004,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025f-left-05-1023d_2": {
+    "wrist_mm": 1.96,
+    "rot_deg": 0.002,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025f-left-06-1023d_3": {
+    "wrist_mm": 1.96,
+    "rot_deg": 0.002,
+    "pass": true,
+    "counted": true
+   },
+   "sc1025f-left-07-1023d_4": {
+    "wrist_mm": 1.96,
+    "rot_deg": 0.002,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025f-left-18-1023c_12": {
+    "wrist_mm": 1.96,
+    "rot_deg": 0.001,
+    "pass": true,
+    "counted": true
+   },
+   "sc1025f-left-19-1023c_13": {
+    "wrist_mm": 1.95,
+    "rot_deg": 0.002,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025f-left-20-1023c_14": {
+    "wrist_mm": 1.95,
+    "rot_deg": 0.005,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025f-left-21-1023c_15": {
+    "wrist_mm": 1.96,
+    "rot_deg": 0.003,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025f-left-22-1023c_16": {
+    "wrist_mm": 1.95,
+    "rot_deg": 0.003,
+    "pass": true,
+    "counted": true
+   }
+  },
+  "missing": [],
+  "held_out": 3,
+  "held_out_pass": 3,
+  "gate": {
+   "mm": 3.0,
+   "deg": 0.3,
+   "share": 0.8,
+   "min_held_out": 3
+  },
+  "verdict": "PASS"
+ },
+ "old_dT": {
+  "captures": {
+   "sc1025f-left-03-1023d_0": {
+    "wrist_mm": 2.63,
+    "rot_deg": 0.221,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025f-left-04-1023d_1": {
+    "wrist_mm": 2.51,
+    "rot_deg": 0.22,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025f-left-05-1023d_2": {
+    "wrist_mm": 2.63,
+    "rot_deg": 0.221,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025f-left-06-1023d_3": {
+    "wrist_mm": 2.51,
+    "rot_deg": 0.221,
+    "pass": true,
+    "counted": true
+   },
+   "sc1025f-left-07-1023d_4": {
+    "wrist_mm": 2.3,
+    "rot_deg": 0.221,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025f-left-18-1023c_12": {
+    "wrist_mm": 2.56,
+    "rot_deg": 0.222,
+    "pass": true,
+    "counted": true
+   },
+   "sc1025f-left-19-1023c_13": {
+    "wrist_mm": 2.45,
+    "rot_deg": 0.222,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025f-left-20-1023c_14": {
+    "wrist_mm": 2.54,
+    "rot_deg": 0.222,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025f-left-21-1023c_15": {
+    "wrist_mm": 2.44,
+    "rot_deg": 0.222,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025f-left-22-1023c_16": {
+    "wrist_mm": 2.3,
+    "rot_deg": 0.221,
+    "pass": true,
+    "counted": true
+   }
+  },
+  "missing": [],
+  "held_out": 3,
+  "held_out_pass": 3,
+  "gate": {
+   "mm": 3.0,
+   "deg": 0.3,
+   "share": 0.8,
+   "min_held_out": 3
+  },
+  "verdict": "PASS"
+ },
+ "method": "readB-neck-transonly-Left",
+ "baseline_plain_chain_vs_B1": {
+  "captures": {
+   "sc1025f-left-03-1023d_0": {
+    "wrist_mm": 3.48,
+    "rot_deg": 0.189,
+    "pass": false,
+    "counted": false
+   },
+   "sc1025f-left-04-1023d_1": {
+    "wrist_mm": 3.48,
+    "rot_deg": 0.189,
+    "pass": false,
+    "counted": false
+   },
+   "sc1025f-left-05-1023d_2": {
+    "wrist_mm": 3.48,
+    "rot_deg": 0.189,
+    "pass": false,
+    "counted": false
+   },
+   "sc1025f-left-06-1023d_3": {
+    "wrist_mm": 3.48,
+    "rot_deg": 0.189,
+    "pass": false,
+    "counted": true
+   },
+   "sc1025f-left-07-1023d_4": {
+    "wrist_mm": 3.48,
+    "rot_deg": 0.189,
+    "pass": false,
+    "counted": false
+   },
+   "sc1025f-left-18-1023c_12": {
+    "wrist_mm": 3.63,
+    "rot_deg": 0.189,
+    "pass": false,
+    "counted": true
+   },
+   "sc1025f-left-19-1023c_13": {
+    "wrist_mm": 3.43,
+    "rot_deg": 0.189,
+    "pass": false,
+    "counted": false
+   },
+   "sc1025f-left-20-1023c_14": {
+    "wrist_mm": 3.6,
+    "rot_deg": 0.189,
+    "pass": false,
+    "counted": false
+   },
+   "sc1025f-left-21-1023c_15": {
+    "wrist_mm": 3.4,
+    "rot_deg": 0.189,
+    "pass": false,
+    "counted": false
+   },
+   "sc1025f-left-22-1023c_16": {
+    "wrist_mm": 3.33,
+    "rot_deg": 0.189,
+    "pass": false,
+    "counted": true
+   }
+  },
+  "missing": [],
+  "held_out": 3,
+  "held_out_pass": 0,
+  "gate": {
+   "mm": 3.0,
+   "deg": 0.3,
+   "share": 0.8,
+   "min_held_out": 3
+  },
+  "verdict": "FAIL"
+ }
+}

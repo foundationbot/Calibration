@@ -1,0 +1,371 @@
+{
+ "B1": {
+  "captures": {
+   "sc1025j-right18-03-1023d_0": {
+    "wrist_mm": 2.23,
+    "rot_deg": 0.189,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025j-right18-04-1023d_1": {
+    "wrist_mm": 2.08,
+    "rot_deg": 0.189,
+    "pass": true,
+    "counted": true
+   },
+   "sc1025j-right18-07-1023d_4": {
+    "wrist_mm": 1.82,
+    "rot_deg": 0.189,
+    "pass": true,
+    "counted": true
+   },
+   "sc1025j-right18-08-1023d_5": {
+    "wrist_mm": 1.57,
+    "rot_deg": 0.189,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025j-right18-09-1023d_6": {
+    "wrist_mm": 1.04,
+    "rot_deg": 0.189,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025j-right18-10-1023d_7": {
+    "wrist_mm": 1.77,
+    "rot_deg": 0.189,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025j-right18-11-1023d_8": {
+    "wrist_mm": 1.47,
+    "rot_deg": 0.189,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025j-right18-12-1023d_9": {
+    "wrist_mm": 1.77,
+    "rot_deg": 0.189,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025j-right18-14-1023d_11": {
+    "wrist_mm": 1.29,
+    "rot_deg": 0.189,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025j-right18-15-1023d_12": {
+    "wrist_mm": 1.06,
+    "rot_deg": 0.189,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025j-right18-18-1023c_12": {
+    "wrist_mm": 1.97,
+    "rot_deg": 0.189,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025j-right18-19-1023c_13": {
+    "wrist_mm": 2.09,
+    "rot_deg": 0.189,
+    "pass": true,
+    "counted": true
+   },
+   "sc1025j-right18-22-1023c_16": {
+    "wrist_mm": 2.04,
+    "rot_deg": 0.189,
+    "pass": true,
+    "counted": false
+   }
+  },
+  "missing": [],
+  "held_out": 3,
+  "held_out_pass": 3,
+  "gate": {
+   "mm": 3.0,
+   "deg": 0.3,
+   "share": 0.8,
+   "min_held_out": 3
+  },
+  "verdict": "PASS"
+ },
+ "chain": {
+  "captures": {
+   "sc1025j-right18-03-1023d_0": {
+    "wrist_mm": 2.59,
+    "rot_deg": 0.0,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025j-right18-04-1023d_1": {
+    "wrist_mm": 2.59,
+    "rot_deg": 0.0,
+    "pass": true,
+    "counted": true
+   },
+   "sc1025j-right18-07-1023d_4": {
+    "wrist_mm": 2.59,
+    "rot_deg": 0.0,
+    "pass": true,
+    "counted": true
+   },
+   "sc1025j-right18-08-1023d_5": {
+    "wrist_mm": 2.59,
+    "rot_deg": 0.0,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025j-right18-09-1023d_6": {
+    "wrist_mm": 2.59,
+    "rot_deg": 0.0,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025j-right18-10-1023d_7": {
+    "wrist_mm": 2.59,
+    "rot_deg": 0.0,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025j-right18-11-1023d_8": {
+    "wrist_mm": 2.59,
+    "rot_deg": 0.0,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025j-right18-12-1023d_9": {
+    "wrist_mm": 2.59,
+    "rot_deg": 0.0,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025j-right18-14-1023d_11": {
+    "wrist_mm": 2.59,
+    "rot_deg": 0.0,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025j-right18-15-1023d_12": {
+    "wrist_mm": 2.59,
+    "rot_deg": 0.0,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025j-right18-18-1023c_12": {
+    "wrist_mm": 2.59,
+    "rot_deg": 0.0,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025j-right18-19-1023c_13": {
+    "wrist_mm": 2.59,
+    "rot_deg": 0.0,
+    "pass": true,
+    "counted": true
+   },
+   "sc1025j-right18-22-1023c_16": {
+    "wrist_mm": 2.59,
+    "rot_deg": 0.0,
+    "pass": true,
+    "counted": false
+   }
+  },
+  "missing": [],
+  "held_out": 3,
+  "held_out_pass": 3,
+  "gate": {
+   "mm": 3.0,
+   "deg": 0.3,
+   "share": 0.8,
+   "min_held_out": 3
+  },
+  "verdict": "PASS"
+ },
+ "old_dT": {
+  "captures": {
+   "sc1025j-right18-03-1023d_0": {
+    "wrist_mm": 1.66,
+    "rot_deg": 0.222,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025j-right18-04-1023d_1": {
+    "wrist_mm": 1.51,
+    "rot_deg": 0.222,
+    "pass": true,
+    "counted": true
+   },
+   "sc1025j-right18-07-1023d_4": {
+    "wrist_mm": 1.29,
+    "rot_deg": 0.222,
+    "pass": true,
+    "counted": true
+   },
+   "sc1025j-right18-08-1023d_5": {
+    "wrist_mm": 1.1,
+    "rot_deg": 0.222,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025j-right18-09-1023d_6": {
+    "wrist_mm": 0.72,
+    "rot_deg": 0.222,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025j-right18-10-1023d_7": {
+    "wrist_mm": 0.99,
+    "rot_deg": 0.222,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025j-right18-11-1023d_8": {
+    "wrist_mm": 0.81,
+    "rot_deg": 0.222,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025j-right18-12-1023d_9": {
+    "wrist_mm": 0.98,
+    "rot_deg": 0.222,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025j-right18-14-1023d_11": {
+    "wrist_mm": 0.73,
+    "rot_deg": 0.222,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025j-right18-15-1023d_12": {
+    "wrist_mm": 0.84,
+    "rot_deg": 0.222,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025j-right18-18-1023c_12": {
+    "wrist_mm": 1.33,
+    "rot_deg": 0.222,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025j-right18-19-1023c_13": {
+    "wrist_mm": 1.56,
+    "rot_deg": 0.222,
+    "pass": true,
+    "counted": true
+   },
+   "sc1025j-right18-22-1023c_16": {
+    "wrist_mm": 1.6,
+    "rot_deg": 0.222,
+    "pass": true,
+    "counted": false
+   }
+  },
+  "missing": [],
+  "held_out": 3,
+  "held_out_pass": 3,
+  "gate": {
+   "mm": 3.0,
+   "deg": 0.3,
+   "share": 0.8,
+   "min_held_out": 3
+  },
+  "verdict": "PASS"
+ },
+ "method": "trans-only X from sc1025d-right-transonly.json applied across neck",
+ "baseline_plain_chain_vs_B1": {
+  "captures": {
+   "sc1025j-right18-03-1023d_0": {
+    "wrist_mm": 3.5,
+    "rot_deg": 0.189,
+    "pass": false,
+    "counted": false
+   },
+   "sc1025j-right18-04-1023d_1": {
+    "wrist_mm": 3.38,
+    "rot_deg": 0.189,
+    "pass": false,
+    "counted": true
+   },
+   "sc1025j-right18-07-1023d_4": {
+    "wrist_mm": 3.15,
+    "rot_deg": 0.189,
+    "pass": false,
+    "counted": true
+   },
+   "sc1025j-right18-08-1023d_5": {
+    "wrist_mm": 2.97,
+    "rot_deg": 0.189,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025j-right18-09-1023d_6": {
+    "wrist_mm": 2.75,
+    "rot_deg": 0.189,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025j-right18-10-1023d_7": {
+    "wrist_mm": 3.39,
+    "rot_deg": 0.189,
+    "pass": false,
+    "counted": false
+   },
+   "sc1025j-right18-11-1023d_8": {
+    "wrist_mm": 3.08,
+    "rot_deg": 0.189,
+    "pass": false,
+    "counted": false
+   },
+   "sc1025j-right18-12-1023d_9": {
+    "wrist_mm": 3.41,
+    "rot_deg": 0.189,
+    "pass": false,
+    "counted": false
+   },
+   "sc1025j-right18-14-1023d_11": {
+    "wrist_mm": 2.93,
+    "rot_deg": 0.189,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025j-right18-15-1023d_12": {
+    "wrist_mm": 2.68,
+    "rot_deg": 0.189,
+    "pass": true,
+    "counted": false
+   },
+   "sc1025j-right18-18-1023c_12": {
+    "wrist_mm": 3.37,
+    "rot_deg": 0.189,
+    "pass": false,
+    "counted": false
+   },
+   "sc1025j-right18-19-1023c_13": {
+    "wrist_mm": 3.34,
+    "rot_deg": 0.189,
+    "pass": false,
+    "counted": true
+   },
+   "sc1025j-right18-22-1023c_16": {
+    "wrist_mm": 3.21,
+    "rot_deg": 0.189,
+    "pass": false,
+    "counted": false
+   }
+  },
+  "missing": [],
+  "held_out": 3,
+  "held_out_pass": 0,
+  "gate": {
+   "mm": 3.0,
+   "deg": 0.3,
+   "share": 0.8,
+   "min_held_out": 3
+  },
+  "verdict": "FAIL"
+ }
+}

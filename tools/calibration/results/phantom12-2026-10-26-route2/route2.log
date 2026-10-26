@@ -1,0 +1,52 @@
+start Sun Oct 25 11:34:15 PM PDT 2026
+torso mesh extent mm [330.2, 318.6, 520.9]
+sc1025d-right sc1025d-right-03-1023d_0 M0 vis 208029 sil 72654 paired 67235 median 0.77 mm | B0 ok True cov 0.97 rms 0.83 inl 66121 cond 6.19e+01 rot [2.279, 2.366, 0.403] t [-12.77, 14.18, 0.97]
+sc1025d-right sc1025d-right-04-1023d_1 M0 vis 208418 sil 72600 paired 67225 median 0.94 mm | B0 ok True cov 0.96 rms 0.85 inl 66065 cond 6.14e+01 rot [2.552, 2.262, 0.701] t [-12.66, 16.69, 0.67]
+sc1025d-right sc1025d-right-07-1023d_4 M0 vis 208071 sil 72705 paired 67467 median 1.08 mm | B0 ok True cov 0.90 rms 0.89 inl 66129 cond 6.41e+01 rot [-0.703, 3.679, 0.017] t [-21.31, -2.97, 2.57]
+sc1025d-right sc1025d-right-08-1023d_5 M0 vis 208115 sil 72522 paired 67435 median 0.87 mm | B0 ok True cov 0.93 rms 0.93 inl 66344 cond 6.44e+01 rot [-4.705, 1.705, -0.801] t [-11.47, -25.61, 6.48]
+sc1025d-right sc1025d-right-09-1023d_6 M0 vis 208612 sil 72691 paired 67283 median 0.87 mm | B0 ok True cov 0.95 rms 0.89 inl 64499 cond 6.56e+01 rot [-4.42, 0.258, -0.433] t [-2.7, -24.67, 3.08]
+sc1025d-right sc1025d-right-10-1023d_7 M0 vis 208065 sil 57356 paired 53580 median 1.05 mm | B0 ok True cov 0.82 rms 0.80 inl 53221 cond 9.53e+01 rot [2.954, 7.665, 2.682] t [-39.89, 7.75, 7.79]
+sc1025d-right sc1025d-right-11-1023d_8 M0 vis 208180 sil 69098 paired 64913 median 1.06 mm | B0 ok True cov 0.90 rms 0.89 inl 64003 cond 7.00e+01 rot [0.974, 4.404, 0.685] t [-24.75, 5.53, 5.03]
+sc1025d-right sc1025d-right-12-1023d_9 M0 vis 208328 sil 57741 paired 54124 median 1.05 mm | B0 ok True cov 0.86 rms 0.86 inl 54218 cond 8.30e+01 rot [3.634, 7.345, 2.636] t [-38.05, 13.91, 6.68]
+sc1025d-right sc1025d-right-14-1023d_11 M0 vis 208105 sil 72634 paired 67482 median 0.99 mm | B0 ok True cov 0.90 rms 0.84 inl 66699 cond 6.83e+01 rot [0.254, 4.673, 0.463] t [-26.02, 2.32, 5.68]
+sc1025d-right sc1025d-right-15-1023d_12 M0 vis 208015 sil 72665 paired 67493 median 0.96 mm | B0 ok True cov 0.94 rms 0.99 inl 64986 cond 6.74e+01 rot [-4.403, 0.908, -0.356] t [-6.48, -22.09, 3.92]
+sc1025d-right sc1025d-right-18-1023c_12 M0 vis 208345 sil 65786 paired 61618 median 1.1 mm | B0 ok True cov 0.95 rms 0.90 inl 61092 cond 6.42e+01 rot [3.184, 3.271, 0.799] t [-17.71, 19.48, 1.16]
+sc1025d-right sc1025d-right-19-1023c_13 M0 vis 208329 sil 69646 paired 64855 median 0.85 mm | B0 ok True cov 0.93 rms 0.92 inl 62309 cond 7.55e+01 rot [0.99, 1.985, 0.816] t [-11.39, 8.59, 3.08]
+sc1025d-right sc1025d-right-22-1023c_16 M0 vis 208000 sil 72457 paired 67240 median 0.87 mm | B0 ok True cov 0.93 rms 0.89 inl 66020 cond 7.72e+01 rot [0.101, 2.906, 0.488] t [-16.55, 4.46, 4.42]
+sc1025d-right profile sc1025d-right-03-1023d_0 {'rx': [(-1.0, 1.0459), (-0.2, 0.9999), (0.2, 1.0043), (1.0, 1.0549)], 'ry': [(-1.0, 2.1643), (-0.2, 1.0417), (0.2, 1.0231), (1.0, 1.4251)], 'rz': [(-1.0, 1.1085), (-0.2, 1.0085), (0.2, 1.0066), (1.0, 1.1912)]} flat ['rx', 'rz']
+sc1025d-right profile sc1025d-right-11-1023d_8 {'rx': [(-1.0, 1.0278), (-0.2, 1.0008), (0.2, 1.0017), (1.0, 1.0219)], 'ry': [(-1.0, 1.8718), (-0.2, 1.0272), (0.2, 1.021), (1.0, 1.2716)], 'rz': [(-1.0, 1.0532), (-0.2, 1.0054), (0.2, 1.0032), (1.0, 1.1045)]} flat ['rx', 'rz']
+sc1025d-right profile sc1025d-right-22-1023c_16 {'rx': [(-1.0, 1.0418), (-0.2, 1.0007), (0.2, 1.0031), (1.0, 1.0438)], 'ry': [(-1.0, 2.0242), (-0.2, 1.0431), (0.2, 1.0292), (1.0, 1.5684)], 'rz': [(-1.0, 1.1447), (-0.2, 1.0078), (0.2, 1.0073), (1.0, 1.1869)]} flat ['rx', 'rz']
+sc1025d-right counted 13 median rot [0.974, 2.906, 0.488] deg from B1 3.0516196708956014
+sc1025i-right23 sc1025i-right23-03-1023d_0 M0 vis 20312 sil 11729 paired 10699 median 3.65 mm | B0 ok True cov 0.40 rms 0.94 inl 10675 cond 4.80e+02 rot [-0.682, 10.893, 9.188] t [-55.54, 35.62, 61.92]
+sc1025i-right23 sc1025i-right23-04-1023d_1 M0 vis 20318 sil 11886 paired 10793 median 1.31 mm | B0 ok True cov 0.80 rms 1.01 inl 10859 cond 3.09e+02 rot [-45.106, 2.379, 0.611] t [-11.15, -186.07, 83.76]
+sc1025i-right23 sc1025i-right23-07-1023d_4 M0 vis 20354 sil 11817 paired 10747 median 1.16 mm | B0 ok True cov 0.76 rms 1.12 inl 8404 cond 1.08e+02 rot [37.329, 1.532, 4.526] t [-16.39, 212.84, 47.84]
+sc1025i-right23 sc1025i-right23-08-1023d_5 M0 vis 20339 sil 11727 paired 10719 median 2.32 mm | B0 ok True cov 0.65 rms 1.10 inl 7547 cond 1.80e+02 rot [-20.87, 1.294, 0.261] t [-7.31, -99.44, 13.3]
+sc1025i-right23 sc1025i-right23-09-1023d_6 M0 vis 20409 sil 11834 paired 10834 median 1.05 mm | B0 ok True cov 0.75 rms 0.72 inl 6048 cond 1.02e+03 rot [40.858, -5.415, 12.621] t [-4.44, 267.2, 98.31]
+sc1025i-right23 sc1025i-right23-10-1023d_7 M0 vis 20413 sil 10644 paired 9923 median 1.69 mm | B0 ok True cov 0.80 rms 0.81 inl 10459 cond 3.78e+02 rot [-22.921, -0.779, 0.551] t [0.35, -81.63, 41.11]
+sc1025i-right23 sc1025i-right23-11-1023d_8 M0 vis 20494 sil 11728 paired 10785 median 1.87 mm | B0 ok True cov 0.36 rms 0.88 inl 8169 cond 2.41e+02 rot [-39.401, 7.6, -6.98] t [-52.01, -221.17, 87.69]
+sc1025i-right23 sc1025i-right23-12-1023d_9 M0 vis 20376 sil 10531 paired 9966 median 1.76 mm | B0 ok True cov 0.73 rms 0.93 inl 10459 cond 1.02e+03 rot [-123.289, 1.308, 7.125] t [16.55, -184.63, 396.82]
+sc1025i-right23 sc1025i-right23-14-1023d_11 M0 vis 20345 sil 11719 paired 10717 median 3.04 mm | B0 ok False cov 0.77 rms 0.92 inl 11444 cond 1.05e+03 rot [-81.36, 8.164, 4.382] t [-20.65, -266.22, 194.05]
+sc1025i-right23 sc1025i-right23-15-1023d_12 M0 vis 20386 sil 11738 paired 10771 median 1.27 mm | B0 ok True cov 0.36 rms 0.95 inl 7989 cond 3.05e+02 rot [-7.008, 5.278, 2.411] t [-30.08, -8.37, 19.05]
+sc1025i-right23 sc1025i-right23-18-1023c_12 M0 vis 20381 sil 11546 paired 10716 median 1.38 mm | B0 ok False cov 0.20 rms 1.17 inl 7438 cond 1.18e+03 rot [-25.407, 15.009, 4.297] t [-71.65, -75.99, 75.22]
+sc1025i-right23 sc1025i-right23-19-1023c_13 M0 vis 20371 sil 11509 paired 10710 median 1.3 mm | B0 ok True cov 0.58 rms 0.93 inl 9581 cond 4.61e+02 rot [-15.353, 5.863, 6.525] t [-29.15, -29.11, 33.64]
+sc1025i-right23 sc1025i-right23-22-1023c_16 M0 vis 20494 sil 11683 paired 10808 median 1.71 mm | B0 ok False cov 0.70 rms 1.16 inl 9313 cond 3.12e+02 rot [-24.911, -6.894, -1.243] t [31.06, -98.67, 21.85]
+sc1025i-right23 profile sc1025i-right23-04-1023d_1 {'rx': [(-1.0, 1.0635), (-0.2, 1.0013), (0.2, 1.0049), (1.0, 1.0684)], 'ry': [(-1.0, 1.4343), (-0.2, 1.0179), (0.2, 1.0162), (1.0, 1.3039)], 'rz': [(-1.0, 1.3505), (-0.2, 1.0169), (0.2, 1.0272), (1.0, 1.5956)]} flat ['rx']
+sc1025i-right23 profile sc1025i-right23-09-1023d_6 {'rx': [(-1.0, 0.9457), (-0.2, 0.9737), (0.2, 1.0334), (1.0, 1.2189)], 'ry': [(-1.0, 1.8503), (-0.2, 1.0622), (0.2, 0.9943), (1.0, 1.1986)], 'rz': [(-1.0, 1.6057), (-0.2, 1.0602), (0.2, 0.9778), (1.0, 1.1316)]} flat ['rx', 'ry', 'rz']
+sc1025i-right23 profile sc1025i-right23-12-1023d_9 {'rx': [(-1.0, 1.007), (-0.2, 0.995), (0.2, 1.0057), (1.0, 1.0439)], 'ry': [(-1.0, 1.0659), (-0.2, 0.9959), (0.2, 1.0199), (1.0, 1.2834)], 'rz': [(-1.0, 1.1893), (-0.2, 1.0), (0.2, 1.0348), (1.0, 1.5569)]} flat ['rx', 'ry', 'rz']
+sc1025i-right23 counted 5 median rot [-22.921, 1.308, 4.526] deg from B1 23.587226715482828
+sc1025j-right18 sc1025j-right18-03-1023d_0 M0 vis 0 sil 0 paired 0 median None mm
+sc1025j-right18 sc1025j-right18-04-1023d_1 M0 vis 0 sil 0 paired 0 median None mm
+sc1025j-right18 sc1025j-right18-07-1023d_4 M0 vis 0 sil 0 paired 0 median None mm
+sc1025j-right18 sc1025j-right18-08-1023d_5 M0 vis 0 sil 0 paired 0 median None mm
+sc1025j-right18 sc1025j-right18-09-1023d_6 M0 vis 0 sil 0 paired 0 median None mm
+sc1025j-right18 sc1025j-right18-10-1023d_7 M0 vis 0 sil 0 paired 0 median None mm
+sc1025j-right18 sc1025j-right18-11-1023d_8 M0 vis 0 sil 0 paired 0 median None mm
+sc1025j-right18 sc1025j-right18-12-1023d_9 M0 vis 0 sil 0 paired 0 median None mm
+sc1025j-right18 sc1025j-right18-14-1023d_11 M0 vis 0 sil 0 paired 0 median None mm
+sc1025j-right18 sc1025j-right18-15-1023d_12 M0 vis 0 sil 0 paired 0 median None mm
+sc1025j-right18 sc1025j-right18-18-1023c_12 M0 vis 0 sil 0 paired 0 median None mm
+sc1025j-right18 sc1025j-right18-19-1023c_13 M0 vis 0 sil 0 paired 0 median None mm
+sc1025j-right18 sc1025j-right18-22-1023c_16 M0 vis 0 sil 0 paired 0 median None mm
+sc1025j-right18 counted 0 median rot [] deg from B1 None
+VERDICT {"per_session": {"sc1025d-right": "FLAT rx,rz", "sc1025i-right23": "FLAT rx,ry,rz", "sc1025j-right18": "M0 FAIL"}, "sessions_spread_deg": 24.286272124919968, "passed": [], "route2": "NOT USABLE"}
+exit 0 Sun Oct 25 11:43:29 PM PDT 2026
