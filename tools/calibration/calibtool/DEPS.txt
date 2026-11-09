@@ -1,0 +1,20 @@
+# tools/calibration modules calibtool imports (paths relative to tools/calibration/). The devel-compatibility contract:
+# tests/devel_compat.sh reports which of these a devel tree lacks; the devel PR must bring those along.
+# Lens model, rig, OKVIS config, cells, split/validate/score, solver (M1/M3):
+scripts/lensmodel.py
+scripts/lenscells.py
+scripts/rigcfg.py
+scripts/rigmath.py
+scripts/okviscfg.py
+scripts/stereofit.py
+scripts/lensscore.py
+scripts/16_split_distance.py
+scripts/66_validate_lens.py
+scripts/71_export_lens.py
+scripts/15b_dump_neck_take.py
+scripts/08_neck_grid_direct.py
+# Camera-in-Head from neck takes (reported in v1; AI-1184 only today):
+scripts/81_tbs_handeye.py
+scripts/handeye_px.py
+scripts/handeye.py
+scripts/neckfk.py

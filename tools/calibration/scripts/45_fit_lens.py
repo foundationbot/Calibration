@@ -80,10 +80,15 @@ def main(argv=None):
     ap.add_argument("out", type=Path, help="the fit (JSON), written whatever the outcome")
     ap.add_argument("--model", default="KB4T", choices=sorted(sf.lensmodel.MODELS))
     ap.add_argument("--start", type=Path, help="a saved converged step-45 fit of the same corners: warm fit from it")
+    ap.add_argument("--max-z", type=float, help="override the rig's gates.lens_hold_max_z_m (m). The 1.3 m default is "
+                                                 "phantom12's still-board finding; on moving-board takes (phantom09/15, "
+                                                 "4 Nov) fitting to 3.0 m cut the far depth error +2.4 %% -> +0.6 %%")
     rigcfg.add_arg(ap)
     a = ap.parse_args(argv)
     rig = rigcfg.load(a.rig)
     gates = rig.lens_gates()
+    if a.max_z is not None:
+        gates["lens_hold_max_z_m"] = float(a.max_z)
     try:
         intr0, C0 = sf.nominal_start(rig, a.model)
     except ValueError as e:

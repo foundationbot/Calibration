@@ -1,0 +1,43 @@
+# rig-phantom21.yaml -- phantom21 head: queue 2 = LEFT, queue 0 = RIGHT (OKVIS_DMA_CAMERAS=2,0; checked 5 Nov by disparity sign). 1280x800.
+rig_name: phantom21
+okvis_yaml_name: phantom21_stereo_kb4t-1280x800.yaml
+target: target-aprilgrid.yaml
+target_measured: true
+cameras:
+  model: pinhole-equi
+  resolution: [1280, 800]
+  nominal_focal_px: 565.0      # OAK OV9282 at 1280x800 (phantom12/14: 562-570)
+  nominal_baseline_m: 0.0440
+  kalibr:
+    - {record_dir: cam2, dma_queue: 2, side: left}
+    - {record_dir: cam0, dma_queue: 0, side: right}
+  okvis_order: [0, 1]
+imu:
+  name: NeckPitch
+  index: 0
+  kalibr_yaml: imu-phantom12-neckpitch.yaml
+  T_BS_default_file: null
+robot:
+  host: root@phantom21
+  display_imu_dir: /path/unused
+  vio_tuner_tools: /path/unused
+  body_axes: {forward: 0, left: 1, up: 2}
+capture:
+  pair_tol_ms: 10
+  calib_pairs: 450
+  heldout_pairs: 25
+gates:
+  coverage_grid: [16, 10]
+  coverage_min: 0.60
+  reach_min_deg: 60.0
+  epipolar_max_px: 0.5
+  degenerate_disparity_px: 1.0
+  t_sc_range_m: [0.05, 0.40]
+  scale_max_pct: 0.5
+  lens_hold_rms_max_px: 1.8
+  lens_hold_max_z_m: 1.3
+  lens_bad_hold_max_frac: 0.20
+  lens_repeat_max_pct: 0.5
+  lens_pass_pct: 0.5
+  lens_pass_corner_pct: 1.0
+  lens_min_holds: 8
