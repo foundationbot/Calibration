@@ -77,6 +77,9 @@ def test_p21_registry_entry():
     assert (r.summary_new.median_pct, r.summary_new.iqr_pct, r.summary_new.rows_px) == (0.04, (-0.19, 0.28), 0.207)
     assert (r.summary_live.median_pct, r.summary_live.iqr_pct, r.summary_live.rows_px) == (0.77, (0.07, 1.77), 0.820)
     assert r.source == "p21/kit/final/final21.log"
+    assert r.files == {"fit_npz": "p21/kit/final/fit.npz", "test_npz": "p21/kit/final/test.npz",
+                       "fit_json": "p21/kit/final/fit-kb4t.json", "validate_new": "p21/kit/final/validate-kb4t",
+                       "validate_live": "p21/kit/final/validate-live", "live_json": "p21/kit/final/live-radtan.json"}
 
 
 def test_p10_registry_entry():
@@ -93,6 +96,7 @@ def test_p10_registry_entry():
     assert r.new_verdict == "PASS" and len(r.new_entries) == 9
     assert r.live_verdict == "FAIL" and r.live_n_validated == 7 and len(r.live_failing) == 7
     assert (r.summary_new.median_pct, r.summary_new.iqr_pct, r.summary_new.rows_px) == (-0.04, (-0.45, 0.33), 0.279)
+    assert r.files["fit_npz"] == "p10/kit/fit1280/fit.npz" and r.files["validate_live"] == "p10/kit/fit1280/validate-live"
     assert (r.summary_live.median_pct, r.summary_live.iqr_pct, r.summary_live.rows_px) == (0.06, (-2.49, 1.59), 3.967)
 
 
@@ -120,6 +124,8 @@ def test_stored_files_resolve(name, data_root):
     assert [d.name for d in s.raw_dirs] == s.take_order
     assert s.live_config.is_file() and s.live_config.is_relative_to(data_root)
     assert (data_root / s.recorded.source).is_file()
+    for k, rel in s.recorded.files.items():
+        assert (data_root / rel).exists(), (k, rel)
 
 
 # ---------------------------------------------------------------- A2: Session (synthetic takes)

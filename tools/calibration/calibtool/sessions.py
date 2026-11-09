@@ -35,6 +35,8 @@ class Recorded:
     live_failing: dict              # step 66, the live config: the validated entries outside the limits
     summary_new: Summary
     summary_live: Summary
+    files: dict = field(default_factory=dict, compare=False)   # the recorded run's files, relative to the data root:
+    # fit_npz / test_npz (step 16), fit_json (45), validate_new / validate_live (66 folders), live_json (66's input)
 
 
 @dataclass(frozen=True)
@@ -89,7 +91,10 @@ _add(StoredSession(
         live_verdict="FAIL", live_n_validated=6,
         live_failing={("right", (0.6, 0.9)): 0.54, ("bottom", (0.9, 1.3)): 3.99},
         summary_new=Summary(0.04, (-0.19, 0.28), 0.207),
-        summary_live=Summary(0.77, (0.07, 1.77), 0.820)),
+        summary_live=Summary(0.77, (0.07, 1.77), 0.820),
+        files={"fit_npz": "p21/kit/final/fit.npz", "test_npz": "p21/kit/final/test.npz",
+               "fit_json": "p21/kit/final/fit-kb4t.json", "validate_new": "p21/kit/final/validate-kb4t",
+               "validate_live": "p21/kit/final/validate-live", "live_json": "p21/kit/final/live-radtan.json"}),
     notes="phantom21, 5 Nov 2026: 8 neck-grid takes at 1280x800; live config radtan (scored through the kit's "
           "radtan_shim.py, which hard-codes /root/p21-cal paths)"))
 
@@ -114,7 +119,10 @@ _add(StoredSession(
                       ("centre", (0.9, 1.3)): 0.51, ("right", (0.6, 0.9)): 2.69, ("right", (0.9, 1.3)): 2.14,
                       ("bottom", (0.9, 1.3)): -1.16},
         summary_new=Summary(-0.04, (-0.45, 0.33), 0.279),
-        summary_live=Summary(0.06, (-2.49, 1.59), 3.967)),
+        summary_live=Summary(0.06, (-2.49, 1.59), 3.967),
+        files={"fit_npz": "p10/kit/fit1280/fit.npz", "test_npz": "p10/kit/fit1280/test.npz",
+               "fit_json": "p10/kit/fit1280/fit-kb4t.json", "validate_new": "p10/kit/fit1280/validate",
+               "validate_live": "p10/kit/fit1280/validate-live", "live_json": "p10/kit/fit1280/live.json"}),
     notes="phantom10 (phantom11 until 9 Nov 2026), 6 Nov: 11 neck-grid takes n6_* at 1280x800 (out1280/rejected/ "
           "left out); live config KB4T at 1280; the rig file keeps the old robot name"))
 
