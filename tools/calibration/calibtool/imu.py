@@ -113,3 +113,46 @@ def floor_gap_deg(sweep: Sweep, R, idx=None):
     v = sweep.up_imu[idx] @ np.asarray(R, float)            # rows (R.T @ u).T
     n = sweep.normal[idx]
     return np.degrees(np.arctan2(np.linalg.norm(np.cross(v, n), axis=1), np.einsum("ij,ij->i", v, n)))
+
+
+# ---------------------------------------------------------------- the fit
+
+
+@dataclass
+class Fit:
+    """rscfit's two-angle correction fitted on the poses `idx`"""
+    angles_deg: np.ndarray      # (2,) about camera x, about camera z
+    sigma_deg: np.ndarray       # (2,) formal 1-sigma
+    gap_deg: np.ndarray         # per fitted pose, after the correction
+    idx: np.ndarray
+
+    @property
+    def correction(self):
+        """R_SC -> R_SC @ correction"""
+        return rot_xz(*self.angles_deg)
+
+    @property
+    def combined_sigma_deg(self):
+        return float(np.hypot(*self.sigma_deg))
+
+
+def fit(sweep: Sweep, idx=None) -> Fit:
+    """rscfit.fit: soft-L1 least squares on the cross products of R_new.T @ up_imu and the board normal"""
+    from scipy.optimize import least_squares
+    idx = _idx(sweep, idx)
+    if len(idx) < MIN_FIT_POSES:
+        raise ValueError(f"{len(idx)} poses: the two-angle fit needs at least {MIN_FIT_POSES}")
+    U, N, R = sweep.up_imu[idx], sweep.normal[idx], sweep.R_SC
+
+    def f(p):
+        return np.cross(U @ (R @ _rx(p[0]) @ _rz(p[1])), N).ravel()
+
+    s = least_squares(f, [0.0, 0.0], loss="soft_l1", f_scale=SOFT_L1_SCALE)
+    cov = np.linalg.pinv(s.jac.T @ s.jac) * np.median(s.fun ** 2)
+    angles = np.degrees(s.x)
+    return Fit(angles, np.degrees(np.sqrt(np.diag(cov))), floor_gap_deg(sweep, R @ rot_xz(*angles), idx), idx)
+
+
+def R_new(sweep: Sweep, f: Fit):
+    """the cam0 rotation the fit gives"""
+    return sweep.R_SC @ f.correction

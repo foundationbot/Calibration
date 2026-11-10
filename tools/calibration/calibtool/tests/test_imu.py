@@ -98,3 +98,50 @@ def test_load_sweep_filters_motion(tmp_path):
     assert len(t) == 13 and t.n_recorded == 15
     assert np.array_equal(t.neck, np.delete(s.neck, [2, 5], axis=0))
     assert np.array_equal(imu.load_sweep(_npz(tmp_path, s, n=other), key="n").normal, other)
+
+
+# ---------------------------------------------------------------- task 2: the two-angle fit
+
+
+def test_fit_recovers_xz_correction():
+    s = synthetic(imu.rot_xz(0.32, 0.11))
+    f = imu.fit(s)
+    assert np.allclose(f.angles_deg, [0.32, 0.11], atol=1e-5)
+    assert f.gap_deg.max() < 1e-5 and len(f.idx) == 15
+    assert np.allclose(f.correction, imu.rot_xz(*f.angles_deg))
+
+
+def test_fit_sigma_shrinks_with_noise():
+    lo = imu.fit(synthetic(imu.rot_xz(0.32, 0.11), noise_deg=0.02))
+    hi = imu.fit(synthetic(imu.rot_xz(0.32, 0.11), noise_deg=0.2))
+    assert np.all(lo.sigma_deg > 0) and np.all(lo.sigma_deg < 0.05)
+    assert np.all(hi.sigma_deg > lo.sigma_deg)
+    assert np.isclose(lo.combined_sigma_deg, np.hypot(*lo.sigma_deg))
+
+
+def test_fit_soft_l1_bounds_one_bad_pose():
+    """soft-L1's influence is bounded: a 12 deg bad pose moves the fit barely more than a 3 deg one (least squares
+    would move it 4x as far)"""
+    s = synthetic(imu.rot_xz(0.32, 0.11), noise_deg=0.02)
+    clean = imu.fit(s).angles_deg
+    good = s.normal[7].copy()
+    shift = {}
+    for deg in (3.0, 12.0):
+        s.normal[7] = imu.axis_rotation([1, 0, 0], deg) @ good
+        shift[deg] = np.abs(imu.fit(s).angles_deg - clean).max()
+    assert shift[12.0] < 1.5 * shift[3.0] and shift[12.0] < 0.15
+
+
+def test_fit_subset_and_minimum():
+    s = synthetic(imu.rot_xz(0.32, 0.11))
+    f = imu.fit(s, idx=[0, 4, 9, 14])
+    assert np.allclose(f.angles_deg, [0.32, 0.11], atol=1e-5) and list(f.idx) == [0, 4, 9, 14]
+    with pytest.raises(ValueError):
+        imu.fit(s, idx=[0, 1])
+
+
+def test_r_new_is_config_times_correction():
+    s = synthetic(imu.rot_xz(-0.4, 0.2))
+    f = imu.fit(s)
+    assert np.allclose(imu.R_new(s, f), R_CFG @ f.correction)
+    assert imu.rotation_angle_deg(imu.R_new(s, f), R_CFG @ imu.rot_xz(-0.4, 0.2)) < 1e-5
