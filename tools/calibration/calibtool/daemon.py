@@ -33,7 +33,9 @@ from pathlib import Path
 DEADMAN_S = 5.0
 ACTIVE = frozenset({"TRIAL"})
 TERMINAL = frozenset({"DONE", "ABORTED"})
-STEP_S = 0.25            # 9 Nov trial: guidance felt laggy at 0.5 s
+STEP_S = 0.15            # 9 Nov trial: guidance felt laggy at 0.5 s, then 0.25 s; guide_corners on a 1280x800 frame
+                         # takes ~30 ms single-threaded (Moonstone; phantom10 measured in the report)
+SAYS_KEEP = 8            # the recent prompts kept in the state: a step can make two (an end and the next intro)
 SAMPLE_S = 1.0
 HEALTH_KEEP = 30
 
@@ -362,6 +364,8 @@ class Daemon:
         st["preflight_green"] = pf.green(res.checks)
         st["motion_gate_green"] = pf.green(res.checks, gate="motion")
         st["snapshot_keys"] = sorted(res.snapshot)
+        if self.trial is not None:
+            st["trial"] = self.trial.state(self.clock())
         self.watch = health.Watch(res.baseline)
         failed = [c.name for c in res.checks if c.status == "fail" and c.gate == "collect"]
         self.m.store.event("preflight", t=self.clock(), green=st["preflight_green"], failed=failed,
@@ -440,6 +444,7 @@ class Daemon:
     def _say(self, s):
         d = s.as_dict()
         self.m.state["say"] = d
+        self.m.state["says"] = (list(self.m.state.get("says") or []) + [d])[-SAYS_KEEP:]
         self.m.store.event("say", t=s.t, say=d)
 
     def step(self):
@@ -453,18 +458,20 @@ class Daemon:
             if not self._trial_started:
                 self._trial_started = True
                 self._say(self.trial.start(t))
+                self.m.store.event("trial_gravity", t=t, gravity=self.trial.gravity_status())
             for k in self.m.take_keys():
                 for s in self.trial.key(t, k):
                     self._say(s)
             if fresh is not False:
                 for s in self.trial.update(t, fresh):
                     self._say(s)
-            st["trial"] = self.trial.state()
+            st["trial"] = self.trial.state(t)
             if self.trial.finished:
                 self.m.store.event("trial_summary", t=t, summary=self.trial.summary())
                 self.m.to("DONE", "placement trial finished")
         elif self.trial is not None:
-            st["trial"] = self.trial.state() if self._trial_started else st.get("trial")
+            # always the trial's own state: a stored line from before a restart is stale (9 Nov: "placement 2 of 6")
+            st["trial"] = self.trial.state(t)
         st["banner"] = self.banner()
         self.m.save()
 
@@ -565,7 +572,7 @@ def _current(root):
 
 def cmd_run(a):
     """the daemon in the foreground (start runs this detached)"""
-    from calibtool import capture as cp, detect, place, preflight as pf, producer as pr, profile, storage
+    from calibtool import capture as cp, detect, gravity, place, preflight as pf, producer as pr, profile, storage
     prof = profile.load(a.profile)
     if prof.pydeps and prof.pydeps not in sys.path:
         sys.path.insert(0, prof.pydeps)
@@ -611,8 +618,15 @@ def cmd_run(a):
 
     def to_obs(dl):
         return detect.board_obs(dl, board, focal=rig.nominal_focal_px, size=(W, H))
-    trial = place.Trial(place.DEFAULTS, dirs.report / "trial.jsonl", focal=rig.nominal_focal_px, size=(W, H)) \
-        if a.trial or m.state.get("mode") == "trial" else None
+    trial = None
+    if a.trial or m.state.get("mode") == "trial":
+        # 'up' in camera 0 (head IMU + the live OKVIS R_SC, read-only; None -> guidance by camera distance only)
+        grav = gravity.from_robot()
+        grav.up()
+        m.store.event("gravity", t=time.time(), **grav.status())
+        trial = place.Trial(place.DEFAULTS, dirs.report / "trial.jsonl", timeout_s=prof.placement_timeout_s,
+                            focal=rig.nominal_focal_px, size=(W, H), gravity=grav,
+                            stand=place.Stand(prof.stand_raise_m, prof.stand_lower_m))
     sampler = SystemSampler(kube, run=lambda argv, timeout: pf._sh(argv, timeout))
     sampler.refresh()
     sampler.refresh_slow()

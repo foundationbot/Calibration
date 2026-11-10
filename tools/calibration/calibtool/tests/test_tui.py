@@ -80,6 +80,44 @@ def test_each_new_prompt_is_spoken_once():
     assert len(out) == 3
 
 
+def test_every_prompt_of_a_step_is_spoken_in_order():
+    """9 Nov trial: a placement that ended and the next intro came in one step; only the last one reached the TUI"""
+    t, sent, out, sp, c = make()
+    says = [{"id": 4, "t": 99.0, "kind": "correction", "text": "Lower the board."},
+            {"id": 5, "t": 100.0, "kind": "skip", "text": "Skipping this one."},
+            {"id": 6, "t": 100.0, "kind": "intro", "text": "Placement 3 of 6."}]
+    t.step(json.dumps(state(say=says[0], says=says[:1])))
+    t.step(json.dumps(state(say=says[2], says=says)))
+    t.step(json.dumps(state(say=says[2], says=says)))
+    assert sp.said == ["Lower the board.", "Skipping this one.", "Placement 3 of 6."]
+
+
+def test_a_restarted_daemon_numbering_from_1_is_spoken_again():
+    t, sent, out, sp, c = make()
+    t.step(json.dumps(state(say={"id": 40, "t": 99.0, "kind": "correction", "text": "old"},
+                            says=[{"id": 40, "t": 99.0, "kind": "correction", "text": "old"}])))
+    new = {"id": 1, "t": 200.0, "kind": "intro", "text": "Placement 4 of 6."}
+    t.step(json.dumps(state(say=new, says=[new], updated=200.0)))
+    assert sp.said == ["old", "Placement 4 of 6."]
+
+
+def test_render_names_the_current_placement_gravity_and_height():
+    tr = {"started": True, "index": 3, "of": 6, "target": "1.1 m", "since_intro_s": 45.2, "timeout_s": 180.0,
+          "finished": False, "records": [{"target": "0.5 m", "result": "unreachable", "seconds": 1.2, "prompts": 1}],
+          "summary": {}, "gravity": {"ok": True, "pitch_down_deg": 65.9, "note": "IMU slot 0, 250 samples"},
+          "board": {"z_m": 1.13, "dh_m": -1.1, "dxy_m": 0.45, "tags": 35, "cut": []}}
+    r = tui.render(state(trial=tr))
+    assert "NOW placement 3 of 6 (1.1 m), 45 s of 180 s" in r
+    assert "camera 65.9 deg below the horizon" in r
+    assert "110 cm below the camera, 45 cm along the floor" in r
+    tr2 = dict(tr, started=False, index=4, target="1.6 m", since_intro_s=None,
+               gravity={"ok": False, "note": "IMU not read (FileNotFoundError); placement guidance uses the camera "
+                                                 "distance only"})
+    r = tui.render(state(trial=tr2))
+    assert "not started: next is placement 4 of 6 (1.6 m)" in r and "NOW" not in r
+    assert "gravity: NOT AVAILABLE" in r and "camera distance only" in r
+
+
 def test_an_old_prompt_is_not_spoken_on_reattach():
     t, sent, out, sp, c = make()
     t.step(json.dumps(state(say={"id": 9, "t": 10.0, "kind": "correction", "text": "old"}, updated=100.0)))

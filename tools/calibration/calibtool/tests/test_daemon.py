@@ -328,3 +328,35 @@ def test_trial_pauses_in_hold(tmp_path):
         cap.step()
         d.step()
     assert tr.records == []                     # the guide did not run while holding
+
+
+def test_every_say_of_a_step_reaches_the_state_and_the_trial_line_is_current(tmp_path):
+    """9 Nov trial: a timeout's "Skipping this one." and the next intro come in one step; both must reach the TUI.
+    And the trial line must name the placement being placed, also outside TRIAL (no stale 'placement 2 of 6')"""
+    c = Clock()
+    m = machine(tmp_path, c)
+    cap = cp.Capture(FakeSource(), 3, 0, clock=c)
+    cap.step()
+    cap.step()
+    tr = place.Trial([place.target("1.6 m"), place.target("1.1 m")], tmp_path / "trial.jsonl", timeout_s=3.0)
+    d = dm.Daemon(m, cap, detector=lambda pair: _done((None, None)), to_obs=lambda det: None, sampler=lambda: {},
+                  trial=tr, clock=c)
+    d.preflight_done(pf.Result([], {}, {}))
+    assert m.state["trial"]["index"] == 1 and m.state["trial"]["started"] is False
+    m.heartbeat()
+    m.key("T")
+    for _ in range(30):
+        c.t += 0.15
+        m.heartbeat()
+        cap.step()
+        cap.step()
+        d.step()
+    texts = [x["text"] for x in m.state["says"]]
+    assert "Skipping this one." in texts and any(x.startswith("Placement 2 of 2.") for x in texts)
+    ids = [x["id"] for x in m.state["says"]]
+    assert ids == sorted(ids)
+    assert m.state["trial"]["index"] == 2 and m.state["trial"]["target"] == "1.1 m"
+
+
+def test_step_period_is_fast_enough_for_the_guide():
+    assert dm.STEP_S <= 0.15

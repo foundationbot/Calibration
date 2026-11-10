@@ -7,6 +7,9 @@
 #                    head_camera.json)
 #   producer         namespace / deployment of the camera producer
 #   motor_tool       the fixed dma_motor_motion (with the 'targets' signal)
+#   stand            the operator's board stand for the placement guidance: how far the board can go up / down from
+#                    its height at the start of a placement (m); default 0.30 / 0.40
+#   placement_timeout_s  a placement trial gives up ("Skipping this one.") after this long; default 180
 profiles:
   P10:
     python: /root/p11-cal/venv/bin/python
@@ -16,3 +19,7 @@ profiles:
     right: 0
     producer: {namespace: dma-video, deployment: producer}
     motor_tool: /root/p11-cal/dma_motor_motion
+    # chair-shaped frame; its height changes only in coarse steps: from the usual height up ~30 cm or down ~40 cm
+    # (operator, 9 Nov trial)
+    stand: {raise_max_m: 0.30, lower_max_m: 0.40}
+    placement_timeout_s: 180

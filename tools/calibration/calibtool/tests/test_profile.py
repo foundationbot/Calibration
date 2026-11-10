@@ -19,6 +19,9 @@ def test_p10_profile():
     assert p.motor_tool == "/root/p11-cal/dma_motor_motion"
     assert p.rig_path == robots.load()["P10"].rig_path
     assert p.rig_path.is_file()
+    # the operator's chair-shaped board stand (9 Nov trial): up ~30 cm, down ~40 cm from its usual height
+    assert (p.stand_raise_m, p.stand_lower_m) == (0.30, 0.40)
+    assert p.placement_timeout_s == 180.0
 
 
 def test_unknown_bot():

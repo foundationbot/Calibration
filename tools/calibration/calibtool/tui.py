@@ -59,8 +59,16 @@ def render(state, width=100) -> str:
         L.append("board: not seen")
     tr = s.get("trial")
     if tr:
-        L.append(f"placement trial: {tr.get('index')} of {tr.get('of')} ({tr.get('target')})"
-                 + (" -- finished" if tr.get("finished") else ""))
+        L.append("placement trial: " + _trial_line(tr))
+        g = tr.get("gravity") or {}
+        if g:
+            L.append(f"  gravity: camera {g.get('pitch_down_deg')} deg below the horizon ({g.get('note', '')})"
+                     if g.get("ok") else f"  gravity: NOT AVAILABLE -- {g.get('note', '')}")
+        tb = tr.get("board") or {}
+        if tb.get("dh_m") is not None:
+            dh = float(tb["dh_m"])
+            L.append(f"  board centre {abs(round(dh * 100)):.0f} cm {'below' if dh < 0 else 'above'} the camera, "
+                     f"{round(float(tb['dxy_m']) * 100):.0f} cm along the floor")
         for r in tr.get("records") or ():
             L.append(f"  {r['target']:7s} {r['result']:11s} {r['seconds']:6.1f} s, {r.get('prompts', 0)} prompts")
     say = s.get("say")
@@ -122,11 +130,24 @@ class Background:
         self.q.put(text)
 
 
+def _trial_line(tr) -> str:
+    """the CURRENT placement, said plainly (9 Nov trial: a stale "placement 2 of 6" line misled everyone)"""
+    where = f"placement {tr.get('index')} of {tr.get('of')} ({tr.get('target')})"
+    if tr.get("finished"):
+        return f"finished, {tr.get('of')} placements"
+    if not tr.get("started"):
+        return f"not started: next is {where} (press T)"
+    since, limit = tr.get("since_intro_s"), tr.get("timeout_s")
+    clock = "" if since is None else f", {since:.0f} s" + ("" if limit is None else f" of {limit:.0f} s")
+    return f"NOW {where}{clock}"
+
+
 class Tui:
     def __init__(self, send, speaker, clock=time.monotonic, out=print, speak_max_age_s=SPEAK_MAX_AGE_S):
         self.send_line, self.speaker, self.clock, self.out = send, speaker or Silent(), clock, out
         self.max_age = speak_max_age_s
         self.spoken = None
+        self._fresh = True              # nothing seen yet: old prompts (attaching late) are not spoken
         self._hb = None
         self.state = None
 
@@ -137,11 +158,19 @@ class Tui:
             return None
         self.state = st
         say = st.get("say")
-        if say and say.get("id") != self.spoken:
-            age = float(st.get("updated") or say.get("t") or 0) - float(say.get("t") or 0)
-            if self.spoken is not None or age <= self.max_age:
-                self.speaker.say(say["text"])
-            self.spoken = say.get("id")
+        says = [x for x in (st.get("says") or ([say] if say else [])) if x and x.get("id") is not None]
+        if says:
+            ids = [x["id"] for x in says]
+            if self.spoken is not None and max(ids) < self.spoken:
+                self.spoken, self._fresh = None, True      # calibd restarted: its prompt numbers began again
+            for x in sorted(says, key=lambda x: x["id"]):
+                if self.spoken is not None and x["id"] <= self.spoken:
+                    continue
+                age = float(st.get("updated") or x.get("t") or 0) - float(x.get("t") or 0)
+                if not self._fresh or age <= self.max_age:
+                    self.speaker.say(x["text"])
+                self.spoken = x["id"]
+            self._fresh = False
         self.out(render(st))
         return st
 
