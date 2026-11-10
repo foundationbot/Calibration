@@ -1,5 +1,7 @@
 """calibtool.solver: the fast KB4T stereo solve (M3). Derivatives against finite differences, the stereo residuals
-against stereofit's, and the solve against scipy run to a tight tolerance on synthetic data (lens_synth, Fit A truth)."""
+against stereofit's, and the solve against scipy on synthetic data (lens_synth, Fit A truth): where scipy stops short
+in a flat valley, a cost at or below scipy's and a minimum the fast solve returns to from scipy's result; the
+comparison with scipy run tight is in the replay tier (minutes)."""
 import importlib
 import sys
 from pathlib import Path
@@ -140,10 +142,11 @@ def test_rotvec_is_rigmaths_log_at_every_angle():
 # ---------------------------------------------------------------- the solve against scipy, tight
 
 
-def _tight(monkeypatch):
-    """stereofit.solve with scipy run to ftol = xtol = gtol = 1e-15: the reference"""
+def _tight(monkeypatch, tol=1e-12):
+    """stereofit.solve with scipy run to ftol = xtol = gtol = tol: the reference (1e-15 x 20000 evaluations took
+    > 9 min for the suite; the camera-fixed and stereo-pose-only solves converge well before 1e-12)"""
     import functools
-    monkeypatch.setattr(sf, "least_squares", functools.partial(sf.least_squares, ftol=1e-15, xtol=1e-15, gtol=1e-15))
+    monkeypatch.setattr(sf, "least_squares", functools.partial(sf.least_squares, ftol=tol, xtol=tol, gtol=tol))
 
 
 def _grid_diff(intr_a, C_a, intr_b, C_b, model="KB4T"):
@@ -183,19 +186,43 @@ def presolved():
     return data, intr0, pre
 
 
-def test_the_full_fit_reaches_scipys_tight_optimum(presolved, monkeypatch):
+def test_the_full_fit_ends_below_scipy_on_a_minimum_it_returns_to(presolved):
+    """scipy (step 45's tolerances) stops early in the flat valley of the full fit, so it is no fixed reference here
+    (measured 9 Nov: cost fast 2109.40725 < scipy 1e-10 2109.40972 < scipy default 2109.41594; scipy at 1e-10 needs
+    ~2900 evaluations, 110 s). What the unit tier pins instead: the fast fit converges, its cost is not above
+    scipy's, and started from scipy's result it returns to its own solution (a minimum, not a stop in the valley). The
+    tight-scipy comparison at the design bound is test_the_full_fit_is_within_the_design_bound_of_tight_scipy"""
     data, intr0, pre = presolved
     fast = solver.solve(data, "KB4T", intr0, pre["C"], pre["poses"], max_nfev=2000)
-    _tight(monkeypatch)
-    ref = sf.solve(data, "KB4T", intr0, pre["C"], pre["poses"], max_nfev=20000)
+    ref = sf.solve(data, "KB4T", intr0, pre["C"], pre["poses"], max_nfev=2000)
     assert fast["success"] and fast["nfev"] <= 4 * 2000
-    assert np.array_equal(fast["kept"], ref["kept"])
-    assert max(_grid_diff(ref["intr"], ref["C"], fast["intr"], fast["C"])) < 2e-3
-    dt, dr = _pose_diff(ref["C"], fast["C"])
-    assert dt < 1e-3 and dr < 1e-4
-    assert np.abs(fast["res"] - ref["res"]).max() < 1e-3
     assert set(fast) == set(ref)
     assert fast["poses"].shape == ref["poses"].shape and np.abs(fast["log_scale"]).max() == 0
+    assert np.array_equal(fast["kept"], ref["kept"])
+    assert sf.fit_cost(fast)[0] <= sf.fit_cost(ref)[0] * (1 + 1e-12)
+    back = solver.solve(data, "KB4T", ref["intr"], ref["C"], ref["poses"], max_nfev=2000)
+    assert back["success"] and np.array_equal(back["kept"], fast["kept"])
+    assert max(_grid_diff(fast["intr"], fast["C"], back["intr"], back["C"])) < 1e-5
+    dt, dr = _pose_diff(fast["C"], back["C"])
+    assert dt < 1e-5 and dr < 1e-6
+    assert abs(sf.fit_cost(back)[0] - sf.fit_cost(fast)[0]) <= 1e-9 * sf.fit_cost(fast)[0]
+    assert max(_grid_diff(ref["intr"], ref["C"], fast["intr"], fast["C"])) < 0.05     # same minimum (scipy short)
+
+
+@pytest.mark.replay
+def test_the_full_fit_is_within_the_design_bound_of_tight_scipy(presolved, monkeypatch):
+    """design 9.1 on synthetic data: against scipy at ftol = xtol = gtol = 1e-10 (~110 s single thread, hence the
+    replay tier) the grid projection differs < 0.02 px per camera, the stereo pose < 0.01 mm / 0.001 deg, and the
+    fast cost is not above the reference's"""
+    data, intr0, pre = presolved
+    fast = solver.solve(data, "KB4T", intr0, pre["C"], pre["poses"], max_nfev=2000)
+    _tight(monkeypatch, 1e-10)
+    ref = sf.solve(data, "KB4T", intr0, pre["C"], pre["poses"], max_nfev=5000)
+    assert fast["success"] and ref["success"] and np.array_equal(fast["kept"], ref["kept"])
+    assert sf.fit_cost(fast)[0] <= sf.fit_cost(ref)[0] * (1 + 1e-12)
+    assert max(_grid_diff(ref["intr"], ref["C"], fast["intr"], fast["C"])) < 0.02
+    dt, dr = _pose_diff(ref["C"], fast["C"])
+    assert dt < 0.01 and dr < 0.001
 
 
 def test_the_stereo_pose_presolve_matches_scipy(monkeypatch):
@@ -217,24 +244,71 @@ def test_a_cap_too_small_to_converge_is_not_success(presolved):
     assert not r["success"] and r["nfev"] <= 2
 
 
+def _pair_cost(data, r):
+    """sum of squared residuals per pair over the corners r kept"""
+    e = np.where(r["kept"][:, None], r["res"], 0.0)
+    return np.bincount(data.pair, weights=(e ** 2).sum(1), minlength=data.n)
+
+
+def _a_minimum_at_or_below(data, model, intr, C, fast, ref, scale):
+    """fast's kept corners are ref's, its cost is not above ref's on any pair, and the fast solve started from ref's
+    result returns to fast's own (poses to 1e-7 rad / m, board scales to 1e-7): ref stopped short, not elsewhere"""
+    assert fast["success"] and ref["success"] and np.array_equal(fast["kept"], ref["kept"])
+    pf, pr = _pair_cost(data, fast), _pair_cost(data, ref)
+    assert (pf <= pr + 1e-9 * np.maximum(pr, 1.0)).all(), np.max(pf - pr)
+    back = solver.solve(data, model, intr, C, ref["poses"], free_intr=False, free_C=False, scale=scale,
+                        max_nfev=2000, ls0=ref["log_scale"] if scale else None)
+    assert back["success"] and np.array_equal(back["kept"], fast["kept"])
+    assert np.abs(back["poses"][:, 3:] - fast["poses"][:, 3:]).max() < 1e-7
+    assert np.abs(sf.rotmat(back["poses"][:, :3]) - sf.rotmat(fast["poses"][:, :3])).max() < 1e-7
+    assert np.abs(back["log_scale"] - fast["log_scale"]).max() < 1e-7
+    assert np.array_equal(fast["C"], C) and np.abs(fast["log_scale"]).max() * (not scale) == 0
+
+
 @pytest.mark.parametrize("scale", [False, True])
-def test_with_the_camera_fixed_each_pair_matches_scipy(monkeypatch, scale):
+def test_with_the_camera_fixed_each_pair_is_a_minimum_at_or_below_scipys(scale):
+    """the scorer's solve against scipy at stereofit's tolerances. Not "equal to tight scipy per pair": scipy stops
+    early on a pair whose pose and board scale are nearly degenerate (holdout_sweep pair 28: board scale off the fast
+    result by 8.0e-5 at scipy's defaults, 1.7e-5 at tol 1e-12 where scipy stops unconverged at 2000 evaluations,
+    measured 9 Nov), while the fast cost is lower on every pair"""
     data = sf.Data(S.holdout_sweep(), S.BOARD)
     intr, C = [S.I0, S.I1], S.C_TRUE
     poses, ok = sf.pnp_poses(data, "KB4T", intr, C)
     C = C.copy()
     C[:3, 3] *= 1.01                                         # board scales away from 1
     fast = solver.solve(data, "KB4T", intr, C, poses, free_intr=False, free_C=False, scale=scale, max_nfev=2000)
-    _tight(monkeypatch)
-    ref = sf.solve(data, "KB4T", intr, C, poses, free_intr=False, free_C=False, scale=scale, max_nfev=20000)
-    assert fast["success"] and np.array_equal(fast["kept"], ref["kept"])
-    assert np.abs(fast["poses"][:, 3:] - ref["poses"][:, 3:]).max() < 1e-7
-    assert np.abs(sf.rotmat(fast["poses"][:, :3]) - sf.rotmat(ref["poses"][:, :3])).max() < 1e-7
-    assert np.abs(fast["log_scale"] - ref["log_scale"]).max() < 1e-8
-    assert np.array_equal(fast["C"], C)
+    ref = sf.solve(data, "KB4T", intr, C, poses, free_intr=False, free_C=False, scale=scale, max_nfev=2000)
+    _a_minimum_at_or_below(data, "KB4T", intr, C, fast, ref, scale)
 
 
-def test_radtan_with_the_camera_fixed_and_refused_with_free_intrinsics(monkeypatch):
+def _centre_holds():
+    """holdout_sweep()'s centre-target holds (0-11): inside the radius where lens_synth.radtan_like() fits the lens"""
+    data = sf.Data(S.holdout_sweep(), S.BOARD)
+    return data.select(data.hold < 12)
+
+
+def test_radtan_with_the_camera_fixed_and_refused_with_free_intrinsics():
+    from calibtool import livecfg
+    rt = list(S.radtan_like())
+    data = _centre_holds()
+    with livecfg.radtan_scope():
+        poses, ok = sf.pnp_poses(data, "RADTAN", rt, S.C_TRUE)
+        d = data.select(ok)
+        fast = solver.solve(d, "RADTAN", rt, S.C_TRUE, poses[ok], free_intr=False, free_C=False, scale=True,
+                            max_nfev=2000)
+        ref = sf.solve(d, "RADTAN", rt, S.C_TRUE, poses[ok], free_intr=False, free_C=False, scale=True,
+                       max_nfev=2000)
+        assert fast["kept"].mean() > 0.95
+        _a_minimum_at_or_below(d, "RADTAN", rt, S.C_TRUE, fast, ref, True)
+        with pytest.raises(NotImplementedError):
+            solver.solve(d, "RADTAN", rt, S.C_TRUE, poses[ok], free_intr=True)
+
+
+def test_a_pair_whose_minimum_runs_away_reports_success_as_scipy_does():
+    """a lens that does not fit the corners (a made-up RADTAN on the fisheye sweep): trimming leaves pairs with a
+    handful of corners whose board scale runs off (log scale > 8) with the cost still falling. scipy stops there on
+    its ftol test (relative decrease < 1e-8) and reports success; the fast solve keeps going to its cap for accuracy
+    but reports success too, since scipy's test was met (measured 9 Nov: it reported failure, 5197 evaluations)"""
     from calibtool import livecfg
     data = sf.Data(S.holdout_sweep(), S.BOARD)
     rt = [np.r_[565.0, 564.0, 642.0, 385.0, -0.01, 0.002, 0.0005, -0.0003],
@@ -244,10 +318,7 @@ def test_radtan_with_the_camera_fixed_and_refused_with_free_intrinsics(monkeypat
         d = data.select(ok)
         fast = solver.solve(d, "RADTAN", rt, S.C_TRUE, poses[ok], free_intr=False, free_C=False, scale=True,
                             max_nfev=2000)
-        _tight(monkeypatch)
         ref = sf.solve(d, "RADTAN", rt, S.C_TRUE, poses[ok], free_intr=False, free_C=False, scale=True,
-                       max_nfev=20000)
-        with pytest.raises(NotImplementedError):
-            solver.solve(d, "RADTAN", rt, S.C_TRUE, poses[ok], free_intr=True)
-    assert fast["success"] and np.array_equal(fast["kept"], ref["kept"])
-    assert np.abs(fast["log_scale"] - ref["log_scale"]).max() < 1e-7
+                       max_nfev=2000)
+    assert ref["success"] and fast["success"]
+    assert fast["kept"].mean() < 0.5 and np.abs(fast["log_scale"]).max() > 5        # the scenario: a runaway pair

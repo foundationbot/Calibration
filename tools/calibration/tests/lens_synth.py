@@ -139,6 +139,24 @@ def pipeline():
     return out
 
 
+@functools.lru_cache(maxsize=None)
+def radtan_like(rmax=420.0):
+    """a RADTAN live config (fx fy cx cy k1 k2 p1 p2 per camera) fitted to I0 / I1 on a 20 px image grid within rmax px
+    of the principal point (max misfit ~0.5 px there; far worse beyond, where a radtan polynomial cannot follow the
+    fisheye): a realistic config to score the centre target's holds of holdout_sweep() with. Needs calibtool.livecfg
+    (imported here only). -> ([intr0, intr1] as tuples of arrays)"""
+    from scipy.optimize import least_squares
+    from calibtool import livecfg
+    out = []
+    for intr in (I0, I1):
+        g = np.stack(np.meshgrid(np.arange(0, W, 20.0), np.arange(0, H, 20.0)), -1).reshape(-1, 2)
+        g = g[np.hypot(g[:, 0] - intr[2], g[:, 1] - intr[3]) <= rmax]
+        ray = lensmodel.unproject("KB4T", intr, g)
+        sol = least_squares(lambda x: (livecfg.radtan_project(x, ray) - g).ravel(), np.r_[intr[:4], 0, 0, 0, 0])
+        out.append(sol.x)
+    return tuple(out)
+
+
 def write_calibration(path, model, intr, C):
     """a calibration file 66 and 71 read (model, intr, C)"""
     Path(path).write_text(json.dumps({"model": model, "intr": [np.asarray(v).tolist() for v in intr],

@@ -16,8 +16,14 @@ the same trim rounds. Only the minimiser differs: scipy's TRF with a finite-diff
   independent and solved as a vector of small LMs, each with its own damping and stop.
 
 A solve "succeeds" as scipy's does: a convergence test met before max_nfev residual evaluations (one evaluation per
-trial step). The tests are tighter than scipy's defaults (relative cost decrease < 1e-12 on a good step, scaled
-gradient or step at rounding level), so a converged fast solve sits on the minimum scipy approaches.
+trial step). The stopping tests are tighter than scipy's defaults (relative cost decrease < 1e-12 on a good step,
+scaled gradient or step at rounding level), so a converged fast solve sits on the minimum scipy approaches. A solve (a
+pair, with the camera fixed) that runs to max_nfev, or stalls at full damping, without meeting them still succeeds if
+the solve met scipy's own ftol test on the way (a good step, ratio > 0.25, relative decrease of the whole problem's
+cost < 1e-8 -- with the camera fixed: summed over the pairs, as scipy solves them as one problem): where scipy would
+have stopped and reported success; it ran on past that point only for accuracy. Without this a pair whose minimum
+runs off (a handful of corners left by trimming, a board scale running away with the cost still falling) fails the
+fast solve where scipy reports success (measured 9 Nov).
 
 Switched on by CALIB_SOLVER=fast (stereofit.solve and lensscore.score read it at each call); default scipy."""
 from __future__ import annotations
@@ -31,6 +37,7 @@ ENV = "CALIB_SOLVER"
 KB_MODELS = ("KB4", "KB4T")
 TRIM_PX, TRIM_ROUNDS = 3.0, 4                      # stereofit.TRIM_PX, TRIM_ROUNDS
 FTOL = 1e-12                                       # relative cost decrease on a good step
+SCIPY_FTOL = 1e-8                                  # scipy least_squares' default ftol: its success test (see above)
 GTOL = 1e-10                                       # scaled gradient (px), relative to the residual norm
 XTOL = 1e-12                                       # scaled step (px), relative to the residual norm
 LAM0, LAM_MAX = 1e-3, 1e16
@@ -284,3 +291,159 @@ class Problem:
             JC = np.concatenate([dP @ _skew(Pc1), -dP], axis=-1)                # C <- C [Exp(dr) | dt]
             Jg[..., i:i + 6] = np.where(c1[..., None, None], JC, 0.0)
         return r.reshape(n, 2 * M), Jg.reshape(n, 2 * M, G), Jp.reshape(n, 2 * M, k)
+
+
+# ---------------------------------------------------------------- Levenberg-Marquardt
+
+
+def _diag_scale(H):
+    """Jacobi scale sqrt(diag H) (..., k), 1 where a column is empty (a pair with every corner trimmed)"""
+    d = np.sqrt(np.diagonal(H, axis1=-2, axis2=-1))
+    return np.where(d > 0, d, 1.0)
+
+
+def _lm_global(prob, st, w, free_intr, free_C, scale, max_nfev):
+    """LM over the global block and every pair's block at once, the pairs eliminated by Schur complement.
+    -> (state, success, evaluations)"""
+    lin = prob.linearise(st, free_intr, free_C, scale, w)
+    nfev, lam, nu = 1, LAM0, 2.0
+    loose = False                                                           # scipy's ftol test met on the way
+    while True:
+        r, Jg, Jp = lin
+        cost = 0.5 * float(r.ravel() @ r.ravel())
+        G, k = Jg.shape[-1], Jp.shape[-1]
+        Jg2 = Jg.reshape(-1, G)
+        JpT = np.transpose(Jp, (0, 2, 1))
+        Hgg, gg = Jg2.T @ Jg2, Jg2.T @ r.ravel()
+        Hgp = np.transpose(Jg, (0, 2, 1)) @ Jp                                 # (n, G, k)
+        Hpp, gp = JpT @ Jp, (JpT @ r[..., None])[..., 0]                       # (n, k, k), (n, k)
+        dg, dp = _diag_scale(Hgg), _diag_scale(Hpp)
+        Hgg, gg = Hgg / np.outer(dg, dg), gg / dg
+        Hgp = Hgp / (dg[None, :, None] * dp[:, None, :])
+        Hpp, gp = Hpp / (dp[:, :, None] * dp[:, None, :]), gp / dp
+        rn = max(np.sqrt(2 * cost), 1.0)
+        if max(np.abs(gg).max(initial=0), np.abs(gp).max(initial=0)) <= GTOL * rn:
+            return st, True, nfev
+        HpgB = np.concatenate([np.transpose(Hgp, (0, 2, 1)), gp[..., None]], axis=-1)   # (n, k, G + 1)
+        while True:
+            if nfev >= max_nfev:
+                return st, loose, nfev
+            X = np.linalg.solve(Hpp + lam * np.eye(k), HpgB)
+            S = Hgg + lam * np.eye(G) - np.einsum("pgk,pkh->gh", Hgp, X[..., :G])
+            b = -gg + np.einsum("pgk,pk->g", Hgp, X[..., G])
+            dgs = np.linalg.solve(S, b) if G else np.zeros(0)
+            dps = -X[..., G] - X[..., :G] @ dgs
+            dot = float(gg @ dgs + np.sum(gp * dps))
+            sq = float(dgs @ dgs + np.sum(dps * dps))
+            pred = 0.5 * (lam * sq - dot)
+            new = st.step(dgs / dg, dps / dp, free_intr, free_C, scale)
+            nlin = prob.linearise(new, free_intr, free_C, scale, w)
+            nfev += 1
+            rn_ = nlin[0].ravel()
+            ncost = 0.5 * float(rn_ @ rn_)
+            rho = (cost - ncost) / pred if pred > 0 and np.isfinite(ncost) else -1.0
+            if rho > 0:
+                loose = loose or ((cost - ncost) < SCIPY_FTOL * cost and rho > 0.25)
+                st, lin = new, nlin
+                lam *= max(1 / 3, 1 - (2 * rho - 1) ** 3)
+                nu = 2.0
+                if ((cost - ncost) < FTOL * cost and rho > 0.25) or np.sqrt(sq) <= XTOL * rn:
+                    return st, True, nfev
+                break
+            lam *= nu
+            nu *= 2
+            if lam > LAM_MAX:
+                return st, loose or max(np.abs(gg).max(initial=0), np.abs(gp).max(initial=0)) <= 1e-6 * rn, nfev
+
+
+def _lm_pairs(prob, st, w, scale, max_nfev):
+    """the camera fixed: every pair its own LM (damping, cost, stop), run as one vector; only pairs still running are
+    evaluated. -> (state, success = every pair converged (or met scipy's ftol test, see the module), evaluations)"""
+    n = prob.n
+    st = State(st.intr, st.C, st.R.copy(), st.t.copy(), st.ls.copy())
+    r, _, Jp = prob.linearise(st, False, False, scale, w)
+    nfev = 1
+    k = Jp.shape[-1]
+    lam, nu = np.full(n, LAM0), np.full(n, 2.0)
+    fresh = np.ones(n, bool)                               # the normal equations need recomputing
+    done, good = np.zeros(n, bool), np.zeros(n, bool)
+    loose = False                                          # scipy's ftol test met on the way (on the sum, as scipy)
+    cost = 0.5 * np.einsum("pi,pi->p", r, r)
+    Hpp, gp, dp = np.zeros((n, k, k)), np.zeros((n, k)), np.ones((n, k))
+    eye = np.eye(k)
+    while True:
+        f = np.flatnonzero(fresh & ~done)
+        if len(f):
+            JpT = np.transpose(Jp[f], (0, 2, 1))
+            H, g = JpT @ Jp[f], (JpT @ r[f][..., None])[..., 0]
+            d = _diag_scale(H)
+            Hpp[f], gp[f], dp[f] = H / (d[:, :, None] * d[:, None, :]), g / d, d
+            rn = np.maximum(np.sqrt(2 * cost[f]), 1.0)
+            conv = np.abs(gp[f]).max(axis=1) <= GTOL * rn
+            done[f[conv]] = good[f[conv]] = True
+            fresh[f] = False
+        a = np.flatnonzero(~done)
+        if not len(a):
+            return st, bool(good.all()), nfev
+        if nfev >= max_nfev:
+            return st, bool(good[done].all() and loose), nfev
+        dps = np.linalg.solve(Hpp[a] + lam[a, None, None] * eye, -gp[a][..., None])[..., 0]
+        sq = np.einsum("pk,pk->p", dps, dps)
+        pred = 0.5 * (lam[a] * sq - np.einsum("pk,pk->p", gp[a], dps))
+        step = np.zeros((n, k))
+        step[a] = dps / dp[a]
+        new = st.step(np.zeros(0), step, False, False, scale)
+        nr, _, nJ = prob.linearise(new, False, False, scale, w, pairs=a)
+        nfev += 1
+        ncost = 0.5 * np.einsum("pi,pi->p", nr, nr)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            rho = np.where((pred > 0) & np.isfinite(ncost), (cost[a] - ncost) / pred, -1.0)
+        acc = rho > 0
+        ai, rj = a[acc], a[~acc]
+        rn = np.maximum(np.sqrt(2 * cost[ai]), 1.0)
+        conv = (((cost[ai] - ncost[acc]) < FTOL * cost[ai]) & (rho[acc] > 0.25)) | (np.sqrt(sq[acc]) <= XTOL * rn)
+        dec = float(np.sum(cost[ai] - ncost[acc]))                  # scipy solves the pairs as one problem
+        loose = loose or (len(ai) > 0 and dec < SCIPY_FTOL * float(cost.sum()) and dec > 0.25 * float(pred[acc].sum()))
+        st.R[ai], st.t[ai], st.ls[ai] = new.R[ai], new.t[ai], new.ls[ai]
+        r[ai], Jp[ai], cost[ai] = nr[acc], nJ[acc], ncost[acc]
+        lam[ai] *= np.maximum(1 / 3, 1 - (2 * rho[acc] - 1) ** 3)
+        nu[ai] = 2.0
+        fresh[ai] = True
+        done[ai[conv]] = good[ai[conv]] = True
+        lam[rj] *= nu[rj]
+        nu[rj] *= 2
+        stall = rj[lam[rj] > LAM_MAX]
+        if len(stall):
+            rn = np.maximum(np.sqrt(2 * cost[stall]), 1.0)
+            good[stall] = loose | (np.abs(gp[stall]).max(axis=1) <= 1e-6 * rn)
+            done[stall] = True
+
+
+def solve(data, model, intr0, C0, poses0, free_intr=True, free_C=True, scale=False, trim_px=TRIM_PX,
+          rounds=TRIM_ROUNDS, max_nfev=300, ls0=None):
+    """stereofit.solve's contract, solved fast: least squares on the kept corners, then corners beyond trim_px of the
+    fit cut and the solve repeated until the kept set repeats (at most `rounds` rounds); success only if every round
+    converged within max_nfev evaluations. Free intrinsics need KB4/KB4T (NotImplementedError otherwise: keep scipy).
+    -> dict(intr, C, poses, log_scale, res (all corners, N x 2), kept (mask), success, nfev)"""
+    if free_intr and model not in KB_MODELS:
+        raise NotImplementedError(f"free intrinsics need {'/'.join(KB_MODELS)}, not {model}")
+    prob = Problem(data, model)
+    st = State.start(intr0, C0, poses0, ls0 if scale else None)
+    keep = np.ones(prob.N, bool)
+    nfev, ok = 0, True
+    for _ in range(rounds):
+        w = prob.padded(keep)
+        if free_intr or free_C:
+            st, success, nf = _lm_global(prob, st, w, free_intr, free_C, scale, max_nfev)
+        else:
+            st, success, nf = _lm_pairs(prob, st, w, scale, max_nfev)
+        nfev += nf
+        ok = ok and success
+        res = prob.residuals(st)
+        new = np.linalg.norm(res, axis=1) <= trim_px
+        if np.array_equal(new, keep):
+            break
+        keep = new
+    intr = [np.array(v) for v in st.intr] if free_intr else [np.array(v, float) for v in intr0]
+    return {"intr": intr, "C": st.C, "poses": st.poses(), "log_scale": st.ls if scale else np.zeros(prob.n),
+            "res": res, "kept": keep, "success": bool(ok), "nfev": int(nfev)}
