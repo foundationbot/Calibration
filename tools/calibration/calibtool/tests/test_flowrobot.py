@@ -211,6 +211,33 @@ def test_a_planner_that_cannot_be_built_leaves_the_session_without_extras():
     assert callable(nxt) and err is None
 
 
+def test_planner_next_serves_blocking_deficits_first_and_never_asks_the_same_spot_twice():
+    """10 Nov, phantom11: the comparative left-edge gap (asked for, not blocking) came first in the deficits, so the
+    same "1.39 m, off to your right" was asked twice while the far band (blocking) waited"""
+    from calibtool import planner as pn
+    nice = SimpleNamespace(kind="edge", blocks=False, short=500)
+    must = SimpleNamespace(kind="far_band", blocks=True, short=11)
+    a, b = pn.Candidate(1.6, -40, False), pn.Candidate(1.8, 0, False)
+    seen = []
+    T = np.eye(4); T[2, 3] = 1.4
+
+    class P:
+        candidates = [a, b]
+
+        def suggest(self, deficits, k=1):
+            seen.append((list(deficits), list(self.candidates)))
+            return [SimpleNamespace(candidate=self.candidates[0])] if self.candidates else []
+
+        def model(self, c):
+            return SimpleNamespace(T_CW=lambda p, y, cam: T, obj=np.zeros((4, 3)))
+    col = SimpleNamespace(targets=None, tallies=lambda: None,
+                          coverage=lambda t: SimpleNamespace(deficits=lambda targets: [nice, must]))
+    nxt = fr.planner_next(P())
+    t1, t2, t3 = nxt(col), nxt(col), nxt(col)
+    assert seen[0][0] == [must, nice]                    # blocking first, the rest after
+    assert seen[1][1] == [b] and t3 is None              # a spot already asked for is not asked again
+
+
 def test_planner_next_says_nothing_is_short():
     col = SimpleNamespace(targets=None, tallies=lambda: None,
                           coverage=lambda t: SimpleNamespace(deficits=lambda targets: []))

@@ -94,12 +94,21 @@ def planner_next(planner_, accept_m=0.15, tol_deg=10.0):
     n = itertools.count(1)
     stamp = time.strftime("%H%M%S")
 
+    asked = []
+    every = list(getattr(planner_, "candidates", None) or [])
+
     def plan_next(col):
         defs = col.coverage(col.tallies()).deficits(col.targets)
+        # 10 Nov, phantom11: what blocks the stop rule first (stable: the coverage order within each group), and a
+        # spot already asked for in this session never again (the same side placement came twice)
+        defs = sorted(defs, key=lambda d: not getattr(d, "blocks", True))
+        if every:
+            planner_.candidates = [c for c in every if c not in asked]
         s = planner_.suggest(defs, k=1) if defs else []
         if not s:
             return None
         c = s[0].candidate
+        asked.append(c)
         m = planner_.model(c)
         T = m.T_CW(0.0, 0.0, 0)
         z = float((T[:3, :3] @ np.asarray(m.obj, float).mean(0) + T[:3, 3])[2])
