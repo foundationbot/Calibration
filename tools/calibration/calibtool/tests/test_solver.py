@@ -211,7 +211,7 @@ def test_the_full_fit_ends_below_scipy_on_a_minimum_it_returns_to(presolved):
 
 @pytest.mark.replay
 def test_the_full_fit_is_within_the_design_bound_of_tight_scipy(presolved, monkeypatch):
-    """design 9.1 on synthetic data: against scipy at ftol = xtol = gtol = 1e-10 (~110 s single thread, hence the
+    """design 9.1 on synthetic data: against scipy at ftol = xtol = gtol = 1e-10 (110-170 s single thread, hence the
     replay tier) the grid projection differs < 0.02 px per camera, the stereo pose < 0.01 mm / 0.001 deg, and the
     fast cost is not above the reference's"""
     data, intr0, pre = presolved
