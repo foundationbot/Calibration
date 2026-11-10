@@ -145,3 +145,43 @@ def test_r_new_is_config_times_correction():
     f = imu.fit(s)
     assert np.allclose(imu.R_new(s, f), R_CFG @ f.correction)
     assert imu.rotation_angle_deg(imu.R_new(s, f), R_CFG @ imu.rot_xz(-0.4, 0.2)) < 1e-5
+
+
+# ---------------------------------------------------------------- task 3: held-out scoring
+
+
+def test_clusters_columns_and_rows():
+    s = synthetic()
+    cols, rows = imu.yaw_columns(s), imu.pitch_rows(s)
+    assert sorted(set(cols)) == [0, 1, 2, 3, 4] and sorted(set(rows)) == [0, 1, 2]
+    assert np.all(np.diff([s.neck[cols == c, 1].mean() for c in range(5)]) > 0)
+    assert np.all(np.diff([s.neck[rows == r, 0].mean() for r in range(3)]) > 0)
+    assert list(imu.clusters(np.array([5.0, 0.0, 0.4, 9.9]), 3.0)) == [1, 0, 0, 2]
+
+
+def test_heldout_folds_partition_the_sweep():
+    h = imu.heldout(synthetic(imu.rot_xz(0.5, -0.3), noise_deg=0.02))
+    assert len(h.columns) == 5 and len(h.pitch) == 2 and h.n_poses == 15
+    tested = np.concatenate([f.test_idx for f in h.columns])
+    assert sorted(tested) == list(range(15))
+    for f in h.columns + h.pitch:
+        assert not set(f.fit_idx) & set(f.test_idx)
+        assert len(f.gap_new_deg) == len(f.gap_live_deg) == len(f.test_idx)
+    assert {len(f.test_idx) for f in h.pitch} == {5, 10}
+
+
+def test_heldout_noise_free():
+    h = imu.heldout(synthetic(imu.rot_xz(0.5, -0.3)))
+    assert h.new_median_deg < 1e-4 and h.new_p90_deg < 1e-4
+    assert h.live_median_deg > 0.2 and h.live_p90_deg >= h.live_median_deg
+
+
+def test_heldout_live_rotation_argument():
+    s = synthetic(imu.rot_xz(0.5, -0.3))
+    h = imu.heldout(s, R_live=R_CFG @ imu.rot_xz(0.5, -0.3))
+    assert h.live_median_deg < 1e-6
+
+
+def test_heldout_single_column():
+    h = imu.heldout(synthetic(imu.rot_xz(0.5, -0.3), yaws=(0,)))
+    assert h.columns == [] and np.isnan(h.new_median_deg) and np.isnan(h.live_median_deg)

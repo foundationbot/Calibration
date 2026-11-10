@@ -156,3 +156,89 @@ def fit(sweep: Sweep, idx=None) -> Fit:
 def R_new(sweep: Sweep, f: Fit):
     """the cam0 rotation the fit gives"""
     return sweep.R_SC @ f.correction
+
+
+# ---------------------------------------------------------------- held-out scoring
+
+
+def clusters(values, gap):
+    """labels 0, 1, ... in ascending order of value; a step larger than `gap` between sorted neighbours starts a new
+    label (the commanded grid is not stored, only the measured neck angles)"""
+    values = np.asarray(values, float)
+    order = np.argsort(values, kind="stable")
+    labels = np.empty(len(values), int)
+    k = 0
+    for j, i in enumerate(order):
+        if j and values[i] - values[order[j - 1]] > gap:
+            k += 1
+        labels[i] = k
+    return labels
+
+
+def yaw_columns(sweep: Sweep, gap=COLUMN_GAP_DEG):
+    return clusters(sweep.neck[:, 1], gap)
+
+
+def pitch_rows(sweep: Sweep, gap=ROW_GAP_DEG):
+    return clusters(sweep.neck[:, 0], gap)
+
+
+@dataclass
+class Fold:
+    """fit on fit_idx, score on test_idx: the new rotation's gaps and the live rotation's on the same poses"""
+    name: str
+    fit_idx: np.ndarray
+    test_idx: np.ndarray
+    angles_deg: np.ndarray
+    gap_new_deg: np.ndarray
+    gap_live_deg: np.ndarray
+
+
+@dataclass
+class HeldOut:
+    """columns: leave-one-yaw-column-out folds (pooled into the medians); pitch: fit one pitch half, score the other
+    (reported only: it extrapolates in pitch)"""
+    columns: list = field(default_factory=list)
+    pitch: list = field(default_factory=list)
+    new_median_deg: float = float("nan")
+    live_median_deg: float = float("nan")
+    new_p90_deg: float = float("nan")
+    live_p90_deg: float = float("nan")
+    n_poses: int = 0
+
+
+def _fold(sweep, name, fit_idx, test_idx, R_live):
+    if len(fit_idx) < MIN_FIT_POSES or len(test_idx) == 0:
+        return None
+    f = fit(sweep, fit_idx)
+    return Fold(name, np.asarray(fit_idx), np.asarray(test_idx), f.angles_deg,
+                floor_gap_deg(sweep, R_new(sweep, f), test_idx), floor_gap_deg(sweep, R_live, test_idx))
+
+
+def heldout(sweep: Sweep, R_live=None) -> HeldOut:
+    """held-out floor-vs-gravity gaps of the fitted rotation vs the live rotation (default: the sweep's R_SC)"""
+    R_live = sweep.R_SC if R_live is None else np.asarray(R_live, float)
+    all_idx = np.arange(len(sweep))
+    cols, rows = yaw_columns(sweep), pitch_rows(sweep)
+    out = HeldOut()
+    if len(set(cols)) > 1:
+        for c in sorted(set(cols)):
+            fd = _fold(sweep, f"yaw column {sweep.neck[cols == c, 1].mean():+.0f} deg", all_idx[cols != c],
+                       all_idx[cols == c], R_live)
+            if fd is not None:
+                out.columns.append(fd)
+    n_rows = len(set(rows))
+    if n_rows > 1:
+        low = rows < n_rows // 2
+        for name, fi, ti in (("fit high pitch, score low", all_idx[~low], all_idx[low]),
+                             ("fit low pitch, score high", all_idx[low], all_idx[~low])):
+            fd = _fold(sweep, name, fi, ti, R_live)
+            if fd is not None:
+                out.pitch.append(fd)
+    if out.columns:
+        new = np.concatenate([f.gap_new_deg for f in out.columns])
+        live = np.concatenate([f.gap_live_deg for f in out.columns])
+        out.new_median_deg, out.live_median_deg = float(np.median(new)), float(np.median(live))
+        out.new_p90_deg, out.live_p90_deg = float(np.percentile(new, 90)), float(np.percentile(live, 90))
+        out.n_poses = int(len(new))
+    return out
