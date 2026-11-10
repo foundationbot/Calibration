@@ -1,0 +1,25 @@
+# Robot identity for calibtool (M1 C3, 9 Nov 2026). One entry per bot name (the robot's label):
+#   thor               its Thor's host name now
+#   old_names          host names that Thor had before (a name can come back on another robot: phantom11 was P10's
+#                      name until 9 Nov 2026 and is now P11's)
+#   machine_id_prefix  the first 12 hex digits of the Thor's /etc/machine-id (null: not known yet)
+#   rig                its rig file in tools/calibration/config/ (rig files keep the host name the robot had when they
+#                      were made; null: none yet)
+# calibtool.robots.identify() matches on the machine-id prefix first and refuses a host name that does not belong to
+# the robot the machine-id names.
+robots:
+  P10:
+    thor: phantom10
+    old_names: [phantom11]
+    machine_id_prefix: "60776b088362"
+    rig: rig-phantom11.yaml
+  P12:
+    thor: phantom12             # rename pending: still reachable as phantom21
+    old_names: [phantom21]
+    machine_id_prefix: "9851aca02a7d"
+    rig: rig-phantom21.yaml
+  P11:
+    thor: phantom11
+    old_names: [phantom07]
+    machine_id_prefix: null     # unknown
+    rig: null

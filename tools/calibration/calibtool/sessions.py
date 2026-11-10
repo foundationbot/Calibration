@@ -3,7 +3,10 @@ concluded (the numbers a replay must reproduce). Paths of data are relative to t
 resolved only when asked for, so the registry itself is usable without data. Stdlib only.
 
 Recorded numbers are quoted from the recorded logs (2 decimals as printed) except the step-45 fit's rms and baseline,
-which are the exact values of the recorded fit JSON (source given per field)."""
+which are the exact values of the recorded fit JSON (source given per field).
+
+Robots by bot name (config/robots.yaml, 9 Nov 2026): p21_1105 is P12 (Thor phantom21 then, phantom12 now), p10_1106 is
+P10 (Thor phantom11 then, phantom10 now). Session names, `robot` fields and file names keep the host names of the time."""
 from dataclasses import dataclass, field
 from pathlib import Path
 
