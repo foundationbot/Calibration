@@ -82,16 +82,15 @@ def _dist_words(m) -> str:
 
 
 def intro(t: Target, i, n) -> str:
+    # spoken: short plain sentences, one idea each (9 Nov trial: long sentences were not understood)
     if t.tilted:
-        where = (f"about {_dist_words(t.distance_m)} in front of the head, leaning back against the chair's "
-                 "backrest so it faces up toward the head")
+        where = f"Board {_dist_words(t.distance_m)} in front of the robot. Lean it back on the chair."
     elif t.bearing_deg:
-        side = YOUR_RIGHT if t.bearing_deg > 0 else YOUR_LEFT
-        where = (f"about {_dist_words(t.distance_m)} from the head, {abs(t.bearing_deg):.0f} degrees {side}, "
-                 "facing the head")
+        side = "to your right" if t.bearing_deg > 0 else "to your left"
+        where = f"Board {_dist_words(t.distance_m)} from the robot. Off {side}."
     else:
-        where = f"on its stand about {_dist_words(t.distance_m)} in front of the head, facing it"
-    return f"Placement {i} of {n}: put the board {where}."
+        where = f"Board {_dist_words(t.distance_m)} in front of the robot."
+    return f"Placement {i} of {n}. {where}"
 
 
 @dataclass
@@ -143,8 +142,7 @@ class PlacementGuide:
                 self._lost_since = t
             if not self._lost_said and t - self._lost_since >= self.lost_s:
                 self._lost_said = True
-                return self._say(t, "lost", "I can't see the board. Turn it to face the head, and keep it within "
-                                            "about a metre of straight ahead.")
+                return self._say(t, "lost", "I cannot see the board. Turn it to face the robot.")
             return None
         self._lost_since, self._lost_said = None, False
         c = obs.centroid
@@ -175,23 +173,23 @@ class PlacementGuide:
             span = {"left": obs.lo[0], "right": self.size[0] - 1 - obs.hi[0], "top": obs.lo[1],
                     "bottom": self.size[1] - 1 - obs.hi[1]}[side]
             move = _cm(max(0.1, (60.0 - span) * z / self.f + 0.05) if span < 60 else 0.1)
-            words = {"left": YOUR_LEFT, "right": YOUR_RIGHT, "top": "lower", "bottom": "higher"}[side]
-            return "correction", f"The board is cut off by the camera's edge: move it about {move} centimetres {words}."
+            first = {"left": "Move the board to your left.", "right": "Move the board to your right.",
+                     "top": "Lower the board.", "bottom": "Raise the board."}[side]
+            return "correction", f"{first} About {move} centimetres."
         lo, hi = t.accept
         z = obs.z
         if t.refuse_beyond_m is not None and z > t.refuse_beyond_m:
-            return "correction", (f"That is too far for the tags to be read: move the board about "
-                                  f"{_cm(z - t.distance_m)} centimetres closer.")
+            return "correction", f"Too far. Bring the board closer. About {_cm(z - t.distance_m)} centimetres."
         if z < lo:
-            return "correction", f"Move the board about {_cm(t.distance_m - z)} centimetres further back."
+            return "correction", f"Move the board back. About {_cm(t.distance_m - z)} centimetres."
         if z >= hi:
-            return "correction", f"Move the board about {_cm(z - t.distance_m)} centimetres closer."
+            return "correction", f"Bring the board closer. About {_cm(z - t.distance_m)} centimetres."
         if t.bearing_deg is not None and t.tol_deg is not None:
             b = self.bearing_deg(obs)
             if abs(b - t.bearing_deg) > t.tol_deg:
                 cm = _cm(z * (math.tan(math.radians(t.bearing_deg)) - math.tan(math.radians(b))))
-                side = YOUR_RIGHT if t.bearing_deg > b else YOUR_LEFT
-                return "correction", f"Move the board about {cm} centimetres {side}."
+                side = "to your right" if t.bearing_deg > b else "to your left"
+                return "correction", f"Move the board {side}. About {cm} centimetres."
         return "good", "Good. Step back."
 
 

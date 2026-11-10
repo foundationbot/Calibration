@@ -78,14 +78,16 @@ def test_out_of_view_comes_before_distance():
     g = guide()
     s = feed(g, [obs(z=0.8, u=1150, cut=("right",))] * 4)
     assert len(s) == 1
-    assert "YOUR right" in s[0].text and "robot's left" in s[0].text
+    assert s[0].text == "Move the board to your right. About 20 centimetres."
     assert "back" not in s[0].text
 
 
-@pytest.mark.parametrize("z,word,cm", [(0.8, "further back", 30), (1.45, "closer", 40), (0.9, "further back", 20)])
-def test_distance_wording(z, word, cm):
+@pytest.mark.parametrize("z,first,cm", [(0.8, "Move the board back.", 30), (1.45, "Bring the board closer.", 40),
+                                         (0.9, "Move the board back.", 20)])
+def test_distance_wording(z, first, cm):
+    """spoken: one short instruction, then the amount (9 Nov trial: long sentences were not understood)"""
     s = feed(guide(), [obs(z=z)] * 4)
-    assert s[0].text == f"Move the board about {cm} centimetres {word}."
+    assert s[0].text == f"{first} About {cm} centimetres."
 
 
 def test_loose_tolerance_for_defaults_counts_the_band_it_measured():
@@ -99,24 +101,24 @@ def test_far_placement_limits():
     assert far.accept == protocol.FAR_ACCEPT_M
     assert feed(guide(far), [obs(z=1.9)] * 4)[0].kind == "good"
     s = feed(guide(far), [obs(z=2.15)] * 4)[0]
-    assert s.kind == "correction" and "too far" in s.text and "closer" in s.text
+    assert s.kind == "correction" and s.text.startswith("Too far. Bring the board closer.")
     s = feed(guide(far), [obs(z=1.5)] * 4)[0]
-    assert "further back" in s.text
+    assert s.text.startswith("Move the board back.")
 
 
 def test_cut_sides_name_the_operators_side():
     s = feed(guide(), [obs(u=100, cut=("left",))] * 4)[0].text
-    assert "to YOUR left (the robot's right)" in s
+    assert s.startswith("Move the board to your left.")      # image left = robot's left: move toward the robot's right
     s = feed(guide(), [obs(v=760, cut=("bottom",))] * 4)[0].text
-    assert "higher" in s
+    assert s.startswith("Raise the board.")
     s = feed(guide(), [obs(v=40, cut=("top",))] * 4)[0].text
-    assert "lower" in s
+    assert s.startswith("Lower the board.")
 
 
 def test_bearing_target_corrects_sideways():
     t = place.Target("left edge", 1.1, (1.0, 1.2), bearing_deg=20.0, tol_deg=5.0)
     s = feed(guide(t), [obs(u=640)] * 4)[0]              # straight ahead: needs to go 20 deg to the robot's left
-    assert s.kind == "correction" and "to YOUR right (the robot's left)" in s.text
+    assert s.kind == "correction" and s.text.startswith("Move the board to your right.")
     u = 640 - F * np.tan(np.radians(20))                 # + bearing = robot's left = image left
     assert feed(guide(t), [obs(u=u)] * 4)[0].kind == "good"
 
@@ -125,7 +127,7 @@ def test_lost_board_prompt_once():
     g = guide(lost_s=6.0)
     says = feed(g, [None] * 30)
     assert [x.kind for x in says] == ["lost"]
-    assert "can't see the board" in says[0].text
+    assert says[0].text == "I cannot see the board. Turn it to face the robot."
 
 
 def test_never_robots_right_without_your_left_and_never_hold():

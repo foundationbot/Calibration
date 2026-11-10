@@ -74,11 +74,12 @@ def render(state, width=100) -> str:
 
 
 class SpdSay:
-    def __init__(self, path="/usr/bin/spd-say", run=subprocess.run, rate=-10):
-        self.path, self.run, self.rate = path, run, rate
+    def __init__(self, path="/usr/bin/spd-say", run=subprocess.run, rate=-85, lang="en-us", voice="male1"):
+        # 9 Nov trial: rate -10 was too fast and unclear; the operator asked for slower twice (-45, -70 still fast)
+        self.path, self.run, self.rate, self.lang, self.voice = path, run, rate, lang, voice
 
     def say(self, text):
-        self.run([self.path, "-w", "-r", str(self.rate), text], timeout=30)
+        self.run([self.path, "-w", "-l", self.lang, "-t", self.voice, "-r", str(self.rate), text], timeout=60)
 
 
 class Silent:
