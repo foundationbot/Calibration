@@ -184,3 +184,14 @@ def test_no_sentence_for_a_single_restart():
     w = watch()
     w.note_restart(_t(15, 0), "freeze")
     assert hw.suspicion_sentence(w, _t(15, 5)) is None
+
+
+def test_a_stale_imu_sample_is_not_silence():
+    """found on phantom10 9 Nov: the sampler's IMU reading was not refreshed while its kubectl calls ran, and the rule
+    called that silence. The rule judges the reading's own time (imu_t), not when the watch looked"""
+    w = watch()
+    w.observe(0.0, good(imu_head=100, imu_t=0.0))
+    for t in (1.0, 2.0, 3.0, 4.0):
+        assert w.observe(t, good(imu_head=100, imu_t=0.0)) == []        # the same old reading: no judgement
+    assert w.observe(5.0, good(imu_head=600, imu_t=5.0)) == []
+    assert codes(w.observe(6.5, good(imu_head=600, imu_t=6.5))) == ["imu_silent"]

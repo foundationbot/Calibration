@@ -192,3 +192,9 @@ def test_hold_dict_is_a_15b_corner_dict_replay_accepts():
 def test_hold_dict_of_no_pairs_is_empty():
     d = detect.hold_dict([], hold=0)
     assert len(d["img_t0"]) == 0 and len(d["det_u"]) == 0
+
+
+def test_pool_size_counts_only_the_cpus_this_process_may_use():
+    """found on phantom10 9 Nov: os.cpu_count() reports every core, the process may run on 9"""
+    import os
+    assert detect.usable_cpus() == len(os.sched_getaffinity(0))

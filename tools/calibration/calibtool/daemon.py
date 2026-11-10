@@ -478,9 +478,9 @@ class Daemon:
 # ---------------------------------------------------------------- system samples on the robot
 
 class SystemSampler:
-    """refreshes the health watch's system facts in its own thread (kubectl calls take ~1 s and must not stall the
-    loop): every second the cheap ones (boot id, clock, load, IMU ring head, USB speeds), every slow_s the kubectl and
-    dmesg ones"""
+    """the health watch's system facts, refreshed by two threads so a slow kubectl call never stalls the loop or ages
+    the cheap facts: every second boot id, clock, load, IMU ring head (with imu_t, when it was read), USB speeds; every
+    slow_s the producer (kubectl) and dmesg"""
 
     def __init__(self, kube, shm="/dev/shm", sysfs="/sys/bus/usb/devices", slow_s=10.0, run=None):
         self.kube, self.shm, self.sysfs, self.slow_s = kube, Path(shm), sysfs, slow_s
@@ -488,8 +488,6 @@ class SystemSampler:
         self._d = {}
         self._lock = threading.Lock()
         self._stop = threading.Event()
-        self._t = None
-        self._last_slow = 0.0
 
     def __call__(self):
         with self._lock:
@@ -504,44 +502,47 @@ class SystemSampler:
             pass
         try:
             d["imu_head"] = motors.ring_head(self.shm / "raw_imu_actuals")
+            d["imu_t"] = time.time()
         except OSError:
             d["imu_head"] = None
         try:
             d["usb"] = {s: v[0] for s, v in pf.usb_speeds(self.sysfs).items()}
         except OSError:
             pass
-        if time.time() - self._last_slow >= self.slow_s:
-            self._last_slow = time.time()
-            try:
-                pods = self.kube.pods()
-                y = self.kube.get_yaml()
-                from calibtool import producer as pr
-                spec = pr.Spec.from_yaml(y)
-                d["producer"] = {"generation": spec.generation, "args": spec.args,
-                                 "pod_uid": pods[0]["uid"] if pods else None}
-                d["producer_log"] = self.kube.logs(30)
-                d["k0s_ok"] = True
-            except Exception:  # noqa: BLE001
-                d["k0s_ok"] = False
-            if self.run is not None:
-                rc, out = self.run(["dmesg", "-T"], 10)
-                if rc == 0:
-                    d["dmesg"] = out.splitlines()[-80:]
         with self._lock:
-            keep = {k: v for k, v in self._d.items() if k in ("producer", "producer_log", "k0s_ok", "dmesg")}
-            keep.update(d)
-            self._d = keep
+            self._d.update(d)
+
+    def refresh_slow(self):
+        """the kubectl and dmesg facts (seconds each: their own thread)"""
+        from calibtool import producer as pr
+        d = {}
+        try:
+            pods = self.kube.pods()
+            spec = pr.Spec.from_yaml(self.kube.get_yaml())
+            d["producer"] = {"generation": spec.generation, "args": spec.args,
+                             "pod_uid": pods[0]["uid"] if pods else None}
+            d["producer_log"] = self.kube.logs(30)
+            d["k0s_ok"] = True
+        except Exception:  # noqa: BLE001
+            d["k0s_ok"] = False
+        if self.run is not None:
+            rc, out = self.run(["dmesg", "-T"], 10)
+            if rc == 0:
+                d["dmesg"] = out.splitlines()[-80:]
+        with self._lock:
+            self._d.update(d)
 
     def start(self):
-        def loop():
+        def loop(fn, every):
             while not self._stop.is_set():
                 try:
-                    self.refresh()
+                    fn()
                 except Exception:  # noqa: BLE001
                     pass
-                self._stop.wait(1.0)
-        self._t = threading.Thread(target=loop, name="sampler", daemon=True)
-        self._t.start()
+                self._stop.wait(every)
+        for fn, every, name in ((self.refresh, 1.0, "sampler-fast"), (self.refresh_slow, self.slow_s,
+                                                                         "sampler-slow")):
+            threading.Thread(target=loop, args=(fn, every), name=name, daemon=True).start()
 
     def stop(self):
         self._stop.set()
@@ -602,7 +603,7 @@ def cmd_run(a):
         default=_json_default, indent=1))
     rig = rigcfg.load(prof.rig_path)
     board = rig.board
-    cpus = os.cpu_count() or 1
+    cpus = detect.usable_cpus()
     workers = a.detect_workers or detect.pool_size(cpus, os.getloadavg()[0])
     pool = detect.DetectPool(board, workers)
     m.state["detect_workers"] = workers
@@ -614,6 +615,7 @@ def cmd_run(a):
         if a.trial or m.state.get("mode") == "trial" else None
     sampler = SystemSampler(kube, run=lambda argv, timeout: pf._sh(argv, timeout))
     sampler.refresh()
+    sampler.refresh_slow()
     sampler.start()
     d = Daemon(m, cap, lambda p: pool.submit_pair(p.left.y, p.right.y), to_obs, sampler, trial=trial)
     d.preflight_done(res)

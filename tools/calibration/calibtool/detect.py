@@ -64,6 +64,16 @@ def find_refine(board, gray, use_stretch=True) -> dict:
     return out
 
 
+def usable_cpus() -> int:
+    """the cpus this process may run on (os.cpu_count() counts every core; phantom10 lets a process use 9)"""
+    try:
+        import os
+        return len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        import os
+        return os.cpu_count() or 1
+
+
 def pool_size(ncpu, load1, reserve=POOL_RESERVE, cap=POOL_CAP) -> int:
     """detection workers for the free CPU: floor(cpus - load - reserve), at least 1, at most cap"""
     return int(max(1, min(cap, math.floor(ncpu - load1 - reserve))))

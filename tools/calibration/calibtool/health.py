@@ -17,7 +17,7 @@ Rules (condition -> event code, level, action):
   ... still > 0.5 ms after a restart                           sync_persists, stop, refuse_collect
   boot id changed / clock before 2020                          reboot / clock, stop, preflight
   k0s not answering                                            k0s, warn
-  IMU ring head not advancing for IMU_SILENT_S                 imu_silent, warn ("check the head power switch first")
+  IMU ring head not advancing for IMU_SILENT_S (reading time)  imu_silent, warn ("check the head power switch first")
   head-camera USB link below SuperSpeed or missing             usb_link, suspect (no restart: a restart cannot fix it)
   dmesg reset/disconnect on the head camera's USB port         usb_reset, suspect, quoting the line
   producer log "Device crashed"                                device_crashed, suspect, quoting the line
@@ -156,7 +156,7 @@ class Watch:
             "preflight again once it is.", "preflight")])
         out += self._episode("k0s", s.get("k0s_ok") is False, lambda: [Event(
             t, "warn", "k0s", "k0s (kubectl) is not answering: the producer cannot be checked or restarted now.")])
-        out += self._imu_rule(t, s.get("imu_head"))
+        out += self._imu_rule(t, s.get("imu_head"), s.get("imu_t"))
         usb = s.get("usb")
         if usb is not None:
             for ser in b.get("head_serials") or ():
@@ -192,12 +192,15 @@ class Watch:
         self.events += out
         return out
 
-    def _imu_rule(self, t, head):
+    def _imu_rule(self, t, head, t_read=None):
+        """silent: the head counter unchanged for IMU_SILENT_S of the readings' own time (t_read: when the sampler
+        read it; a stale reading repeated by the sampler says nothing)"""
         if head is None:
             return []
+        tr = t if t_read is None else t_read
         if self._imu_last is None or head != self._imu_last[0]:
-            self._imu_last = (head, t)
-        silent = t - self._imu_last[1] >= IMU_SILENT_S
+            self._imu_last = (head, tr)
+        silent = tr - self._imu_last[1] >= IMU_SILENT_S
         return self._episode("imu", silent, lambda: [Event(
             t, "warn", "imu_silent", "The head IMU has stopped publishing: check the head power switch first.")])
 
