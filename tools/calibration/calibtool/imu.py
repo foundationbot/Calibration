@@ -350,3 +350,77 @@ def apply(config_text, R_correction, note=None):
         head = "%YAML:1.0\n" if text.startswith("%YAML:1.0\n") else ""
         text = head + "".join(f"# {ln}\n" for ln in note.splitlines()) + text[len(head):]
     return text
+
+
+# ---------------------------------------------------------------- verdict
+
+SWEEP_LIVE_TOL_DEG = 0.01       # the sweep's config rotation vs live: above this the report says they differ
+
+
+@dataclass(frozen=True)
+class Gates:
+    """PLACEHOLDERS until fixed with the user (as decide.Gates was for the lens in M1 C3)"""
+    k_sigma: float = 1.0                 # held-out gain must exceed k_sigma x the fit's combined sigma
+    min_poses: int = 9                   # still poses with a board, after the filter
+    min_yaw_columns: int = 3             # leave-one-column-out needs columns to leave out
+    min_pitch_span_deg: float = 10.0     # the pitch span is what separates the up directions
+
+
+@dataclass
+class Verdict:
+    deploy: bool
+    reasons: list
+    fit: Fit
+    heldout: HeldOut
+    observability: Observability
+    R_new: np.ndarray               # the cam0 rotation the full-sweep fit gives
+    correction: np.ndarray          # relative to the live cam0 rotation: apply(live_text, correction)
+    change_vs_live_deg: float
+
+
+def verdict(sweep: Sweep, R_live=None, gates: Gates = Gates()) -> Verdict:
+    """deploy the fitted rotation only if the gates hold and the pooled held-out median gap beats the live rotation's
+    on the same poses by more than gates.k_sigma x the fit's combined sigma"""
+    R_live = sweep.R_SC if R_live is None else np.asarray(R_live, float)
+    f = fit(sweep)
+    Rn = R_new(sweep, f)
+    h = heldout(sweep, R_live)
+    ob = observability(sweep, Rn)
+    reasons, ok = [], True
+    n_cols = len(set(yaw_columns(sweep)))
+    span = float(np.ptp(sweep.neck[:, 0])) if len(sweep) else 0.0
+    for bad, why in ((len(sweep) < gates.min_poses, f"{len(sweep)} still poses with a board (of {sweep.n_recorded}); "
+                                                     f"need {gates.min_poses}"),
+                     (n_cols < gates.min_yaw_columns, f"{n_cols} yaw columns; need {gates.min_yaw_columns}"),
+                     (span < gates.min_pitch_span_deg, f"pitch span {span:.1f} deg; need "
+                                                       f"{gates.min_pitch_span_deg:.1f}")):
+        if bad:
+            ok = False
+            reasons.append(f"not enough sweep: {why}")
+    gain = h.live_median_deg - h.new_median_deg
+    bar = gates.k_sigma * f.combined_sigma_deg
+    if not np.isfinite(gain):
+        ok = False
+        reasons.append("no held-out score (no yaw column could be left out)")
+    else:
+        better = gain > bar
+        ok = ok and better
+        reasons.append(f"held-out median gap {h.new_median_deg:.3f} deg (new) vs {h.live_median_deg:.3f} deg (live) on "
+                       f"{h.n_poses} poses: gain {gain:+.3f} deg {'>' if better else '<='} {gates.k_sigma:g} x combined "
+                       f"sigma {f.combined_sigma_deg:.3f} deg")
+    for fd in h.pitch:
+        reasons.append(f"  {fd.name}: median {np.median(fd.gap_new_deg):.3f} deg (new) vs "
+                       f"{np.median(fd.gap_live_deg):.3f} deg (live)")
+    reasons.append(f"fit: {f.angles_deg[0]:+.3f} deg about camera x, {f.angles_deg[1]:+.3f} deg about camera z "
+                   f"(1-sigma {f.sigma_deg[0]:.3f} / {f.sigma_deg[1]:.3f}) vs the sweep's config; rotation change vs "
+                   f"live {rotation_angle_deg(R_live, Rn):.3f} deg")
+    d = rotation_angle_deg(sweep.R_SC, R_live)
+    if d > SWEEP_LIVE_TOL_DEG:
+        reasons.append(f"the sweep ran with a cam0 rotation {d:.3f} deg from live's; the correction is taken vs live")
+    reasons.append(f"third angle (about gravity, camera-frame axis {np.array2string(ob.up_cam, precision=3)}) kept from "
+                   f"the live config: observable at {100 * ob.ratio:.0f} % of the best axis (1-sigma "
+                   f"{ob.weak_sigma_deg:.2f} deg if fitted); +1 deg about it moves the median gap "
+                   f"{ob.gap_change_deg['gravity']:+.3f} deg vs {ob.gap_change_deg['camera x']:+.3f} about camera x")
+    reasons.append("T_SC changes with T_BS kept: the camera moves in the Head frame for every other consumer of "
+                   "camera-in-Head (camera-to-arm)")
+    return Verdict(bool(ok), reasons, f, h, ob, Rn, R_live.T @ Rn, rotation_angle_deg(R_live, Rn))

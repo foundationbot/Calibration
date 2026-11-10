@@ -328,3 +328,49 @@ def test_apply_output_reads_in_okviscfg(tmp_path):
     rig = okviscfg.load(p)
     assert np.allclose(rig.T_SC[0][:3, :3], R_CFG @ C, atol=1e-9)
     assert np.allclose(np.linalg.inv(rig.T_SC[0]) @ rig.T_SC[1], T01_SYN, atol=1e-9)
+
+
+# ---------------------------------------------------------------- task 6: verdict
+
+
+def test_verdict_deploys_a_real_error():
+    s = synthetic(imu.rot_xz(0.5, 0.3), noise_deg=0.02)
+    v = imu.verdict(s, R_live=R_CFG)
+    assert v.deploy, v.reasons
+    assert v.heldout.live_median_deg - v.heldout.new_median_deg > v.fit.combined_sigma_deg
+    new = imu.cam0_rotation(imu.apply(config_text(), v.correction))
+    assert imu.rotation_angle_deg(new, R_CFG @ imu.rot_xz(0.5, 0.3)) < 0.05
+    assert 0.4 < v.change_vs_live_deg < 0.7
+
+
+def test_verdict_keeps_a_correct_live():
+    s = synthetic(imu.rot_xz(0.5, 0.3), noise_deg=0.02)
+    v = imu.verdict(s, R_live=R_CFG @ imu.rot_xz(0.5, 0.3))
+    assert not v.deploy
+    assert any("combined sigma" in r for r in v.reasons)
+
+
+@pytest.mark.parametrize("kw, word", [(dict(pitches=(9, 25), yaws=(-30, 0, 30)), "poses"),
+                                      (dict(pitches=(5, 9, 13, 17, 21, 25, 29, 33, 37, 41), yaws=(0,)), "yaw columns"),
+                                      (dict(pitches=(17,), yaws=(-30, -20, -10, 0, 10, 20, 30, 40, 50)), "pitch span")])
+def test_verdict_gates(kw, word):
+    v = imu.verdict(synthetic(imu.rot_xz(0.5, 0.3), noise_deg=0.02, **kw), R_live=R_CFG)
+    assert not v.deploy
+    assert any(word in r and "need" in r for r in v.reasons), v.reasons
+
+
+def test_verdict_reports_third_angle_and_tbs_note():
+    v = imu.verdict(synthetic(imu.rot_xz(0.5, 0.3), noise_deg=0.02), R_live=R_CFG)
+    text = "\n".join(v.reasons)
+    assert "third angle" in text and "kept from the live config" in text
+    assert "T_BS" in text and "Head" in text
+    assert v.observability.ratio < 0.3
+
+
+def test_correction_is_relative_to_live():
+    s = synthetic(imu.rot_xz(0.5, 0.3), noise_deg=0.02)
+    R_live = R_CFG @ imu.axis_rotation([0.3, 1, -0.2], 1.5)          # live differs from the sweep's config
+    v = imu.verdict(s, R_live=R_live)
+    assert np.allclose(R_live @ v.correction, v.R_new, atol=1e-12)
+    assert np.allclose(v.R_new, R_CFG @ v.fit.correction, atol=1e-12)
+    assert any("sweep ran with" in r for r in v.reasons)
