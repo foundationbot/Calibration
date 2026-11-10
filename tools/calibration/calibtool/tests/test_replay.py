@@ -471,3 +471,23 @@ def test_replay_new_beats_live_and_deploys(name, assignment, data_root, tmp_path
     if name == "p21_1105":
         last = js["placements"][-1]["sentences"]
         assert any(s.startswith(P21_LEFT) for s in last) and any(s.startswith(P21_BOTTOM_LEFT) for s in last)
+
+
+@pytest.mark.replay
+@pytest.mark.parametrize("name", ["p21_1105", "p10_1106"])
+def test_replay_cut_at_the_stop_rule_still_passes(name, data_root, tmp_path):
+    """C3's check of the re-based targets: the session cut where the stop rule was first met (capture-time
+    assignment, the tool's) still fits, PASSes step 66, the paired comparison still shows the new fit better on depth
+    and rows, and the default verdict is DEPLOY: the rule does not stop before the data the recorded PASS needed"""
+    js = replay().run(sessions.get(name), assignment="capture", out_dir=tmp_path, stop_at_rule=True)
+    st = js["stop"]
+    print(f"STOP {name} {json.dumps(st)} capture_order {js['capture_order']} split {json.dumps(js['split'])}")
+    print((tmp_path / "report.md").read_text())
+    assert st["index"] is not None and st["stopped"], st
+    assert js["fit"]["converged"], js["fit"]["verdict"]
+    assert js["validate_new"]["verdict"] == "PASS", js["validate_new"]["text"]
+    pr = {s["name"]: s for s in js["paired"]["stats"]}
+    assert pr["depth"]["judged"] and pr["depth"]["ci"][1] < 0 and pr["rows"]["judged"] and pr["rows"]["ci"][1] < 0
+    worse = [s["name"] for s in js["paired"]["stats"] if s["judged"] and not s["diff"] < 0]
+    assert not worse, f"new not better on {worse}"
+    assert js["verdicts"][DEFAULT]["decision"] == "DEPLOY", js["verdicts"][DEFAULT]["reasons"]
