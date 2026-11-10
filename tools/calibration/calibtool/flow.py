@@ -35,6 +35,10 @@ FullFlow.run() walks the session in its own thread, one stage after the other, e
                OKVIS check unless opted out (key O, any time), postcheck.decide -> Deployer.rollback when it says so.
   report       REPORT: report/session.json + session.md.
   finish       FINISH: "D = disable the motors (the warning first, D again), K = keep them on"; R = roll back on purpose.
+               After NOT_ENOUGH_DATA (10 Nov, phantom10: 5 of 6 judged regions, the new fit passing every one) also
+               E = more placements (robot.plan_next, up to EXTRAS_PER_E more) -> collect again -> decide again, and
+               X = decide again accepting the regions judged (>= OVERRIDE_MIN_JUDGED; a one-off exception that changes
+               only decide.Gates.min_judged, recorded in the decision and the report).
   restore      the producer as saved (unless the deploy left it at the deploy size), OKVIS started again (unless the
                deploy did), the lease released -> DONE.
 
@@ -56,6 +60,7 @@ Every robot action goes into the session's command log (sessionctl.Recorder -> <
 (Robot.dry_run, every backend recording instead of sending) that file is the dry-run command list of the session."""
 import json
 import math
+import re
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -107,6 +112,9 @@ NATIVE = dp.NATIVE
 MOTORS_TEXT = ("Motor check. If the robot hangs on the gantry and nobody is at its head, press Y to enable the motors.")
 FLAT_TEXT = "Put the board flat on the floor in front of the robot. Then step back."
 FINISH_TEXT = "The session is done. Press D to disable the motors, or K to keep them on."
+EXTRAS_PER_E = 2            # E: this many more extra placements, then the fit and the decision again
+OVERRIDE_MIN_JUDGED = 5     # X: never accepts fewer judged regions than this (the rule is decide.Gates.min_judged)
+_JUDGED = re.compile(r"(\d+) judged entries.*?(\d+) needed")
 
 
 class Aborted(Exception):
@@ -407,9 +415,12 @@ class FullFlow:
             self._start()
             while self.fl.get("stage") not in (None, "done"):
                 st = self.fl["stage"]
-                getattr(self, "_st_" + st)()
+                nxt = getattr(self, "_st_" + st)()
                 i = STAGES.index(st)
-                self.fl["stage"] = STAGES[i + 1] if i + 1 < len(STAGES) else "done"
+                if nxt in STAGES:               # FINISH's E / X: back to an earlier stage
+                    self.fl["stage"] = nxt
+                else:
+                    self.fl["stage"] = STAGES[i + 1] if i + 1 < len(STAGES) else "done"
                 self._event("stage", done=st, next=self.fl["stage"])
                 self._save()
         except Aborted:
@@ -806,7 +817,8 @@ class FullFlow:
                 break
             if t.name not in fl.get("done", []):
                 self._placement(t, "default")
-        while self.robot.plan_next is not None and not self._met() and int(fl.get("extras") or 0) < self.max_extras:
+        cap = min(int(fl.get("extras_cap") or self.max_extras), self.max_extras)
+        while self.robot.plan_next is not None and not self._met() and int(fl.get("extras") or 0) < cap:
             t = self.robot.plan_next(self.collection)
             if t is None:
                 break
@@ -876,8 +888,10 @@ class FullFlow:
         if fl.get("decision") is None:
             self._enter("FIT")
             self._say("fit", "Fitting the lens. This takes a few minutes.")
+            g = fl.get("gates_override")
             try:
-                out = dict(self.robot.fit_decide(self.collection, self._load_holds(), self.dirs.fit))
+                out = dict(self.robot.fit_decide(self.collection, self._load_holds(), self.dirs.fit,
+                                                 **({"gates_override": g} if g else {})))
             except Exception as e:  # noqa: BLE001  (no result = keep live, with the error)
                 out = {"decision": "NOT_ENOUGH_DATA", "reasons": [f"the fit failed: {type(e).__name__}: {e}"]}
             text = out.get("config_text")
@@ -893,6 +907,11 @@ class FullFlow:
             fl["decision"] = {"decision": out.get("decision"), "reasons": list(out.get("reasons") or []),
                               "name": out.get("name"), "imu_applied": bool(text and imu_.get("deploy")),
                               "fit_source": out.get("fit_source")}
+            if g:
+                fl["decision"]["gates_override"] = dict(g)
+                if not any("one-off" in r for r in fl["decision"]["reasons"]):
+                    fl["decision"]["reasons"].append(f"one-off exception chosen by the operator (X): "
+                                                     f"{g.get('min_judged')} judged regions accepted")
             self._save()
         self._enter("DECIDE")
         dec = fl["decision"]
@@ -1180,13 +1199,51 @@ class FullFlow:
         self._event("motors_disabled", ok=res.ok, dry_run=res.dry_run, detail=res.detail)
         return True
 
+    def _finish_options(self) -> dict:
+        """after NOT_ENOUGH_DATA: {"E": text} when the planner can ask for more placements, {"X": text, n} when the
+        reason is the judged-region count and n >= OVERRIDE_MIN_JUDGED were judged"""
+        fl = self.fl
+        dec = fl.get("decision") or {}
+        if fl.get("outcome") != "keep_live" or dec.get("decision") != "NOT_ENOUGH_DATA":
+            return {}
+        out = {}
+        if self.robot.plan_next is not None and int(fl.get("extras") or 0) < self.max_extras:
+            out["E"] = ("E = more placements (the planner asks for what is short), then fit and decide again", None)
+        m = next((x for x in (_JUDGED.search(r) for r in dec.get("reasons") or ()) if x), None)
+        if m and int(m.group(1)) >= OVERRIDE_MIN_JUDGED and not fl.get("gates_override"):
+            n = int(m.group(1))
+            out["X"] = (f"X = decide again accepting {n} judged regions instead of {m.group(2)} (a one-off exception; "
+                        "left, right and bottom edges and new better than live are still required)", n)
+        return out
+
+    def _reopen(self, key, to, **extra):
+        fl = self.fl
+        for k in ("decision", "outcome", "config_file", "deploy_size", "deploy_config", "check"):
+            fl.pop(k, None)
+        fl["final"], fl["disable_armed"] = False, False
+        fl.update(extra)
+        self._upd(decision=None, finish_options=None, motors_prompt=None, deploy_size=None, check=None)
+        self._event("reopened", key=key, to=to, **extra)
+        self._save()
+
     def _st_finish(self):
         self._enter("FINISH")
         self.fl["final"] = True
         self._upd(motors_prompt="D = disable the motors (the warning comes first), K = keep them on")
+        opts = self._finish_options()
+        if opts:
+            texts = [t for t, _ in opts.values()]
+            self._upd(finish_options=texts)
+            self._event("finish_options", options=texts)
         self._say("finish", FINISH_TEXT)
         while True:
-            k = self._wait_keys("DKR")
+            k = self._wait_keys("DKR" + "".join(opts))
+            if k == "E":
+                self._reopen("E", "collect", extras_cap=int(self.fl.get("extras") or 0) + EXTRAS_PER_E)
+                return "collect"
+            if k == "X":
+                self._reopen("X", "decide", gates_override={"min_judged": opts["X"][1]})
+                return "decide"
             if k == "R":
                 if self.fl.get("outcome") == "deployed":
                     self._rollback("the operator asked for it (R)")

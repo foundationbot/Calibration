@@ -13,6 +13,7 @@ holds_session() turns the captured holds into the Session the split and the fit 
 left stamp, so the take/hold renumbering of Session.from_files does not matter). pipeline_fit_decide() is the fit +
 verdict + export (step 45 / 66 through replay.evaluate as they are, step 71 for the OKVIS file); with a live_fit
 (refit.LiveFit) its refit on the final split stands for step 45 when it covers exactly the split (refit.final_fit)."""
+import time
 from pathlib import Path
 
 import numpy as np
@@ -82,25 +83,57 @@ def holds_session(holds, name="calibtool session"):
     return Session.from_files([(p, postcheck.merge_holds(by[p])) for p in order], name=name)
 
 
+def planner_next(planner_, accept_m=0.15, tol_deg=10.0):
+    """flow.Robot.plan_next over a planner.Planner: the collection's deficits (most important first) -> the planner's
+    top suggestion as a place.Target: its board centre's camera depth at neck home, accepted within accept_m, the
+    bearing (tol_deg) for an off-axis board, tilted as planned; each extra named on its own (holds are clustered by
+    placement). None when nothing is short or no candidate adds to it"""
+    import itertools
+    from calibtool import place
+    n = itertools.count(1)
+    stamp = time.strftime("%H%M%S")
+
+    def plan_next(col):
+        defs = col.coverage(col.tallies()).deficits(col.targets)
+        s = planner_.suggest(defs, k=1) if defs else []
+        if not s:
+            return None
+        c = s[0].candidate
+        m = planner_.model(c)
+        T = m.T_CW(0.0, 0.0, 0)
+        z = float((T[:3, :3] @ np.asarray(m.obj, float).mean(0) + T[:3, 3])[2])
+        b = float(c.bearing_deg) if c.bearing_deg else None
+        return place.Target(f"extra {stamp}-{next(n)}", round(z, 2), (max(0.3, z - accept_m), z + accept_m),
+                            tilted=bool(c.tilted), bearing_deg=b, tol_deg=tol_deg if b is not None else None)
+    return plan_next
+
+
 def pipeline_fit_decide(rig_path, live_config, out_name, gates=None, jobs=1, live_fit=None):
     """flow.Robot.fit_decide on the robot: the split of the capture-time labels, replay.evaluate (step 45, step 66 of
     new and live, decide.score, decide.verdict with the default required edges) and, on DEPLOY, step 71's KB4T OKVIS
     file over the live config as template. live_config: () -> the live OKVIS yaml path. live_fit: refit.LiveFit (the
     flow's): its refit on the final split stands for step 45 when it covers exactly this split's FIT corners and
     passed step 45's checks (refit.final_fit); otherwise step 45 runs. out["fit_source"] says which"""
-    def fit_decide(col, holds, out_dir):
+    def fit_decide(col, holds, out_dir, gates_override=None):
+        from dataclasses import replace as _replace
         from calibtool import decide, paths, pipeline, replay
         out_dir = Path(out_dir)
+        g = gates or decide.Gates()
+        if gates_override:
+            g = _replace(g, **gates_override)    # the operator's one-off exception (flow FINISH, key X)
         sess = holds_session(holds)
         split = col.labeler.write_split(sess, out_dir / "split")
         live = live_config()
         fit, why = (None, "no live refit") if live_fit is None else live_fit.final(split.fit_npz, out_dir / "fit")
-        ev = replay.evaluate(sess, rig_path, split, live, out_dir, gates or decide.Gates(), jobs=jobs, fit=fit)
+        ev = replay.evaluate(sess, rig_path, split, live, out_dir, g, jobs=jobs, fit=fit)
         v = ev["verdicts"][next(iter(replay.VERDICT_KEYS))]
         src = (f"live refit {fit.entry['source']['live_refit']} (step 45 not run)" if fit is not None
                else f"step 45 ({why})")
         out = {"decision": v["decision"], "reasons": list(v["reasons"]), "name": out_name, "config_text": None,
                "fit_source": src}
+        if gates_override:
+            out["reasons"].append(f"one-off exception chosen by the operator: {g.min_judged} judged regions accepted "
+                                  f"(the rule is {decide.Gates().min_judged}); every other rule applied")
         if v["decision"] == "DEPLOY":
             ex = out_dir / "export"
             rc, _ = pipeline._run(paths.script("71_export_lens"),

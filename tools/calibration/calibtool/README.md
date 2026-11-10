@@ -39,6 +39,9 @@ python3 -m calibtool.cli phantom10 --full              # the real session (motor
 - 1 / 2 / ?: deploy size
 - D: disable the motors
 - K: keep the motors on
+- E: after "not enough data", more placements (the planner asks), then fit and decide again
+- X: after "not enough data" from too few judged regions (5 or more of 6), decide again accepting them (a one-off
+  exception, recorded in the report; every other rule still applies)
 - R: roll back
 - O: skip the OKVIS check
 - A: abort

@@ -130,11 +130,11 @@ def _fit_decide_fakes(tmp_path, monkeypatch, live_fit):
     monkeypatch.setattr(fr, "holds_session", lambda holds: "SESSION")
 
     def evaluate(sess, rig_path, split_, live, out_dir, gates, jobs=1, fit=None, **kw):
-        seen.update(sess=sess, split=split_, fit=fit, jobs=jobs)
+        seen.update(sess=sess, split=split_, fit=fit, jobs=jobs, gates=gates)
         return {"verdicts": {k: {"decision": "KEEP_LIVE", "reasons": ["fake"]} for k in replay.VERDICT_KEYS}}
     monkeypatch.setattr(replay, "evaluate", evaluate)
     fd = fr.pipeline_fit_decide("rig.yaml", lambda: "live.yaml", "new.yaml", live_fit=live_fit)
-    return (lambda: fd(col, [], tmp_path / "out")), seen, split
+    return (lambda **kw: fd(col, [], tmp_path / "out", **kw)), seen, split
 
 
 class LiveFitStub:
@@ -161,3 +161,48 @@ def test_fit_decide_runs_step_45_when_the_live_refit_does_not_stand_for_it(tmp_p
     assert seen["fit"] is None and out["fit_source"] == "step 45 (the live refit does not cover it)"
     run, seen, _ = _fit_decide_fakes(tmp_path, monkeypatch, None)
     assert run()["fit_source"] == "step 45 (no live refit)" and seen["fit"] is None
+
+
+
+def test_fit_decide_with_the_operators_one_off_exception_changes_only_min_judged(tmp_path, monkeypatch):
+    from calibtool import decide
+    run, seen, _ = _fit_decide_fakes(tmp_path, monkeypatch, None)
+    out = run(gates_override={"min_judged": 5})
+    g = seen["gates"]
+    assert g.min_judged == 5 and g.required_edges == decide.Gates().required_edges
+    assert g.depth_margin_pct == decide.Gates().depth_margin_pct and g.band_min_placements == 3
+    assert any("one-off" in r and "5 judged regions" in r for r in out["reasons"])
+    run(); assert seen["gates"].min_judged == decide.Gates().min_judged
+
+
+def test_planner_next_turns_the_top_suggestion_into_a_placement_target():
+    from calibtool import place, planner as pn
+    cand = pn.Candidate(0.75, 20, False)
+    T = np.eye(4); T[2, 3] = 0.9
+    model = SimpleNamespace(T_CW=lambda p, y, c: T, obj=np.zeros((4, 3)))
+    sug = SimpleNamespace(candidate=cand, say=lambda: "Board standing 0.75 m out, 20 degrees to YOUR right.")
+    seen = {}
+
+    class P:
+        def suggest(self, deficits, k=1):
+            seen["deficits"], seen["k"] = deficits, k
+            return [sug]
+
+        def model(self, c):
+            return model
+    col = SimpleNamespace(targets="TARGETS", tallies=lambda: "T",
+                          coverage=lambda t: SimpleNamespace(deficits=lambda targets: ["d1", "d2"]))
+    nxt = fr.planner_next(P())
+    t = nxt(col)
+    assert isinstance(t, place.Target) and seen == {"deficits": ["d1", "d2"], "k": 1}
+    assert t.distance_m == pytest.approx(0.9) and t.accept[0] < 0.9 < t.accept[1]
+    assert t.bearing_deg == 20 and t.tol_deg is not None and not t.tilted
+    t2 = nxt(col)
+    assert t2.name != t.name                    # every extra is its own placement (holds are clustered by it)
+
+
+def test_planner_next_says_nothing_is_short():
+    col = SimpleNamespace(targets=None, tallies=lambda: None,
+                          coverage=lambda t: SimpleNamespace(deficits=lambda targets: []))
+    P = SimpleNamespace(suggest=lambda d, k=1: [], model=None)
+    assert fr.planner_next(P)(col) is None

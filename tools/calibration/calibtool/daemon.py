@@ -46,7 +46,7 @@ TERMINAL = frozenset({"DONE", "ABORTED", "STOPPED_LOUD"})
 # retries a deploy the operator was asked about), 1/2/? choose the deploy size, C = "can't put it there", R = roll back
 # on purpose, D = disable the motors (twice: the warning first), K = keep them on
 PHASE_KEYS = {"MOTORS": "Y", "PLACE": "C", "IMU_PLACE": "C", "CHECK_PLACE": "C", "POST_PLACE": "C",
-              "DEPLOY_SIZE": "12?", "DEPLOY": "YR", "POSTCHECK": "R", "REPORT": "R", "FINISH": "DKR", "DONE": "D",
+              "DEPLOY_SIZE": "12?", "DEPLOY": "YR", "POSTCHECK": "R", "REPORT": "R", "FINISH": "DKREX", "DONE": "D",
               "ABORTED": "D", "STOPPED_LOUD": "D"}
 STEP_S = 0.15            # 9 Nov trial: guidance felt laggy at 0.5 s, then 0.25 s; guide_corners on a 1280x800 frame
                          # takes ~30 ms single-threaded (Moonstone; phantom10 measured in the report)
@@ -1037,6 +1037,10 @@ def _full_flow(prof, m, d, dirs, cap, pools, rig, size, res, probes, dry_run, se
     check_scores, post_scores = flowrobot.scorers(prof.rig_path, live_text, dirs.fit / "scores", submit_pair)
     name = f"{prof.thor}_stereo_kb4t_{time.strftime('%Y%m%d')}_1280.yaml"
     live_fit = refit.LiveFit(prof.rig_path)          # the final fit = its refit on the final split (step 45 if not)
+    # the extras planner (10 Nov: never wired, so no extra placement was ever asked for): the head from the live OKVIS
+    # config at the collection size, the neck chain, the board
+    from calibtool import placement as pl, planner as pn
+    plan_next = flowrobot.planner_next(pn.Planner(pl.head_from_okvis(live_path, size), pl.chain(), board))
     robot = flowrobot.build(
         prof, session=session, dirs=dirs, capture=cap, detect_pair=submit_pair,
         producer_yaml=res.snapshot.get("producer_yaml"), probes=probes, baseline=res.baseline, obs_box=d.obs_box,
@@ -1048,7 +1052,7 @@ def _full_flow(prof, m, d, dirs, cap, pools, rig, size, res, probes, dry_run, se
         live_fit=live_fit, dry_run=dry_run,
         imu=nk.DmaImu(dma_ipc, gravity.HEAD_IMU),
         sweep_detect=lambda g: imusweep.board_normal(board.detect(g), board, live.model, live.intr[0]),
-        R_live=R_live, check_scores=check_scores, post_scores=post_scores)
+        R_live=R_live, check_scores=check_scores, post_scores=post_scores, plan_next=plan_next)
     return flow.FullFlow(m, robot, dirs, emit=d.say, ids=d.ids, place_timeout_s=prof.placement_timeout_s)
 
 

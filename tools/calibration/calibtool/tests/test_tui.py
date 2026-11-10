@@ -392,3 +392,13 @@ def test_voice_modes_show_no_panel():
     t, sent, out, sp, c = make()
     t.step(json.dumps(state(say={"id": 1, "t": 99.0, "kind": "good", "text": "Good."})))
     assert not any(x.startswith("PROMPT") for x in out[-1].splitlines())
+
+
+
+def test_the_finish_screen_shows_e_and_x_when_offered():
+    st = state(phase="FINISH", mode="full", finish_options=["E = more placements (the planner asks)",
+                                                             "X = decide again accepting 5 judged regions"])
+    txt = tui.render(st)
+    assert "E = more placements" in txt and "X = decide again" in txt
+    assert "E = more placements" in tui.keys_for(st) and "X = decide again" in tui.keys_for(st)
+    assert "E =" not in tui.keys_for(state(phase="FINISH", mode="full"))

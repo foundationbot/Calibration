@@ -49,7 +49,9 @@ def keys_for(state) -> str:
     s = state or {}
     if s.get("mode") != "full":
         return KEYS
-    return f"{FULL_KEYS.get(s.get('phase'), 'A = abort')} | {LEAVE}"
+    more = "".join(f" | {o.split(' (')[0]}" for o in s.get("finish_options") or ()) if s.get("phase") == "FINISH" \
+        else ""
+    return f"{FULL_KEYS.get(s.get('phase'), 'A = abort')}{more} | {LEAVE}"
 
 
 def _motors(state):
@@ -213,6 +215,9 @@ def _full_lines(s, width=100) -> list:
     if rs:
         L.append(f"restored: {'; '.join(rs.get('done') or ['nothing to restore'])}"
                  + (f"; ERRORS: {'; '.join(rs['errors'])}" if rs.get("errors") else ""))
+    if s.get("finish_options") and s.get("phase") == "FINISH":
+        L.append("not enough data to decide; you can also:")
+        L += [f"  {o}"[:width * 2] for o in s["finish_options"]]
     if s.get("motors_prompt") and s.get("phase") in ("FINISH", "DONE", "ABORTED", "STOPPED_LOUD"):
         L.append(f"motors: {s['motors_prompt']}"[:width * 2])
     if s.get("dry_run"):

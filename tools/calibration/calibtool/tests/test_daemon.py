@@ -846,7 +846,7 @@ def test_m_and_t_belong_to_their_modes(tmp_path):
 
 @pytest.mark.parametrize("phase,key", [("MOTORS", "Y"), ("DEPLOY_SIZE", "1"), ("DEPLOY_SIZE", "2"),
                                        ("DEPLOY_SIZE", "?"), ("PLACE", "C"), ("POSTCHECK", "R"), ("FINISH", "D"),
-                                       ("FINISH", "K"), ("DEPLOY", "Y")])
+                                       ("FINISH", "K"), ("FINISH", "E"), ("FINISH", "X"), ("DEPLOY", "Y")])
 def test_flow_keys_count_only_in_their_phase(tmp_path, phase, key):
     m = full(tmp_path)
     m.to(phase, "test")

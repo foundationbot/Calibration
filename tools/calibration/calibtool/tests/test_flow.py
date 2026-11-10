@@ -192,7 +192,7 @@ class Session:
 
     def __init__(self, tmp_path, keys=None, decision="DEPLOY", motion_green=True, probe=None, crash_loop=False,
                  targets=TARGETS, store=None, robot=None, clock=None, motors=None, kube=None, resume=False,
-                 neck_backend=None, live_fit=None):
+                 neck_backend=None, live_fit=None, plan_next=None):
         self.tmp = tmp_path
         self.clock = clock or Clock()
         self.dirs = storage.SessionDirs(tmp_path / "root", "20261110-010203-P10").create()
@@ -221,6 +221,7 @@ class Session:
         self.decision = decision
         self.says = []
         self.fit_calls = 0
+        self.gates_seen = []
         self.lease = pr.Lease(tmp_path / "root" / "producer.lease")
         ids = itertools.count(int(self.m.state.get("say_id_max") or 0) + 1)
         nb = self.neck_backend
@@ -235,10 +236,12 @@ class Session:
             self.world.pose = min(self.world.pose + 1, 199)
             return self.world.grab(n)
 
-        def fit_decide(col, holds, out_dir):
+        def fit_decide(col, holds, out_dir, gates_override=None):
             self.fit_calls += 1
-            return {"decision": self.decision, "reasons": [f"fake verdict {self.decision}"], "config_text": TD.NEW,
-                    "name": TD.NEW_NAME}
+            self.gates_seen.append(gates_override)
+            d = self.decision(self) if callable(self.decision) else self.decision
+            why = ["5 judged entries (step 66 validated), 6 needed"] if d == "NOT_ENOUGH_DATA" else []
+            return {"decision": d, "reasons": why + [f"fake verdict {d}"], "config_text": TD.NEW, "name": TD.NEW_NAME}
 
         self.robot_side = fl.Robot(
             run=self.robot, dry_run=True, recorder=self.rec,
@@ -257,7 +260,7 @@ class Session:
             post_scores=self._post_scores,
             okvis_probe=lambda sha: {"log_lines": [f"({sha})", "KB4T pinhole camera 0"]},
             okvis_pods=self._pods, deploy_dir=f"/data/calib/{self.dirs.sid}/deploy", session=self.dirs.sid,
-            live_fit=live_fit)
+            live_fit=live_fit, plan_next=plan_next)
         self.flow = fl.FullFlow(self.m, self.robot_side, self.dirs, emit=self.says.append, ids=ids, clock=self.clock,
                                 mono=self.clock, sleep=self.clock.sleep, targets=targets)
 
@@ -793,3 +796,64 @@ def test_grid_poses_snake_row_by_row(name):
 def test_the_check_grid_snakes_too():
     assert _max_yaw_step(fl.CHECK_POSES) <= 12.0 + 1e-9
     assert len(set(fl.CHECK_POSES)) == 15
+
+
+
+# ---------------------------------------------------------------- after NOT_ENOUGH_DATA (10 Nov, phantom10: 5 of 6
+# judged regions, the new fit passing every one): E = more placements from the planner, X = decide again accepting the
+# regions judged (a one-off exception, every other rule kept)
+
+
+def _then_deploy_on_second_fit(s):
+    return "NOT_ENOUGH_DATA" if s.fit_calls == 1 else "DEPLOY"
+
+
+def test_x_decides_again_accepting_the_judged_regions_and_deploys(tmp_path):
+    keys = dict(FULL_KEYS)
+    keys["FINISH"] = ["X", "D", "D"]
+    s = Session(tmp_path, keys=keys, decision=lambda s: "DEPLOY" if s.gates_seen[-1] else "NOT_ENOUGH_DATA").run()
+    assert s.m.phase == "DONE", s.kinds()[-20:]
+    assert s.fit_calls == 2 and s.gates_seen == [None, {"min_judged": 5}]
+    assert s.lines("deploy"), "deployed after the operator's X"
+    ev = next(e for e in s.events() if e["kind"] == "reopened")
+    assert ev["key"] == "X" and ev["to"] == "decide"
+    rep = json.loads((s.dirs.report / "session.json").read_text())
+    assert rep["outcome"] == "deployed", rep["outcome"]
+    assert "one-off" in json.dumps(rep["decision"])
+
+
+def test_e_asks_the_planner_for_more_placements_then_decides_again(tmp_path):
+    asked = []
+
+    def plan_next(col):
+        asked.append(len(asked))
+        if len(asked) == 1:
+            return None                     # the first collection: nothing more to ask for
+        return place.Target(f"extra {len(asked)}", 1.1, (0.95, 1.25)) if len(asked) == 2 else None
+    keys = dict(FULL_KEYS)
+    keys["FINISH"] = ["E", "D", "D"]
+    s = Session(tmp_path, keys=keys, decision=_then_deploy_on_second_fit, plan_next=plan_next).run()
+    assert s.m.phase == "DONE", s.kinds()[-20:]
+    assert s.fit_calls == 2 and len(asked) >= 2
+    grids_ = [e["placement"] for e in s.events() if e["kind"] == "grid_end"]
+    assert "extra 2" in grids_
+    assert s.lines("deploy")
+
+
+@pytest.mark.parametrize("decision", ["KEEP_LIVE", "DEPLOY"])
+def test_e_and_x_are_offered_only_after_not_enough_data(tmp_path, decision):
+    keys = dict(FULL_KEYS)
+    keys["FINISH"] = ["X", "E", "D", "D"]
+    s = Session(tmp_path, keys=keys, decision=decision, plan_next=lambda col: None).run()
+    assert s.m.phase == "DONE" and s.fit_calls == 1
+    assert "reopened" not in s.kinds()
+
+
+def test_the_finish_screen_lists_e_and_x_with_what_they_do(tmp_path):
+    keys = dict(FULL_KEYS)
+    keys["FINISH"] = ["D", "D"]
+    s = Session(tmp_path, keys=keys, decision="NOT_ENOUGH_DATA", plan_next=lambda col: None).run()
+    opts = [e for e in s.events() if e["kind"] == "finish_options"]
+    assert opts, s.kinds()[-15:]
+    txt = " ".join(opts[0]["options"])
+    assert "E = more placements" in txt and "X = decide again accepting 5 judged regions instead of 6" in txt
