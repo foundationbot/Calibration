@@ -351,7 +351,8 @@ def pose_rows(frames, rig, take, cmds=None):
         dl = pf.dets[i][0] if pf.dets else {}
         z = float("nan")
         if len(dl) >= 8:
-            one = {"img_t0": np.zeros(1), "det_img": np.zeros(len(dl), np.int64), "det_cam": np.zeros(len(dl), np.int64),
+            n0 = np.zeros(len(dl), np.int64)
+            one = {"img_t0": np.zeros(1), "det_img": n0, "det_cam": n0,
                    "det_tag": np.array([t for t, _ in dl]), "det_k": np.array([k for _, k in dl]),
                    "det_u": np.array([u for u, _ in dl.values()]), "det_v": np.array([v for _, v in dl.values()])}
             z = float(d16.rough_z(one, rig.board, rig.nominal_focal_px, rig.resolution)[0])
@@ -483,8 +484,9 @@ def target_costs(session, rig, z, assignment, n_poses, keep=None, targets=None, 
     """replay the session's holds in capture order through coverage's tallies (FIT on FIT holds, TEST per entry) and
     report, per target, the poses swept until it was met for the last time (None: unmet), the take that met it, and
     how many holds added to it (FIT targets: FIT holds with corners there; TEST targets: the TEST holds at the end;
-    judged: entries judged at the end). n_poses: {take: poses swept in the take}; keep: {take: [pose indices swept]} (a reduced protocol: holds of
-    other poses dropped, swept counts over the kept poses only; None: every pose). pp: the principal point of the TEST
+    judged: entries judged at the end). n_poses: {take: poses swept in the take}; keep: {take: [pose indices
+    swept]} (a reduced protocol: holds of other poses dropped, swept counts over the kept poses only; None: every
+    pose). pp: the principal point of the TEST
     cells (default: the image centre, the nominal one the capture-time assignment uses)"""
     from calibtool import coverage as cv
     targets = targets or cv.Targets()
