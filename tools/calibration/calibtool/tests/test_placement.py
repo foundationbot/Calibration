@@ -37,8 +37,23 @@ def _head():
 
 
 def _board_T(chain, head, dist=1.0, bearing_deg=0.0, dz=-0.3):
-    """a board facing the camera at home, its centre `dist` ahead at bearing (+: robot's left), dz below the camera"""
+    """a board facing the camera at home, its centre `dist` m out along the floor at bearing (+: robot's left), dz
+    above the camera"""
     return pl.facing_pose(chain, head, _rig().board, dist, bearing_deg, dz)
+
+
+def test_facing_pose_distance_is_along_the_floor_and_faces_the_camera():
+    chain, head, rig = pl.chain(), _head(), _rig()
+    T = pl.facing_pose(chain, head, rig.board, 0.75, 30.0, -1.0)
+    m = pl.BoardModel(T, rig.board, head, chain)
+    cam = (chain.T_TB(0.0, 0.0) @ head.X)[:3, 3]
+    c = T[:3, :3] @ m.centre + T[:3, 3]
+    d = c - cam
+    assert np.hypot(d[0], d[1]) == pytest.approx(0.75, abs=1e-9)
+    assert d[2] == pytest.approx(-1.0, abs=1e-9)
+    assert np.degrees(np.arctan2(d[1], d[0])) == pytest.approx(30.0, abs=1e-9)
+    assert T[:3, 2] @ (-d) / np.linalg.norm(d) == pytest.approx(1.0, abs=1e-9)       # +z of the board: to the camera
+    assert abs(T[2, 0]) < 1e-9                                                       # rows level
 
 
 def _obs_at(model, pitch, yaw):

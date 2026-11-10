@@ -145,15 +145,15 @@ def pnp(obs: HoldObs, board, cam: Camera) -> np.ndarray:
     return rigmath.transform(rigmath.exp_rot(p[:3]), p[3:])
 
 
-def facing_pose(chain_, head: Head, board, dist, bearing_deg, dz, at=(0.0, 0.0)) -> np.ndarray:
-    """T_TW of a board whose centre is `dist` m (straight line) from camera 0 at neck pose at=(pitch, yaw) rad,
-    `bearing_deg` from straight ahead in the torso's horizontal plane (+: toward the robot's left), dz m above the
-    camera (negative: below), its face turned to the camera, its rows level"""
+def facing_pose(chain_, head: Head, board, ahead_m, bearing_deg, dz, at=(0.0, 0.0)) -> np.ndarray:
+    """T_TW of a board whose centre is `ahead_m` m from camera 0 along the floor (the torso's horizontal plane), at
+    `bearing_deg` from straight ahead (+: toward the robot's left) and dz m above the camera (negative: below), camera 0
+    taken at neck pose at=(pitch, yaw) rad; its face (+z, as measured on the stored takes) turned to the camera, its
+    rows level"""
     import rigmath
     cam = (chain_.T_TB(at[1], at[0]) @ head.X)[:3, 3]
-    h = np.sqrt(max(dist ** 2 - dz ** 2, 0.0))
     b = np.radians(bearing_deg)
-    centre = cam + np.array([h * np.cos(b), h * np.sin(b), dz])
+    centre = cam + np.array([ahead_m * np.cos(b), ahead_m * np.sin(b), dz])
     n = (cam - centre) / np.linalg.norm(cam - centre)             # the board's +z faces the camera (as measured)
     up = np.array([0.0, 0.0, 1.0])
     y = up - (up @ n) * n
