@@ -742,3 +742,72 @@ def test_only_the_newest_tui_controls_but_any_can_abort(tmp_path):
         s3.close()
     finally:
         srv.stop()
+
+
+# ------------------------------------------------------------------ start / attach: the daemon that answers is ours
+
+def _kit(base, files):
+    for rel, text in files.items():
+        f = base / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(text)
+
+
+def test_kit_hash_follows_the_code_copied_to_the_robot(tmp_path):
+    _kit(tmp_path, {"calibtool/a.py": "x = 1", "calibtool/config/profiles.yaml": "p: 1", "scripts/s.py": "s",
+                    "config/rig.yaml": "r", "calibtool/tests/test_a.py": "t", "calibtool/__pycache__/a.pyc": "c",
+                    "calibtool/results/r.json": "{}", "calibtool/x.npz": "n"})
+    h = dm.kit_hash(tmp_path)
+    _kit(tmp_path, {"calibtool/tests/test_a.py": "t2", "calibtool/__pycache__/a.pyc": "c2",
+                    "calibtool/results/r.json": "[]", "calibtool/x.npz": "n2"})
+    assert dm.kit_hash(tmp_path) == h           # what bootstrap does not copy does not count
+    _kit(tmp_path, {"calibtool/a.py": "x = 2"})
+    assert dm.kit_hash(tmp_path) != h
+
+
+def test_the_state_names_the_kit_and_drops_the_pid_on_a_clean_stop(tmp_path):
+    m = machine(tmp_path)
+    assert m.state["kit"] == dm.kit_hash() and m.state["pid"]
+    m.stopped()
+    st = m.store.load_state()
+    assert st["pid"] is None and st["attached"] is False and kinds(m.store)[-1] == "daemon_stop"
+    m2 = dm.Machine.resume(dm.Store(tmp_path / "s1"), Clock())
+    assert m2.state["pid"] and m2.state["kit"] == dm.kit_hash()
+
+
+def test_start_waits_for_its_own_child_not_an_old_daemon(tmp_path):
+    """review 6: start connected to the still-running old daemon's socket and reported success"""
+    m = machine(tmp_path)
+    sock = tmp_path / "calibd.sock"
+    srv = dm.Server(sock, m, period_s=0.05)
+    srv.start()
+    try:
+        assert dm.read_state_line(sock)["pid"] == m.state["pid"]
+        rcs = iter([None, None, 3])
+        r = dm.wait_started(sock, child_pid=-1, child_rc=lambda: next(rcs), sleep=lambda s: None)
+        assert not r["ok"] and "rc 3" in r["error"] and f"pid {m.state['pid']}" in r["error"]
+        assert "--replace" in r["error"]
+        assert dm.wait_started(sock, child_pid=m.state["pid"], child_rc=lambda: None)["ok"]
+    finally:
+        srv.stop()
+    assert dm.read_state_line(sock) is None     # liveness is the socket: nothing answers now
+
+
+def test_status_says_live_only_when_the_socket_answers(tmp_path, capsys):
+    import argparse
+    m = machine(tmp_path)                       # state.json with a pid, but no daemon serving the socket
+    a = argparse.Namespace(root=str(tmp_path), session="s1")
+    import calibtool.storage as storage
+    d = storage.SessionDirs(tmp_path, "s1")
+    dm.Store(d.root).write_state(m.state)
+    dm.cmd_status(a)
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert out["live"] is False and out["pid"] == m.state["pid"]
+    srv = dm.Server(d.root / "calibd.sock", m, period_s=0.05)
+    srv.start()
+    try:
+        dm.cmd_status(a)
+        out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+        assert out["live"] is True and out["kit"] == dm.kit_hash()
+    finally:
+        srv.stop()

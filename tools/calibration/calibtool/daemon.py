@@ -18,9 +18,12 @@ Daemon       one loop step (~2 Hz): deadman tick, capture counters, live detecti
 M2 is READ-ONLY on the robot: the producer and motors are only read (producer.Kube(read_only=True)); the banner says so.
 
 CLI (on the robot): python -m calibtool.daemon {start|run|attach|stop|status} --root R [--session S] [--profile P10]
-[--trial]. start spawns `run` in its own session (setsid) and returns once the socket answers."""
+[--trial] [--replace]. start spawns `run` in its own session (setsid) and returns once the session socket sends a state
+line from that child (an old calibd answering is not success); it refuses while a calibd runs (this session or the
+lock holder's) unless --replace stops that one first. status says live from the socket, with the running kit hash."""
 import argparse
 import fcntl
+import hashlib
 import itertools
 import json
 import os
@@ -42,6 +45,36 @@ HEALTH_KEEP = 30
 POOL_REBUILD_S = 5.0     # a detection pool that keeps breaking is rebuilt at most this often
 STALE_S = 1.0            # no new left/right pair for this long = the camera stalled (frozen or dropped)
 STALL_TEXT = "The camera stopped. Please wait."
+
+
+# ---------------------------------------------------------------- the kit this process runs
+
+KIT_DIRS = ("calibtool", "scripts", "config")      # what `calib` copies to the robot (cli.bootstrap)
+KIT_SKIP = ("__pycache__", "tests", "results")     # ... and what it leaves out (with *.npz)
+_KIT = None
+
+
+def kit_hash(base=None) -> str:
+    """a hash of the kit's code as bootstrap copies it (tools/calibration/{calibtool,scripts,config} without tests,
+    results, caches, *.npz): the laptop compares it with the running calibd's, so attaching to a daemon still running
+    older code is refused (review 6)"""
+    base = Path(base) if base is not None else Path(__file__).resolve().parents[1]
+    h = hashlib.sha256()
+    for d in KIT_DIRS:
+        for f in sorted((base / d).rglob("*")):
+            rel = f.relative_to(base)
+            if not f.is_file() or f.suffix == ".npz" or any(x in KIT_SKIP or x.startswith(".") for x in rel.parts):
+                continue
+            h.update(rel.as_posix().encode() + b"\0" + f.read_bytes() + b"\0")
+    return h.hexdigest()[:16]
+
+
+def _kit() -> str:
+    """this process's kit, hashed once (at start: the code it loaded)"""
+    global _KIT
+    if _KIT is None:
+        _KIT = kit_hash()
+    return _KIT
 
 
 # ---------------------------------------------------------------- persistence
@@ -124,7 +157,7 @@ class Machine:
         self.state = {"session": session, "robot": robot, "phase": "PREFLIGHT", "status": "running",
                       "read_only": read_only, "mode": mode, "held_from": None, "attached": False, "created": t,
                       "updated": t, "banner": [], "checks": [], "capture": {}, "health": [], "board": None,
-                      "trial": None, "say": None, "preflight_green": None, "pid": os.getpid()}
+                      "trial": None, "say": None, "preflight_green": None, "pid": os.getpid(), "kit": _kit()}
         store.event("session_start", t=t, session=session, robot=robot, read_only=read_only, mode=mode)
         self.save()
 
@@ -142,7 +175,7 @@ class Machine:
         elif before in ("PREFLIGHT", "READY", "BLOCKED"):
             st["phase"] = "PREFLIGHT"
         st["attached"] = False
-        st["pid"] = os.getpid()
+        st["pid"], st["kit"] = os.getpid(), _kit()
         # the prompts of the dead run are history: a TUI must not take them for new ones, and the new run numbers its
         # prompts after them (review 1: the TUI skips ids it has spoken, and a new run counting from 1 went unheard)
         st["say_id_max"] = max([int(st.get("say_id_max") or 0)] + [int(x["id"]) for x in st.get("says") or ()
@@ -160,6 +193,13 @@ class Machine:
         with self._lock:
             self.state["updated"] = self.clock()
             self.store.write_state(self.state)
+
+    def stopped(self):
+        """a clean stop: no pid left in state.json (review 6: a stale pid read as a running daemon)"""
+        with self._lock:
+            self.store.event("daemon_stop", t=self.clock(), phase=self.phase)
+            self.state["pid"], self.state["attached"] = None, False
+            self.save()
 
     def snapshot(self) -> dict:
         with self._lock:
@@ -859,8 +899,7 @@ def cmd_run(a):
             pools["pool"].close()
         except Exception:  # noqa: BLE001
             pass
-        m.store.event("daemon_stop", t=time.time(), phase=m.phase)
-        m.save()
+        m.stopped()
         srv.stop()
         lock.release()
         try:
@@ -877,11 +916,86 @@ def _connect(sock, timeout=2.0):
     return s
 
 
+def read_state_line(sock, timeout=2.0):
+    """the first state line calibd sends on a session socket, or None when nothing answers: liveness is the socket
+    (review 6: kill -0 on a stored pid can hit another process, and a cleanly stopped daemon left its pid behind)"""
+    try:
+        s = _connect(sock, timeout)
+    except OSError:
+        return None
+    f = None
+    try:
+        f = s.makefile("rb")
+        line = f.readline()
+        return json.loads(line) if line else None
+    except (OSError, ValueError):
+        return None
+    finally:
+        for x in (f, s):
+            try:
+                if x is not None:
+                    x.close()
+            except OSError:
+                pass
+
+
+def wait_started(sock, child_pid, child_rc, timeout=30.0, sleep=time.sleep, clock=time.monotonic) -> dict:
+    """{"ok": True} once the session socket sends a state line from child_pid (the calibd just spawned); an answer from
+    another pid is an old daemon still serving this session, not success (review 6)"""
+    other = None
+    t_end = clock() + timeout
+
+    def why():
+        if other is None:
+            return ""
+        return (f"; another calibd (pid {other.get('pid')}, kit {other.get('kit')}) still runs session "
+                f"{other.get('session')}: stop it first (calib ... --replace, or calibd stop)")
+    while clock() < t_end:
+        line = read_state_line(sock, 1.0)
+        if line is not None and line.get("pid") == child_pid:
+            return {"ok": True}
+        if line is not None:
+            other = line
+        rc = child_rc()
+        if rc is not None:
+            return {"ok": False, "error": f"calibd exited rc {rc}" + why()}
+        sleep(0.2)
+    return {"ok": False, "error": f"no state line from the new calibd (pid {child_pid}) after {timeout:.0f} s" + why()}
+
+
+def _live_sessions(root, sid):
+    """[(session, its state line)] of the calibd answering for sid and of the one holding the robot lock"""
+    out, seen = [], set()
+    try:
+        holder = json.loads(RobotLock(Path(root) / "calibd.lock").holder() or "{}").get("session")
+    except ValueError:
+        holder = None
+    for s in (sid, holder):
+        if not s or s in seen:
+            continue
+        seen.add(s)
+        try:
+            line = read_state_line(_session_paths(root, s)[1])
+        except ValueError:                  # not a session id
+            continue
+        if line is not None:
+            out.append((s, line))
+    return out
+
+
 def cmd_start(a):
     import subprocess
     from calibtool import storage
     a.session = a.session or storage.new_session_id(a.profile)
     dirs, sock = _session_paths(a.root, a.session)
+    for s, line in _live_sessions(a.root, a.session):
+        if not getattr(a, "replace", False):
+            print(json.dumps({"session": a.session, "error": f"calibd already runs session {s} (pid {line.get('pid')}, "
+                              f"kit {line.get('kit')}); attach to it, or --replace stops it first"}))
+            return 2
+        if cmd_stop(argparse.Namespace(root=a.root, session=s)) != 0:
+            print(json.dumps({"session": a.session, "error": f"could not stop the calibd of session {s}"}))
+            return 2
     dirs.create()
     argv = [sys.executable, "-m", "calibtool.daemon", "run", "--root", a.root, "--session", a.session, "--profile",
             a.profile] + (["--trial"] if a.trial else []) + (["--detect-workers", str(a.detect_workers)]
@@ -889,19 +1003,11 @@ def cmd_start(a):
     log = open(dirs.root / "calibd.log", "a")
     p = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True,
                          cwd=str(Path(__file__).resolve().parents[1]))
-    t_end = time.time() + 30
-    while time.time() < t_end:
-        if p.poll() is not None:
-            print(json.dumps({"session": a.session, "pid": p.pid, "error": f"calibd exited rc {p.returncode}",
-                              "log": str(dirs.root / "calibd.log")}))
-            return 2
-        try:
-            _connect(sock).close()
-            print(json.dumps({"session": a.session, "pid": p.pid, "sock": str(sock)}))
-            return 0
-        except OSError:
-            time.sleep(0.2)
-    print(json.dumps({"session": a.session, "pid": p.pid, "error": "socket not answering after 30 s"}))
+    r = wait_started(sock, p.pid, p.poll)
+    if r["ok"]:
+        print(json.dumps({"session": a.session, "pid": p.pid, "sock": str(sock), "kit": _kit()}))
+        return 0
+    print(json.dumps({"session": a.session, "pid": p.pid, "error": r["error"], "log": str(dirs.root / "calibd.log")}))
     return 2
 
 
@@ -942,31 +1048,36 @@ def cmd_stop(a):
         pid = None
     try:
         s = _connect(sock)
-        s.makefile("r").readline()
+        line = json.loads(s.makefile("r").readline() or "{}")
+        pid = line.get("pid") or pid
         s.sendall(b'{"cmd": "stop"}\n')
         s.close()
-    except OSError as e:
+    except (OSError, ValueError) as e:
         print(json.dumps({"session": sid, "stopped": False, "error": str(e)}))
         return 2
-    t_end = time.time() + 15
-    while pid and time.time() < t_end:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            break
-        time.sleep(0.2)
-    else:
-        if pid:
-            print(json.dumps({"session": sid, "stopped": False, "pid": pid, "error": "still running after 15 s"}))
+    t_end = time.monotonic() + 15
+    while read_state_line(sock, 1.0) is not None:       # stopped = its socket no longer answers
+        if time.monotonic() > t_end:
+            print(json.dumps({"session": sid, "stopped": False, "pid": pid, "error": "still answering after 15 s"}))
             return 2
+        time.sleep(0.2)
     print(json.dumps({"session": sid, "stopped": True, "pid": pid}))
     return 0
 
 
 def cmd_status(a):
+    """the session's state; live (and pid, kit) from its socket, not from state.json"""
     sid = a.session or _current(a.root)
-    dirs, _ = _session_paths(a.root, sid)
-    print(json.dumps(Store(dirs.root).load_state(), default=_json_default))
+    if not sid:
+        print(json.dumps({"live": False}))
+        return 0
+    dirs, sock = _session_paths(a.root, sid)
+    st = Store(dirs.root).load_state() or {}
+    line = read_state_line(sock)
+    if line is not None:
+        st = dict(st, pid=line.get("pid"), kit=line.get("kit"), phase=line.get("phase"))
+    st["live"] = line is not None
+    print(json.dumps(st, default=_json_default))
     return 0
 
 
@@ -978,6 +1089,7 @@ def main(argv=None):
     ap.add_argument("--profile", default="P10")
     ap.add_argument("--trial", action="store_true", help="placement-trial mode (neck at home, nothing moves)")
     ap.add_argument("--detect-workers", type=int, default=0)
+    ap.add_argument("--replace", action="store_true", help="start: stop a calibd already running first")
     a = ap.parse_args(argv)
     if a.cmd == "run" and not a.session:
         ap.error("run needs --session")

@@ -1,6 +1,9 @@
 """`calib <robot>`: the laptop entry point (design plan sections 3, 10.3).
 
-calib phantom10 [--trial] [--session ID] [--headless N] [--no-speech] [--stop] [--status] [--say TEXT] [--no-sync]
+calib phantom10 [--trial] [--session ID] [--replace] [--headless N] [--no-speech] [--stop] [--status] [--say TEXT]
+[--no-sync]
+  - asks calibd's status first (live = its socket answers, with the kit hash it runs): a live session running this
+    kit is attached as it is; one running other code, or another session, is refused unless --replace stops it;
   - copies the kit (tools/calibration/{calibtool,scripts,config}, code only) to <root>/kit on the robot (rsync; M2: the
     hand-made venv runs it; the CI-built calib image replaces this, 10.3);
   - starts calibd there (niced, at most 2 BLAS threads, the profile's python + dma_ipc folder) or, with --session ID
@@ -18,9 +21,9 @@ import sys
 import threading
 import time
 
-from calibtool import paths, profile as prof_mod, tui
+from calibtool import daemon, paths, profile as prof_mod, tui
 
-KIT_DIRS = ("calibtool", "scripts", "config")
+KIT_DIRS = daemon.KIT_DIRS
 
 
 def kit_dir(p) -> str:
@@ -65,21 +68,32 @@ def status(p, session=None, run=subprocess.run) -> dict:
     return _json_out(r) or {}
 
 
-def _alive(p, pid, run=subprocess.run) -> bool:
-    r = run(ssh_argv(p, f"kill -0 {int(pid)} 2>/dev/null && echo alive || echo dead"), capture_output=True, text=True,
-            timeout=30)
-    return "alive" in (r.stdout or "")
-
-
-def start_or_attach(p, session=None, trial=False, run=subprocess.run, alive=_alive) -> str:
-    """the session to attach to: a live one as it is, a dead one restarted under its id (it resumes in HOLD), or a
-    new one"""
-    if session:
-        st = status(p, session, run=run)
-        if st and st.get("pid") and alive(p, st["pid"], run):
+def start_or_attach(p, session=None, trial=False, run=subprocess.run, kit=None, replace=False, sync=None) -> str:
+    """the session to attach to: a live one running this kit as it is; a dead one restarted under its id (it resumes in
+    HOLD); else a new one. A live calibd running other code (the kit changed since it started), or another session
+    running when a new one is asked for, is refused unless replace (then it is stopped first). Liveness = the session
+    socket answers (calibd status). sync() copies the kit, only once a start is decided (never under a running
+    daemon). Review 6: start used to report success while the old daemon kept running the old code."""
+    kit = kit or daemon.kit_hash()
+    st = status(p, session, run=run) or {}
+    if st.get("live"):
+        running = st.get("session") or session
+        if session is None and not replace:
+            raise RuntimeError(f"calibd is already running session {running}: `calib {p.thor} --session {running}` "
+                               f"re-attaches; --replace stops it and starts a new session")
+        if session is not None and st.get("kit") != kit and not replace:
+            raise RuntimeError(f"calibd of session {running} runs other code (kit {st.get('kit')}, this laptop has "
+                               f"{kit}): the kit changed since it started. --replace stops it and starts it again with "
+                               "this code (it resumes in HOLD); or attach with the matching code")
+        if not replace:
             return session
+        r = stop(p, running, run=run)
+        if not r.get("stopped"):
+            raise RuntimeError(f"could not stop calibd of session {running}: {r}")
+    if sync is not None:
+        sync()
     res = start(p, session=session, trial=trial, run=run)
-    if res.get("error"):
+    if res.get("error") or not res.get("session"):
         raise RuntimeError(f"calibd did not start: {res}")
     return res["session"]
 
@@ -175,6 +189,8 @@ def main(argv=None):
     ap.add_argument("--headless", type=int, default=0, help="render N states and leave (no keys)")
     ap.add_argument("--no-speech", action="store_true")
     ap.add_argument("--no-sync", action="store_true", help="do not copy the kit to the robot")
+    ap.add_argument("--replace", action="store_true",
+                    help="stop a calibd already running (other code, or another session) and start this one")
     ap.add_argument("--stop", action="store_true")
     ap.add_argument("--status", action="store_true")
     ap.add_argument("--say", default=None, help="speak this once on the laptop and leave (speech test)")
@@ -191,9 +207,12 @@ def main(argv=None):
     if a.status:
         print(json.dumps(status(p, a.session), indent=1))
         return 0
-    if not a.no_sync:
-        bootstrap(p)
-    sid = start_or_attach(p, a.session, a.trial)
+    try:
+        sid = start_or_attach(p, a.session, a.trial, replace=a.replace, sync=None if a.no_sync else
+                              (lambda: bootstrap(p)))
+    except RuntimeError as e:
+        print(f"calib: {e}", file=sys.stderr)
+        return 2
     sp = speaker if isinstance(speaker, tui.Silent) else tui.Background(speaker)
     n = run_tui(Link(p, sid), sp, headless=a.headless, interactive=not a.headless and sys.stdin.isatty())
     print(f"left the TUI after {n} states; calibd keeps running (session {sid}): calib {a.robot} --session {sid} "

@@ -59,17 +59,59 @@ def test_start_returns_the_session():
     assert "daemon start" in r.calls[0][-1] and "--trial" in r.calls[0][-1]
 
 
+K = "kit-here"
+
+
+def _sa(r, session="S1", trial=False, replace=False):
+    synced = []
+    sid = cli.start_or_attach(P(), session=session, trial=trial, run=r, kit=K, replace=replace,
+                              sync=lambda: synced.append(len(r.calls)))
+    return sid, synced
+
+
 def test_existing_session_is_attached_not_restarted():
-    r = FakeRun([json.dumps({"phase": "HOLD", "pid": 42, "session": "S1"})])
-    sid = cli.start_or_attach(P(), session="S1", trial=False, run=r, alive=lambda p, pid, run: True)
-    assert sid == "S1"
+    r = FakeRun([json.dumps({"phase": "HOLD", "pid": 42, "session": "S1", "live": True, "kit": K})])
+    sid, synced = _sa(r)
+    assert sid == "S1" and synced == []
     assert len(r.calls) == 1 and "daemon status" in r.calls[0][-1]
 
 
 def test_dead_session_is_restarted_under_its_id():
-    r = FakeRun([json.dumps({"phase": "TRIAL", "pid": 42, "session": "S1"}), json.dumps({"session": "S1", "pid": 43})])
-    sid = cli.start_or_attach(P(), session="S1", trial=True, run=r, alive=lambda p, pid, run: False)
+    """liveness is the session's socket (review 6: kill -0 on a stale pid could hit another process)"""
+    r = FakeRun([json.dumps({"phase": "TRIAL", "pid": 42, "session": "S1", "live": False}),
+                 json.dumps({"session": "S1", "pid": 43})])
+    sid, synced = _sa(r, trial=True)
     assert sid == "S1" and "daemon start" in r.calls[1][-1] and "--session S1" in r.calls[1][-1]
+    assert synced == [1]                        # the kit is copied after the check, before the start
+
+
+def test_a_live_daemon_running_other_code_is_refused():
+    """review 6: bootstrap rsynced new code and the CLI attached to the old daemon still running the old code"""
+    r = FakeRun([json.dumps({"phase": "TRIAL", "pid": 42, "session": "S1", "live": True, "kit": "kit-old"})])
+    with pytest.raises(RuntimeError, match="--replace") as e:
+        _sa(r)
+    assert "kit-old" in str(e.value) and len(r.calls) == 1
+
+
+def test_replace_stops_the_old_daemon_then_copies_and_starts():
+    r = FakeRun([json.dumps({"phase": "TRIAL", "pid": 42, "session": "S1", "live": True, "kit": "kit-old"}),
+                 json.dumps({"session": "S1", "stopped": True}), json.dumps({"session": "S1", "pid": 43})])
+    sid, synced = _sa(r, replace=True)
+    assert sid == "S1" and synced == [2]
+    assert "daemon stop" in r.calls[1][-1] and "--session S1" in r.calls[1][-1] and "daemon start" in r.calls[2][-1]
+
+
+def test_a_new_session_while_another_runs_is_refused_with_the_way_out():
+    r = FakeRun([json.dumps({"phase": "TRIAL", "pid": 42, "session": "S0", "live": True, "kit": K})])
+    with pytest.raises(RuntimeError, match="--session S0") as e:
+        _sa(r, session=None)
+    assert "--replace" in str(e.value)
+
+
+def test_a_failed_start_is_an_error():
+    r = FakeRun([json.dumps({"live": False}), json.dumps({"session": "S1", "pid": 43, "error": "calibd exited rc 3"})])
+    with pytest.raises(RuntimeError, match="rc 3"):
+        _sa(r)
 
 
 def test_stop_command():
