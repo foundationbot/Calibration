@@ -89,6 +89,15 @@ def test_resize_factor_values():
         scaling.resize_factor_text((600, 400), VIO)      # cannot hit both sides
 
 
+def test_resize_factor_must_work_in_float32_too():
+    """1000x625 -> 640x400: 0.64 is the exact ratio and int(1000 x 0.64) = 640 in float64, but 0.64 as a float32 is
+    0.6399999857 and gives 639. No decimal works in both (within RF_REL_TOL), so no resize_factor is written"""
+    assert int(1000 * 0.64) == 640 and int(625 * 0.64) == 400
+    assert not scaling._gives(0.64, (1000, 625), (640, 400))
+    with pytest.raises(ValueError, match="no resize_factor"):
+        scaling.resize_factor_text((1000, 625))
+
+
 def test_comment_lines_are_left_alone():
     src = _okvis_yaml()
     out = scaling.scale_config(src, 0.75)
