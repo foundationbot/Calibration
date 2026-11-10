@@ -27,10 +27,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import lensmodel  # noqa: E402
 import rigmath as rm  # noqa: E402
 
-# MAX_NFEV caps ONE solve round: solve() repeats its least squares up to TRIM_ROUNDS times while the trimmed corner
-# set settles, so one attempt can take up to TRIM_ROUNDS x MAX_NFEV evaluations; fit_converged restarts up to
+# MAX_NFEV caps ONE solve round: solve() repeats its least squares until the trimmed corner set settles, at most
+# TRIM_CAP rounds, so one attempt can take up to TRIM_CAP x MAX_NFEV evaluations; fit_converged restarts up to
 # MAX_ATTEMPTS times until scipy reports success (sweep_590.py: 2000 evaluations, 3 attempts)
-MAX_NFEV, MAX_ATTEMPTS, TRIM_ROUNDS = 2000, 3, 4
+MAX_NFEV, MAX_ATTEMPTS = 2000, 3
+# Trim rounds (settle-trim, 10 Nov 2026): until the kept corner set repeats, at most TRIM_CAP rounds; a solve that
+# reaches the cap with the set still changing reports settled=False (step 45 warns, it does not fail). Before, at most
+# TRIM_ROUNDS_RECORDED = 4 rounds: the recorded runs (5-6 Nov) and every number measured up to 9 Nov were made so, and
+# on the stored sessions the set settles only at 6 (p21) / 7 (p10) rounds. CALIB_TRIM_ROUNDS=N sets the cap (4
+# reproduces the recorded runs); it is read at each call, like CALIB_SOLVER, and child processes inherit it.
+TRIM_CAP, TRIM_ROUNDS_RECORDED = 12, 4
+TRIM_ENV = "CALIB_TRIM_ROUNDS"
 TRIM_PX = 3.0                        # corners beyond this cut and the fit repeated (lensfit.solve)
 GROSS_PX = 20.0                      # residuals beyond this are detection failures, not noise (lensfit.ring_rms)
 SOLVER_ENV = "CALIB_SOLVER"          # "fast": solve() and lensscore.score() by calibtool.solver / calibtool.score (M3)
@@ -232,31 +239,64 @@ def _solve_once(data: Data, model, intr0, C0, poses0, free_intr, free_C, scale, 
             "res": residuals(sol.x, *args).reshape(-1, 2), "success": bool(sol.success), "nfev": int(sol.nfev)}
 
 
+def trim_cap():
+    """the trim rounds' cap in force: CALIB_TRIM_ROUNDS=N (an integer >= 1) when set, else TRIM_CAP"""
+    v = os.environ.get(TRIM_ENV, "").strip()
+    if not v:
+        return TRIM_CAP
+    try:
+        n = int(v)
+    except ValueError:
+        n = 0
+    if n < 1:
+        raise ValueError(f"{TRIM_ENV}={v!r}: the trim rounds' cap is an integer >= 1")
+    return n
+
+
+def trim_loop(fit_round, n, trim_px=TRIM_PX, rounds=None):
+    """the trim rounds both solvers share. fit_round(keep) fits on the corners where keep and returns (residuals of
+    ALL n corners at that fit (n, 2), success, evaluations). The first round fits every corner; then the corners
+    beyond trim_px are cut and the fit repeated until the kept set repeats (settled) or `rounds` rounds ran (None:
+    trim_cap()). Unsettled, `kept` is the cut of the last fit (not the set it was fitted on), as before 10 Nov.
+    -> dict(res, kept, success (every round), nfev, trim_rounds (rounds run), settled)"""
+    cap = trim_cap() if rounds is None else int(rounds)
+    if cap < 1:
+        raise ValueError(f"rounds={rounds!r}: at least one trim round")
+    keep = np.ones(n, bool)
+    ok, nfev, settled = True, 0, False
+    for i in range(cap):
+        res, success, nf = fit_round(keep)
+        nfev += int(nf)
+        ok = ok and bool(success)
+        new = np.linalg.norm(res, axis=1) <= trim_px
+        if np.array_equal(new, keep):
+            settled = True
+            break
+        keep = new
+    return {"res": res, "kept": keep, "success": ok, "nfev": nfev, "trim_rounds": i + 1, "settled": settled}
+
+
 def solve(data: Data, model, intr0, C0, poses0, free_intr=True, free_C=True, scale=False, trim_px=TRIM_PX,
-          rounds=TRIM_ROUNDS, max_nfev=300, ls0=None):
+          rounds=None, max_nfev=300, ls0=None):
     """Least squares (a robust loss from a far start stalls: tested 19 Oct), then corners beyond trim_px of the fit
-    cut and the fit repeated until the cut set settles (lensfit.solve). ls0: the board scales' start (log, per pair;
-    None = 1) when scale. -> dict(intr, C, poses, log_scale, res (all corners, N x 2), kept (mask), success, nfev)"""
+    cut and the fit repeated until the cut set settles (lensfit.solve; trim_loop: at most `rounds` rounds, None =
+    trim_cap()). ls0: the board scales' start (log, per pair; None = 1) when scale. -> dict(intr, C, poses, log_scale,
+    res (all corners, N x 2), kept (mask), success, nfev, trim_rounds, settled)"""
     fast = fast_solver(model, free_intr)
     if fast is not None:
         return fast.solve(data, model, intr0, C0, poses0, free_intr=free_intr, free_C=free_C, scale=scale,
                           trim_px=trim_px, rounds=rounds, max_nfev=max_nfev, ls0=ls0)
-    keep = np.ones(len(data.P), bool)
-    intr, C, poses, ls = intr0, C0, np.asarray(poses0, float), ls0
-    nfev, ok = 0, True
-    for _ in range(rounds):
-        r = _solve_once(data.subset(keep), model, intr, C, poses, free_intr, free_C, scale, max_nfev, ls)
-        intr, C, poses, ls = r["intr"], r["C"], r["poses"], r["log_scale"]
-        nfev += r["nfev"]
-        ok = ok and r["success"]
-        x = _pack(intr, poses, ls, free_intr, scale)
-        res = residuals(x, data, model, free_intr, False, scale, intr, C).reshape(-1, 2)
-        new = np.linalg.norm(res, axis=1) <= trim_px
-        if np.array_equal(new, keep):
-            break
-        keep = new
-    return {"intr": intr, "C": C, "poses": poses, "log_scale": ls, "res": res, "kept": keep, "success": ok,
-            "nfev": nfev}
+    st = {"intr": intr0, "C": C0, "poses": np.asarray(poses0, float), "log_scale": ls0}
+
+    def fit_round(keep):
+        r = _solve_once(data.subset(keep), model, st["intr"], st["C"], st["poses"], free_intr, free_C, scale,
+                        max_nfev, st["log_scale"])
+        st.update(intr=r["intr"], C=r["C"], poses=r["poses"], log_scale=r["log_scale"])
+        x = _pack(r["intr"], r["poses"], r["log_scale"], free_intr, scale)
+        res = residuals(x, data, model, free_intr, False, scale, r["intr"], r["C"]).reshape(-1, 2)
+        return res, r["success"], r["nfev"]
+    t = trim_loop(fit_round, len(data.P), trim_px, rounds)
+    return {"intr": st["intr"], "C": st["C"], "poses": st["poses"], "log_scale": st["log_scale"], **t}
 
 
 def fit_cost(r):
@@ -415,23 +455,25 @@ def nominal_start(rig, model="KB4T"):
 
 def fit_converged(data: Data, model, intr, C, poses, max_nfev=MAX_NFEV, attempts=MAX_ATTEMPTS, log=print):
     """solve() restarted from its own result until scipy reports success, at most `attempts` times (fits_take.job_fit):
-    a fit stopped at its evaluation cap (max_nfev per solve round, up to TRIM_ROUNDS rounds an attempt) is
-    unconverged, and its numbers are not a calibration. -> solve()'s dict with "attempts" (per attempt: nfev,
-    success, cost, rms_px, kept, seconds), "nfev" summed over them, and the caps it ran with ("max_attempts",
-    "max_nfev")"""
+    a fit stopped at its evaluation cap (max_nfev per solve round, up to trim_cap() rounds an attempt) is
+    unconverged, and its numbers are not a calibration. -> solve()'s dict (its "settled" and "trim_rounds" are the
+    last attempt's) with "attempts" (per attempt: nfev, success, cost, rms_px, kept, trim_rounds, settled, seconds),
+    "nfev" summed over them, and the caps it ran with ("max_attempts", "max_nfev", "trim_cap")"""
     hist, t0 = [], time.time()
     for a in range(attempts):
         r = solve(data, model, intr, C, poses, max_nfev=max_nfev)
         cost, rms = fit_cost(r)
         hist.append({"attempt": a + 1, "nfev": r["nfev"], "success": r["success"], "cost": cost, "rms_px": rms,
-                     "kept": int(r["kept"].sum()), "seconds": round(time.time() - t0)})
+                     "kept": int(r["kept"].sum()), "trim_rounds": int(r["trim_rounds"]), "settled": bool(r["settled"]),
+                     "seconds": round(time.time() - t0)})
         log(f"  attempt {a + 1}: nfev {r['nfev']} success {r['success']} rms {rms:.4f} px, kept {hist[-1]['kept']} "
+            f"after {r['trim_rounds']} trim rounds{'' if r['settled'] else ' (NOT settled)'} "
             f"({hist[-1]['seconds']} s)")
         intr, C, poses = r["intr"], r["C"], r["poses"]
         if r["success"]:
             break
     r["attempts"], r["nfev"] = hist, int(sum(h["nfev"] for h in hist))
-    r["max_attempts"], r["max_nfev"] = int(attempts), int(max_nfev)
+    r["max_attempts"], r["max_nfev"], r["trim_cap"] = int(attempts), int(max_nfev), trim_cap()
     return r
 
 

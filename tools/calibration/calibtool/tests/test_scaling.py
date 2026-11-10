@@ -170,6 +170,7 @@ def test_p10_960_configs_used_c_times_s(data_root, native, deployed):
 
 
 @pytest.mark.replay
+@pytest.mark.usefixtures("recorded_trim")  # recorded numbers: at most 4 trim rounds
 def test_960_config_unscaled_scores_on_1280_data(data_root, tmp_path):
     """phantom10's live 960 config (made from the 1280 rscfix config by c x s) brought back to 1280 by the inverse
     rule scores on the 1280 TEST pairs like the 1280 config it came from (their principal points differ by 0.5/0.75 -

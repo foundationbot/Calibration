@@ -35,7 +35,7 @@ import lensmodel  # noqa: E402
 
 ENV = "CALIB_SOLVER"
 KB_MODELS = ("KB4", "KB4T")
-TRIM_PX, TRIM_ROUNDS = 3.0, 4                      # stereofit.TRIM_PX, TRIM_ROUNDS
+TRIM_PX = 3.0                                      # stereofit.TRIM_PX (the trim rounds: stereofit.trim_loop)
 FTOL = 1e-12                                       # relative cost decrease on a good step
 SCIPY_FTOL = 1e-8                                  # scipy least_squares' default ftol: its success test (see above)
 GTOL = 1e-10                                       # scaled gradient (px), relative to the residual norm
@@ -420,30 +420,27 @@ def _lm_pairs(prob, st, w, scale, max_nfev):
 
 
 def solve(data, model, intr0, C0, poses0, free_intr=True, free_C=True, scale=False, trim_px=TRIM_PX,
-          rounds=TRIM_ROUNDS, max_nfev=300, ls0=None):
+          rounds=None, max_nfev=300, ls0=None):
     """stereofit.solve's contract, solved fast: least squares on the kept corners, then corners beyond trim_px of the
-    fit cut and the solve repeated until the kept set repeats (at most `rounds` rounds); success only if every round
-    converged within max_nfev evaluations. Free intrinsics need KB4/KB4T (NotImplementedError otherwise: keep scipy).
-    -> dict(intr, C, poses, log_scale, res (all corners, N x 2), kept (mask), success, nfev)"""
+    fit cut and the solve repeated until the kept set repeats (stereofit.trim_loop: at most `rounds` rounds, None =
+    stereofit.trim_cap()); success only if every round converged within max_nfev evaluations. Free intrinsics need
+    KB4/KB4T (NotImplementedError otherwise: keep scipy). -> dict(intr, C, poses, log_scale, res (all corners, N x 2),
+    kept (mask), success, nfev, trim_rounds, settled)"""
+    import stereofit
     if free_intr and model not in KB_MODELS:
         raise NotImplementedError(f"free intrinsics need {'/'.join(KB_MODELS)}, not {model}")
     prob = Problem(data, model)
-    st = State.start(intr0, C0, poses0, ls0 if scale else None)
-    keep = np.ones(prob.N, bool)
-    nfev, ok = 0, True
-    for _ in range(rounds):
+    box = [State.start(intr0, C0, poses0, ls0 if scale else None)]
+
+    def fit_round(keep):
         w = prob.padded(keep)
         if free_intr or free_C:
-            st, success, nf = _lm_global(prob, st, w, free_intr, free_C, scale, max_nfev)
+            box[0], success, nf = _lm_global(prob, box[0], w, free_intr, free_C, scale, max_nfev)
         else:
-            st, success, nf = _lm_pairs(prob, st, w, scale, max_nfev)
-        nfev += nf
-        ok = ok and success
-        res = prob.residuals(st)
-        new = np.linalg.norm(res, axis=1) <= trim_px
-        if np.array_equal(new, keep):
-            break
-        keep = new
+            box[0], success, nf = _lm_pairs(prob, box[0], w, scale, max_nfev)
+        return prob.residuals(box[0]), success, nf
+    t = stereofit.trim_loop(fit_round, prob.N, trim_px, rounds)
+    st = box[0]
     intr = [np.array(v) for v in st.intr] if free_intr else [np.array(v, float) for v in intr0]
-    return {"intr": intr, "C": st.C, "poses": st.poses(), "log_scale": st.ls if scale else np.zeros(prob.n),
-            "res": res, "kept": keep, "success": bool(ok), "nfev": int(nfev)}
+    return {"intr": intr, "C": st.C, "poses": st.poses(), "log_scale": st.ls if scale else np.zeros(prob.n), **t,
+            "success": bool(t["success"]), "nfev": int(t["nfev"])}

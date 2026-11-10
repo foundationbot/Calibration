@@ -4,8 +4,12 @@
 KB4T = equidistant fisheye k1..k4 plus Brown tangential p1, p2 for both cameras, and the stereo pose C (camera-1
 points into camera 0); --model KB4 drops p1, p2. The fit (stereofit.fit_from_nominal): board poses by PnP with the
 nominal camera, the stereo pose alone, then everything, converged or nothing: up to 3 attempts, each restarted from
-the last; an attempt is up to 4 trim rounds of least squares, each capped at 2000 evaluations (stereofit.MAX_ATTEMPTS,
-TRIM_ROUNDS, MAX_NFEV). No scipy success after them: exit 2, "unconverged". Then the quality gate (hold-gate plan,
+the last; an attempt is trim rounds of least squares until the kept corner set settles (at most 12, CALIB_TRIM_ROUNDS
+sets the cap; the recorded runs used at most 4), each capped at 2000 evaluations (stereofit.MAX_ATTEMPTS, TRIM_CAP,
+MAX_NFEV). No scipy success after them: exit 2, "unconverged". A fit whose kept set still changed at the cap is NOT
+refused: the verdict stays "converged" with "; WARNING: trim not settled after N rounds" appended, trim_settled false
+and a line in "warnings" (on the stored sessions rounds 5-7 moved the projection by 0.008-0.020 px: a warning's worth,
+not a failure's). Then the quality gate (hold-gate plan,
 22 Oct, rule Z): per hold, the board centre's median camera-0 depth and the rigid-board pixel rms with the fitted
 camera; holds beyond gates.lens_hold_max_z_m (far boards, unusable whatever their rms) or above
 gates.lens_hold_rms_max_px (gross misfits) are dropped, listed, and the fit is repeated without them (warm); more than
@@ -53,7 +57,7 @@ def unconverged_text(r):
     """what the fit tried, from the attempts it made and the caps it ran with"""
     n = len(r["attempts"])
     return (f"{n} attempt{'' if n == 1 else 's'} of at most {r['max_attempts']} did not reach scipy's convergence "
-            f"({r['nfev']} evaluations; cap {r['max_nfev']} evaluations per solve round, up to {sf.TRIM_ROUNDS} "
+            f"({r['nfev']} evaluations; cap {r['max_nfev']} evaluations per solve round, up to {r['trim_cap']} "
             "trim rounds an attempt)")
 
 
@@ -113,7 +117,15 @@ def main(argv=None):
                         "nfev": r["nfev"], "attempts": r["attempts"], "fit_pairs": int(used.n),
                         "fit_holds": int(len(np.unique(used.hold))), "kept_holds": sorted(set(used.hold.tolist())),
                         "rms_px": sf.fit_cost(r)[1], "cut_fraction": float(1 - r["kept"].mean()),
-                        "rms_by_ring": sf.ring_rms(used, r["res"], ((W - 1) / 2, (H - 1) / 2))})
+                        "rms_by_ring": sf.ring_rms(used, r["res"], ((W - 1) / 2, (H - 1) / 2)),
+                        "trim_rounds": int(r["trim_rounds"]), "trim_settled": bool(r["settled"]),
+                        "trim_cap": int(r["trim_cap"])})
+            if not r["settled"] and verdict.startswith("converged"):
+                w = (f"trim not settled after {r['trim_rounds']} rounds (the kept corner set still changed; cap "
+                     f"{r['trim_cap']})")
+                out.setdefault("warnings", []).append(w)
+                verdict = out["verdict"] = f"{verdict}; WARNING: {w}"
+                print(f"WARNING: {w}")
         out["seconds"] = round(time.time() - t0)
         sf.write_json(a.out, out)
         print(f"{verdict} -> {a.out}")

@@ -8,7 +8,8 @@ numbers of phantom21's live radtan config (P21_LIVE_RADTAN below), which phase B
 
 The recorded numbers are scipy's (the recorded runs predate the fast solver): every step here runs with
 solver="scipy" (SOLVER), whatever calibtool's default. The fast solver's acceptance on the same sessions is
-test_replay's fast-mode tests."""
+test_replay's fast-mode tests. They were also made with at most 4 trim rounds: every test here runs so
+(recorded_trim, CALIB_TRIM_ROUNDS=4); the settle-trim acceptance is test_replay's settle tests."""
 import json
 import subprocess
 import sys
@@ -25,6 +26,8 @@ pytest.importorskip("yaml")
 
 from calibtool import paths, pipeline, sessions  # noqa: E402
 from calibtool.session import Session  # noqa: E402
+
+pytestmark = pytest.mark.usefixtures("recorded_trim")
 
 NAMES = ["p21_1105", "p10_1106"]
 ENTRY_TOL_PCT = 0.02          # per-entry step-66 median (plan A3)

@@ -496,7 +496,8 @@ def test_replay_cut_at_the_stop_rule_still_passes(name, data_root, tmp_path):
 
 # ---------------------------------------------------------------- replay: the fast solver's acceptance (verdict level)
 
-# The scipy replay of each stored session (replay.run(assignment="split16", solver="scipy"), Moonstone, 9 Nov 2026):
+# The scipy replay of each stored session (replay.run(assignment="split16", solver="scipy"), Moonstone, 9 Nov 2026,
+# at most 4 trim rounds as every run before settle-trim):
 # step 45's pairs, step 66's validated entries (median %) on the new fit and on the live config, and the paired
 # statistics (new, live, 95 % interval; None: not judged). The live config of p10 is the one place the fast solver
 # validates another entry than scipy at its default tolerance: top-left 0.9-1.3 m reaches 8 holds (scipy default: 7),
@@ -539,6 +540,7 @@ FAST_CI_TOL = 0.01            # the depth and rows intervals the decision reads 
 
 
 @pytest.mark.replay
+@pytest.mark.usefixtures("recorded_trim")  # recorded numbers: at most 4 trim rounds
 @pytest.mark.parametrize("name", ["p21_1105", "p10_1106"])
 def test_fast_solver_replay_decides_as_scipy(name, data_root, tmp_path):
     """the whole replay (step 16's split) with the fast solver and 4 processes: step 45 fits the same pairs, step 66
@@ -577,3 +579,36 @@ def test_fast_solver_replay_decides_as_scipy(name, data_root, tmp_path):
         if s["judged"] and not s["diff"] < 0:
             off.append(f"new not better on {s['name']}")
     assert not off, "\n".join(off)
+
+
+# ---------------------------------------------------------------- replay: settle-trim's acceptance (verdict level)
+
+
+@pytest.mark.replay
+@pytest.mark.parametrize("name", ["p21_1105", "p10_1106"])
+def test_settle_trim_replay_decides_as_before(name, data_root, tmp_path, monkeypatch):
+    """settle-trim (10 Nov 2026, calibtool's default: trim rounds until the kept corner set settles, cap 12): the
+    fast replay of step 16's split converges with every fit settled, PASSes step 66 on the new fit and FAILs the live
+    config, decides DEPLOY (default edges) and as before with all four, and the new fit is better on every judged
+    statistic. The numbers against the 4-round scipy replay (SCIPY_SPLIT16) are printed (SETTLE lines), not pinned"""
+    monkeypatch.delenv("CALIB_TRIM_ROUNDS", raising=False)
+    ref = SCIPY_SPLIT16[name]
+    js = replay().run(sessions.get(name), assignment="split16", out_dir=tmp_path, solver="fast", jobs=4)
+    fit = json.loads(Path(js["fit"]["json_path"]).read_text())
+    vn, vl = js["validate_new"], js["validate_live"]
+    print(f"SETTLE {name} " + json.dumps({
+        "timings": js["timings"], "fit45_s": js["fit"]["seconds"], "fit_pairs": js["fit"]["fit_pairs"],
+        "fit_pairs_4": ref["fit_pairs"], "rms_px": js["fit"]["rms_px"], "baseline_mm": js["fit"]["baseline_mm"],
+        "trim_rounds": [a["trim_rounds"] for a in fit["attempts"]], "trim_settled": fit.get("trim_settled"),
+        "new": {k: [v, ref["new"].get(k)] for k, v in vn["entries"].items()},
+        "live": {k: [v, ref["live"].get(k)] for k, v in vl["entries"].items()}, "live_failing": vl["failing"],
+        "paired": {s["name"]: [s["new"], s["live"], s["ci"], ref["paired"][s["name"]]] for s in js["paired"]["stats"]},
+        "verdicts": [js["verdicts"][DEFAULT]["decision"], js["verdicts"][ALL4]["decision"]]}))
+    assert js["fit"]["converged"], js["fit"]["verdict"]
+    assert fit["trim_settled"] is True and "WARNING" not in fit["verdict"], fit["verdict"]
+    assert vn["verdict"] == "PASS", vn["text"]
+    assert vl["verdict"] == "FAIL"
+    assert js["verdicts"][DEFAULT]["decision"] == "DEPLOY", js["verdicts"][DEFAULT]["reasons"]
+    assert js["verdicts"][ALL4]["decision"] == ref["all4"]
+    worse = [s["name"] for s in js["paired"]["stats"] if s["judged"] and not s["diff"] < 0]
+    assert not worse, f"new not better on {worse}"

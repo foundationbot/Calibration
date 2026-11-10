@@ -321,6 +321,7 @@ def test_verdict_as_dict_is_json():
 
 
 @pytest.mark.replay
+@pytest.mark.usefixtures("recorded_trim")  # recorded numbers: at most 4 trim rounds
 @pytest.mark.parametrize("name", ["p21_1105", "p10_1106"])
 def test_stored_sessions_new_beats_live(name, data_root, tmp_path):
     """the recorded fit vs the robot's live config on the recorded TEST split, scored with scipy (the recorded

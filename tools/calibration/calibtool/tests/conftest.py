@@ -36,3 +36,14 @@ def data_root():
     if not d:
         pytest.skip("CALIBTOOL_DATA unset: needs the stored session data (Moonstone ~/calibtool/data)")
     return Path(d).expanduser()
+
+
+RECORDED_TRIM_ROUNDS = "4"      # stereofit.TRIM_ROUNDS_RECORDED (stdlib only here: no stereofit import)
+
+
+@pytest.fixture
+def recorded_trim(monkeypatch):
+    """the recorded runs' trim contract: at most 4 trim rounds (CALIB_TRIM_ROUNDS=4, inherited by every step's
+    process). The recorded numbers (5-6 Nov) and every number measured up to 9 Nov were made so; since settle-trim
+    (10 Nov) the default trims until the kept corner set settles"""
+    monkeypatch.setenv("CALIB_TRIM_ROUNDS", RECORDED_TRIM_ROUNDS)

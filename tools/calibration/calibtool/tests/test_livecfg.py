@@ -256,6 +256,7 @@ def _reference():
 
 
 @pytest.mark.replay
+@pytest.mark.usefixtures("recorded_trim")  # recorded numbers: at most 4 trim rounds
 def test_p21_live_radtan_scored_in_scope_reproduces_reference(data_root, tmp_path):
     """the live radtan config read by livecfg.load, scored in this process inside radtan_scope (summary) and by step 66
     through livecfg's runner: phase A's reference numbers (made with the kit's shim, scipy: so scored with scipy

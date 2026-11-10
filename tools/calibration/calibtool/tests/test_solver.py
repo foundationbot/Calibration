@@ -322,3 +322,101 @@ def test_a_pair_whose_minimum_runs_away_reports_success_as_scipy_does():
                        max_nfev=2000)
     assert ref["success"] and fast["success"]
     assert fast["kept"].mean() < 0.5 and np.abs(fast["log_scale"]).max() > 5        # the scenario: a runaway pair
+
+
+# ---------------------------------------------------------------- settle-trim (10 Nov 2026): both solvers
+
+
+def _round_masks(masks, n=10):
+    """a fit_round for stereofit.trim_loop whose k-th fit leaves exactly the corners of masks[k] (the last one
+    repeated) within 3 px, and the masks it was called with"""
+    seen = []
+
+    def fit_round(keep):
+        seen.append(keep.copy())
+        m = np.asarray(masks[min(len(seen) - 1, len(masks) - 1)], bool)
+        return np.where(m[:, None], 0.5, 9.0) * np.ones((n, 2)), True, 3
+    return fit_round, seen
+
+
+def test_trim_rounds_run_until_the_kept_set_repeats():
+    """three cuts in a row, then the same set: the 4th round confirms it (settled), past the old cap of 4 rounds when
+    the set settles later"""
+    sets = [[1] * 9 + [0], [1] * 8 + [0, 0], [1] * 7 + [0, 0, 0]]
+    fit_round, seen = _round_masks(sets)
+    t = sf.trim_loop(fit_round, 10)
+    assert t["settled"] and t["trim_rounds"] == 4 and t["nfev"] == 12 and t["success"]
+    assert seen[0].all() and np.array_equal(seen[3], sets[2]) and np.array_equal(t["kept"], sets[2])
+    sets6 = [[1] * (9 - k) + [0] * (k + 1) for k in range(5)]          # five cuts: settles at round 6
+    t = sf.trim_loop(_round_masks(sets6)[0], 10)
+    assert t["settled"] and t["trim_rounds"] == 6
+
+
+def test_trim_rounds_stop_unsettled_at_the_cap():
+    """a set that keeps changing: TRIM_CAP rounds, settled False; an explicit cap of 4 = the recorded contract"""
+    flip = [[1] * 9 + [0], [1] * 8 + [0, 1]] * 20
+    t = sf.trim_loop(_round_masks(flip)[0], 10)
+    assert not t["settled"] and t["trim_rounds"] == sf.TRIM_CAP == 12
+    t = sf.trim_loop(_round_masks(flip)[0], 10, rounds=sf.TRIM_ROUNDS_RECORDED)
+    assert not t["settled"] and t["trim_rounds"] == 4
+    t = sf.trim_loop(_round_masks([[1] * 10])[0], 10, rounds=1)          # nothing cut: settled at the first round
+    assert t["settled"] and t["trim_rounds"] == 1
+
+
+def test_the_environment_sets_the_cap(monkeypatch):
+    monkeypatch.delenv(sf.TRIM_ENV, raising=False)
+    assert sf.trim_cap() == 12
+    monkeypatch.setenv(sf.TRIM_ENV, "4")
+    assert sf.trim_cap() == 4
+    flip = [[1] * 9 + [0], [1] * 8 + [0, 1]] * 20
+    assert sf.trim_loop(_round_masks(flip)[0], 10)["trim_rounds"] == 4
+    for bad in ("0", "-1", "four"):
+        monkeypatch.setenv(sf.TRIM_ENV, bad)
+        with pytest.raises(ValueError, match=sf.TRIM_ENV):
+            sf.trim_cap()
+
+
+def _boundary_scene():
+    """corners pushed 2.0-4.0 px off (12 % of them): the first fits cut a different set each round for a while"""
+    data, poses = _scene(seed=11, n_holds=9, noise=0.3)
+    rng = np.random.default_rng(3)
+    m = rng.random(len(data.uv)) < 0.12
+    ang = rng.uniform(0, 2 * np.pi, m.sum())
+    data.uv[m] += rng.uniform(2.0, 4.0, m.sum())[:, None] * np.c_[np.cos(ang), np.sin(ang)]
+    return data, poses
+
+
+@pytest.mark.parametrize("name", ["scipy", "fast"])
+def test_a_settled_solve_keeps_exactly_the_corners_its_fit_leaves_within_the_cut(name, monkeypatch):
+    """the contract on both solvers: settled = the kept set is the one the returned fit was made on, and it is the
+    set of corners within trim_px of that fit; the rounds run are reported"""
+    monkeypatch.delenv(sf.TRIM_ENV, raising=False)
+    data, poses = _boundary_scene()
+    with sf.solver_scope(name):
+        r = sf.solve(data, "KB4T", [S.I0, S.I1], S.C_TRUE, poses, max_nfev=2000)
+        one = sf.solve(data, "KB4T", [S.I0, S.I1], S.C_TRUE, poses, max_nfev=2000, rounds=1)
+    assert r["success"] and r["settled"] and 2 <= r["trim_rounds"] <= sf.TRIM_CAP
+    assert np.array_equal(r["kept"], np.linalg.norm(r["res"], axis=1) <= sf.TRIM_PX)
+    assert 0.80 < r["kept"].mean() < 0.95
+    assert one["trim_rounds"] == 1 and not one["settled"] and not one["kept"].all()
+
+
+def test_both_solvers_settle_on_the_same_kept_set():
+    data, poses = _boundary_scene()
+    out = {}
+    for name in ("scipy", "fast"):
+        with sf.solver_scope(name):
+            out[name] = sf.solve(data, "KB4T", [S.I0, S.I1], S.C_TRUE, poses, max_nfev=2000)
+    assert out["fast"]["settled"] and out["scipy"]["settled"]
+    assert np.array_equal(out["fast"]["kept"], out["scipy"]["kept"])
+    # scipy at step 45's tolerance stops short in the flat valley (module text): the fast cost is at or below it
+    assert sf.fit_cost(out["fast"])[0] <= sf.fit_cost(out["scipy"])[0] * (1 + 1e-12)
+
+
+def test_fit_converged_reports_the_rounds_and_the_cap_per_attempt(monkeypatch):
+    monkeypatch.setenv(sf.TRIM_ENV, "7")
+    data, poses = _boundary_scene()
+    with sf.solver_scope("fast"):
+        r = sf.fit_converged(data, "KB4T", [S.I0, S.I1], S.C_TRUE, poses, log=lambda *a: None)
+    assert r["trim_cap"] == 7 and r["settled"] == r["attempts"][-1]["settled"]
+    assert all({"trim_rounds", "settled"} <= set(a) for a in r["attempts"])

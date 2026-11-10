@@ -193,3 +193,27 @@ def test_start_from_an_unconverged_fit_is_refused(tmp_path):
     with pytest.raises(SystemExit) as e:
         m45.main([str(npz), str(tmp_path / "fit.json"), "--rig", str(S.RIG12), "--start", str(first)])
     assert "converged" in str(e.value)
+
+
+def test_a_fit_whose_trim_did_not_settle_is_converged_with_a_warning(tmp_path, monkeypatch):
+    """settle-trim (10 Nov): at the cap with the kept set still changing, step 45 warns (verdict suffix, warnings,
+    trim_settled false) and does not fail; one round on corners 5 px off (2 % of them, in every hold) cannot settle"""
+    monkeypatch.setenv(m45.sf.TRIM_ENV, "1")
+    d = S.fit_sweep()
+    off = np.random.default_rng(7).random(len(d["det_u"])) < 0.02
+    d["det_u"] = np.where(off, np.asarray(d["det_u"]) + 5.0, d["det_u"])
+    out = tmp_path / "fit.json"
+    assert m45.main([str(_npz(tmp_path, d)), str(out), "--rig", str(S.RIG12)]) == 0
+    r = json.loads(out.read_text())
+    assert r["verdict"].startswith("converged") and "WARNING: trim not settled after 1 rounds" in r["verdict"]
+    assert r["trim_settled"] is False and r["trim_rounds"] == 1 and r["trim_cap"] == 1
+    assert len(r["warnings"]) == 1 and "trim not settled" in r["warnings"][0]
+
+
+def test_a_settled_fit_says_so(tmp_path, monkeypatch):
+    monkeypatch.delenv(m45.sf.TRIM_ENV, raising=False)
+    out = tmp_path / "fit.json"
+    assert m45.main([str(_npz(tmp_path, S.fit_sweep())), str(out), "--rig", str(S.RIG12)]) == 0
+    r = json.loads(out.read_text())
+    assert r["trim_settled"] is True and r["trim_cap"] == 12 and 1 <= r["trim_rounds"] <= 12
+    assert "WARNING" not in r["verdict"] and "warnings" not in r
