@@ -23,8 +23,9 @@ and the handoff's numbers: p21 left edge 176 vs 1,099 counts every corner of the
 simulated placements add, every pair of a grid), with the FIT pair count for the pairs target (what step 45 gets).
 REGION_TALLY = "fit" counts the regions over FIT corners instead.
 
-Labels are capture-time ones in each snapshot (what the operator would have seen then); the assignment's finish()
-(assign rule 3) can still move held-back holds to TEST, so the report also carries the final coverage.
+A snapshot counts with the labels the assignment's finish() (assign rule 3: held-back holds released to TEST) would
+leave if the session ended after that placement: the split it would write, which is also what the stop rule judges.
+Collection.labels() / tallies() without arguments are the capture-time labels.
 
 The stop rule (coverage.Targets, Coverage.stop_met: no blocking deficit) is checked after every hold with the labels
 finish() would leave if the session ended there (the split it would write); the first hold that meets it is
@@ -282,8 +283,8 @@ class Collection:
         reg = t[self.region_tally]
         return cv.Coverage(fit=cv.FitTally(reg.cams, reg.far_pairs, t["fit"].n_pairs), test=t["test"])
 
-    def counts(self) -> dict:
-        lab = self.labels()
+    def counts(self, labels=None) -> dict:
+        lab = self.labels() if labels is None else labels
         fit = sum(hc.n_near for h, hc in self._holds.items() if lab.get(h) == assign.FIT)
         pairs = sum(hc.n_pairs for hc in self._holds.values())
         return {"holds": len(self._holds), "pairs": pairs, "fit_pairs": fit, "test_pairs": pairs - fit}
@@ -300,9 +301,10 @@ class Collection:
             raise ValueError("no hold added since the last snapshot")
         mine = [self._holds[h] for h in self._open]
         name = placement or mine[-1].placement
-        t = self.tallies()
+        lab = self.stop_labels()
+        t = self.tallies(lab)
         defs = self.coverage(t).deficits(self.targets)
-        c = self.counts()
+        c = self.counts(lab)
         ready = self.ready(t)
         snap = Snapshot(len(self.snapshots) + 1, name, len(mine), sum(h.board for h in mine),
                         sum(h.n_pairs for h in mine), c["holds"], c["pairs"], c["fit_pairs"], c["test_pairs"], t,

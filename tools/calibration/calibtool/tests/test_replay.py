@@ -233,6 +233,19 @@ def test_stop_rule_uses_the_labels_finish_would_leave(rig):
     assert t["test"].entries[("centre", (0.4, 0.6))] == 7
 
 
+def test_snapshot_counts_with_the_labels_finish_would_leave(rig):
+    """what the operator is told after a placement (counts, TEST entries, deficits, sentences) is the split the session
+    would write if it ended there: the stop rule's labels, so the sentences and the stop rule never disagree"""
+    rp = replay()
+    s = TA.synth_session(rig.board, [("P1", [("centre", 0.5, 2)] * 14)])
+    col = rp.Collection.for_session(s, rig, "capture")
+    snap = rp.feed(col, assign.capture_holds(s))[-1]
+    assert snap.tallies["test"].entries[("centre", (0.4, 0.6))] == 7
+    lab = col.stop_labels()
+    assert snap.fit_pairs == sum(len(h.pairs) for h in s.holds() if lab[h.hold] == "FIT")
+    assert snap.deficits == col.coverage(col.tallies(lab)).deficits(col.targets)
+
+
 def test_run_stops_at_the_rule(rig, tmp_path):
     """stop_at_rule=True: the session is cut at the stop point (the holds fed until the rule was met) and everything
     after (snapshots, planner, split) runs on that part; without it the report still says where the rule was met"""
