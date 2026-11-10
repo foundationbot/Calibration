@@ -478,14 +478,36 @@ class RobotLock:
 
 # ---------------------------------------------------------------- the loop
 
+GUIDE_PHASES = frozenset({"READY", "PLACE", "IMU_PLACE", "CHECK_PLACE", "POST_PLACE"})
+
+
+class ObsBox:
+    """the newest live detection for the full session's guidance (flow.Robot.board_obs): put by the loop, taken by
+    the flow thread, each one once"""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._v = (False, None)
+
+    def put(self, obs):
+        with self._lock:
+            self._v = (True, obs)
+
+    def take(self):
+        with self._lock:
+            v, self._v = self._v, (False, None)
+            return v
+
+
 class Daemon:
     """detector(pair) -> Future of (left corners, right corners); to_obs(left corners) -> detect.BoardObs | None;
     sampler() -> system facts for the health watch (boot_id, clock_s, load, imu_head, usb, dmesg, producer_log,
     producer, k0s_ok)"""
 
     def __init__(self, machine: Machine, capture, detector, to_obs, sampler, trial=None, clock=time.time,
-                 sample_every_s=SAMPLE_S, rebuild_detector=None):
+                 sample_every_s=SAMPLE_S, rebuild_detector=None, flow=None, obs_box=None):
         self.m, self.capture, self.detector, self.to_obs = machine, capture, detector, to_obs
+        self.flow, self.obs_box = flow, obs_box     # the full session (flow.FullFlow runs in its own thread)
         self.rebuild_detector = rebuild_detector    # () -> a new detector when the process pool broke
         self._rebuilt_at = None
         self._last_error = None
@@ -534,8 +556,10 @@ class Daemon:
         out = []
         if st.get("read_only"):
             out.append("READ-ONLY session: the tool changes nothing on the robot (producer, motors, OKVIS as found)")
+        out += list(st.get("flow_banner") or ())
         if st["phase"] == "HOLD":
-            out.append(f"HOLD: no TUI heartbeat; nothing resumes by itself: press G (from {st.get('held_from')})")
+            why = st.get("hold_reason") or "no TUI heartbeat"
+            out.append(f"HOLD: {why}; nothing resumes by itself: press G (from {st.get('held_from')})")
         if st.get("step_error_run"):
             out.append(f"calibd step failing ({st['step_error_run']} in a row): {st.get('last_step_error')}")
         if st.get("camera_stalled_s") is not None:
@@ -622,6 +646,12 @@ class Daemon:
             self.m.state["health"] = [e.as_dict() for e in self.watch.events[-HEALTH_KEEP:]]
         self.m.state["system"] = {k: v for k, v in s.items() if k not in ("cams", "dmesg", "producer_log")}
 
+    def say(self, s):
+        """a prompt from another thread (the flow): numbered from self.ids, saved under the machine's lock"""
+        with self.m._lock:
+            self._say(s)
+            self.m.save()
+
     def _say(self, s):
         d = s.as_dict()
         self.m.state["say"] = d
@@ -657,9 +687,15 @@ class Daemon:
         st["step_n"] = int(st.get("step_n") or 0) + 1       # the TUI flags a daemon whose counter stops (review 3)
         self.m.tick()
         st["capture"] = self.capture.snapshot()
-        fresh = self._detect()
+        full = st.get("mode") == "full"
+        # a full session detects live only for the guidance: in a grid the flow owns the detection pool
+        fresh = self._detect() if not full or self.m.phase in GUIDE_PHASES else False
+        if full and fresh is not False and self.obs_box is not None:
+            self.obs_box.put(fresh)
         stalled = self._stall(t)
         self._health(t)
+        if full and self.flow is not None and self.m.phase in TERMINAL:
+            self.flow.handle_terminal_keys()            # D after the end: the motor disable
         if self.trial is not None and self.m.phase == "TRIAL":
             if not self._trial_started:
                 self._trial_started = True
@@ -864,8 +900,13 @@ def cmd_run(a):
     dirs, sock = _session_paths(root, a.session)
     dirs.create()
     store = Store(dirs.root)
-    m = (Machine.resume(store) if store.load_state() is not None else
-         Machine(store, session=a.session, robot=prof.bot, read_only=True, mode="trial" if a.trial else "watch"))
+    prev = store.load_state()
+    full = getattr(a, "session_mode", "watch") == "full" or (prev or {}).get("mode") == "full"
+    m = (Machine.resume(store) if prev is not None else
+         Machine(store, session=a.session, robot=prof.bot, read_only=not full,
+                 mode="full" if full else "trial" if a.trial else "watch"))
+    dry_run = bool(getattr(a, "dry_run", False) or (prev or {}).get("dry_run"))
+    m.state["dry_run"] = dry_run
     (root / "current").write_text(a.session)
     (dirs.root / "pid").write_text(str(os.getpid()))
     stop = threading.Event()
@@ -913,8 +954,9 @@ def cmd_run(a):
     sampler.start()
     def submitter():
         pool = pools["pool"]
-        # the placement trial only needs where the board is (left image): the fast guidance detection
-        return (lambda p: pool.submit_guide(p.left.y)) if trial is not None else \
+        # the placement trial and the full session's guidance only need where the board is (left image): the fast
+        # guidance detection
+        return (lambda p: pool.submit_guide(p.left.y)) if trial is not None or full else \
             (lambda p: pool.submit_pair(p.left.y, p.right.y))
 
     def rebuild():
@@ -924,9 +966,14 @@ def cmd_run(a):
             pass
         pools["pool"] = detect.DetectPool(board, workers)
         return submitter()
-    d = Daemon(m, cap, submitter(), to_obs, sampler, trial=trial, rebuild_detector=rebuild)
+    d = Daemon(m, cap, submitter(), to_obs, sampler, trial=trial, rebuild_detector=rebuild,
+               obs_box=ObsBox() if full else None)
     d.preflight_done(res)
+    if full:
+        d.flow = _full_flow(prof, m, d, dirs, cap, pools, rig, (W, H), res, probes, dry_run, a.session)
     d.start_loop()
+    if full:
+        threading.Thread(target=d.flow.run, name="calibd-flow", daemon=True).start()
     try:
         while not stop.is_set():
             stop.wait(0.5)
@@ -949,6 +996,37 @@ def cmd_run(a):
         except FileNotFoundError:
             pass
     return 0
+
+
+def _full_flow(prof, m, d, dirs, cap, pools, rig, size, res, probes, dry_run, session):
+    """the full session's flow over this robot (flowrobot.build); runs in its own thread. Robot-only imports here"""
+    import dma_ipc
+    from calibtool import (coverage, flow, flowrobot, gravity, imusweep, livecfg, neck as nk, place, protocol,
+                           replay)
+    grav = gravity.from_robot()
+    R_live, live_path = gravity.live_r_sc()
+    live = livecfg.load(live_path, at_size=size)
+    board = rig.board
+
+    def live_text():
+        return Path(live_path).read_text()
+
+    def submit_pair(yl, yr):
+        return pools["pool"].submit_pair(yl, yr)
+    check_scores, post_scores = flowrobot.scorers(prof.rig_path, live_text, dirs.fit / "scores", submit_pair)
+    name = f"{prof.thor}_stereo_kb4t_{time.strftime('%Y%m%d')}_1280.yaml"
+    robot = flowrobot.build(
+        prof, session=session, dirs=dirs, capture=cap, detect_pair=submit_pair,
+        producer_yaml=res.snapshot.get("producer_yaml"), probes=probes, baseline=res.baseline, obs_box=d.obs_box,
+        guide_kw={"focal": rig.nominal_focal_px, "size": size, "up": grav.up,
+                  "stand": place.Stand(prof.stand_raise_m, prof.stand_lower_m)},
+        make_collection=lambda: replay.Collection(rig, replay.capture_labeler(rig),
+                                                  targets=coverage.Targets.for_per_hold(protocol.PER_HOLD)),
+        fit_decide=flowrobot.pipeline_fit_decide(prof.rig_path, lambda: live_path, name), dry_run=dry_run,
+        imu=nk.DmaImu(dma_ipc, gravity.HEAD_IMU),
+        sweep_detect=lambda g: imusweep.board_normal(board.detect(g), board, live.model, live.intr[0]),
+        R_live=R_live, check_scores=check_scores, post_scores=post_scores)
+    return flow.FullFlow(m, robot, dirs, emit=d.say, ids=d.ids)
 
 
 def _connect(sock, timeout=2.0):
@@ -1025,6 +1103,15 @@ def _live_sessions(root, sid):
     return out
 
 
+def run_argv(a) -> list:
+    """the detached `run` child's argv for start"""
+    full = getattr(a, "session_mode", "watch") == "full"
+    return ([sys.executable, "-m", "calibtool.daemon", "run", "--root", a.root, "--session", a.session, "--profile",
+             a.profile] + (["--trial"] if a.trial else []) + (["--detect-workers", str(a.detect_workers)]
+                                                               if a.detect_workers else [])
+            + (["--session-mode", "full"] if full else []) + (["--dry-run"] if getattr(a, "dry_run", False) else []))
+
+
 def cmd_start(a):
     import subprocess
     from calibtool import storage
@@ -1039,9 +1126,7 @@ def cmd_start(a):
             print(json.dumps({"session": a.session, "error": f"could not stop the calibd of session {s}"}))
             return 2
     dirs.create()
-    argv = [sys.executable, "-m", "calibtool.daemon", "run", "--root", a.root, "--session", a.session, "--profile",
-            a.profile] + (["--trial"] if a.trial else []) + (["--detect-workers", str(a.detect_workers)]
-                                                              if a.detect_workers else [])
+    argv = run_argv(a)
     log = open(dirs.root / "calibd.log", "a")
     p = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True,
                          cwd=str(Path(__file__).resolve().parents[1]))
@@ -1132,6 +1217,10 @@ def main(argv=None):
     ap.add_argument("--trial", action="store_true", help="placement-trial mode (neck at home, nothing moves)")
     ap.add_argument("--detect-workers", type=int, default=0)
     ap.add_argument("--replace", action="store_true", help="start: stop a calibd already running first")
+    ap.add_argument("--session-mode", default="watch", choices=["watch", "full"],
+                    help="full: the whole calibration session (motors, grids, deploy: M5); watch: read-only")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="full session: every robot change is recorded in <session>/commands.txt, none is sent")
     a = ap.parse_args(argv)
     if a.cmd == "run" and not a.session:
         ap.error("run needs --session")

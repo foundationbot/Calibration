@@ -927,3 +927,102 @@ def test_a_full_session_resumes_every_flow_phase_in_hold(tmp_path, phase):
     m.to(phase, "x")
     m2 = dm.Machine.resume(dm.Store(tmp_path / "s1"), Clock())
     assert m2.phase == "HOLD" and m2.state["held_from"] == phase
+
+
+# ------------------------------------------------------------------ the full session in the loop (M5 wiring)
+
+class FakeFlow:
+    def __init__(self):
+        self.terminal_calls = 0
+
+    def handle_terminal_keys(self):
+        self.terminal_calls += 1
+
+
+def full_daemon(tmp_path, c):
+    m = machine(tmp_path, c, mode="full", read_only=False)
+    cap = cp.Capture(FakeSource(), 3, 0, clock=c)
+    for _ in range(4):
+        cap.step()
+    calls = []
+
+    def detector(pair):
+        calls.append(pair.t0)
+        return _done((None, None))
+    box = dm.ObsBox()
+    flow = FakeFlow()
+    d = dm.Daemon(m, cap, detector=detector, to_obs=lambda det: _obs(0.75), sampler=lambda: {}, clock=c, flow=flow,
+                  obs_box=box)
+    return m, cap, d, box, flow, calls
+
+
+def test_obs_box_hands_each_detection_out_once():
+    b = dm.ObsBox()
+    assert b.take() == (False, None)
+    b.put("o1")
+    assert b.take() == (True, "o1")
+    assert b.take() == (False, None)
+    b.put(None)
+    assert b.take() == (True, None)
+
+
+def test_full_mode_detects_for_the_guidance_only(tmp_path):
+    c = Clock()
+    m, cap, d, box, flow, calls = full_daemon(tmp_path, c)
+    m.to("READY", "x")
+    m.heartbeat()
+    m.to("PLACE", "flow")
+    for _ in range(3):
+        c.t += 0.2
+        m.heartbeat()
+        cap.step()
+        cap.step()
+        d.step()
+    fresh, obs = box.take()
+    assert fresh and obs.z == pytest.approx(0.75)
+    n = len(calls)
+    m.to("GRID", "flow")
+    for _ in range(3):
+        c.t += 0.2
+        m.heartbeat()
+        cap.step()
+        cap.step()
+        d.step()
+    assert len(calls) <= n + 1                     # the grid owns the detection pool: no live detection there
+
+
+def test_full_mode_hands_d_to_the_flow_after_the_end(tmp_path):
+    c = Clock()
+    m, cap, d, box, flow, calls = full_daemon(tmp_path, c)
+    m.to("ABORTED", "x")
+    d.step()
+    assert flow.terminal_calls == 1
+
+
+def test_full_mode_banner_says_what_the_flow_needs_said(tmp_path):
+    c = Clock()
+    m, cap, d, box, flow, calls = full_daemon(tmp_path, c)
+    m.state["flow_banner"] = ["ROLLBACK FAILED at verify: ..."]
+    m.state["hold_reason"] = "another program commands the motors"
+    m.to("HOLD", "x")
+    b = d.banner()
+    assert not any("READ-ONLY" in x for x in b)
+    assert "ROLLBACK FAILED at verify: ..." in b
+    assert any("another program commands the motors" in x for x in b)
+
+
+def test_daemon_say_numbers_after_the_last_prompt(tmp_path):
+    c = Clock()
+    m, cap, d, box, flow, calls = full_daemon(tmp_path, c)
+    d.say(place.Say(next(d.ids), c.t, "countdown", "Step back. Starting in 5."))
+    assert m.state["says"][-1]["text"] == "Step back. Starting in 5." and m.state["say_id_max"] >= 1
+
+
+def test_the_session_mode_and_dry_run_reach_the_daemon_child():
+    a = dm.main.__globals__["argparse"].Namespace(root="/r", session="S", profile="P10", trial=False,
+                                                  detect_workers=0, session_mode="full", dry_run=True)
+    argv = dm.run_argv(a)
+    assert argv[argv.index("--session-mode") + 1] == "full" and "--dry-run" in argv
+    a.session_mode, a.dry_run = "watch", False
+    argv = dm.run_argv(a)
+    assert "--session-mode" not in argv and "--dry-run" not in argv
