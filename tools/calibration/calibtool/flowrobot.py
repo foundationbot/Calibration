@@ -11,8 +11,8 @@ build() picks, per part, the robot backend or, with dry_run, the recording one, 
   capture    Capture.grab, DetectPool.submit_pair, the loop's ObsBox for the guidance
 holds_session() turns the captured holds into the Session the split and the fit read (FIT/TEST labels are keyed by
 left stamp, so the take/hold renumbering of Session.from_files does not matter). pipeline_fit_decide() is the fit +
-verdict + export (step 45 / 66 through replay.evaluate as they are, step 71 for the OKVIS file); the speed branch's
-fast solver plugs in at its fit (pipeline.fit45's `solver=` once that branch lands)."""
+verdict + export (step 45 / 66 through replay.evaluate as they are, step 71 for the OKVIS file); with a live_fit
+(refit.LiveFit) its refit on the final split stands for step 45 when it covers exactly the split (refit.final_fit)."""
 from pathlib import Path
 
 import numpy as np
@@ -23,7 +23,7 @@ from calibtool import deploy as dp, flow, motors, motors_enable as me, neck as n
 def build(prof, *, session, dirs, capture, detect_pair, producer_yaml, probes, baseline, obs_box, guide_kw,
           make_collection, fit_decide, dry_run, run=None, motor_run=None, kube_runner=None, shm_robot=None,
           tool_info=None, imu=None, sweep_detect=None, R_live=None, check_scores=None, post_scores=None,
-          okvis_probe=None, plan_next=None, predict=None, imu_fit=None) -> flow.Robot:
+          okvis_probe=None, plan_next=None, predict=None, imu_fit=None, live_fit=None) -> flow.Robot:
     run = run or dp.shell_runner()
     motor_run = motor_run or motors.run_cmd
     kube_runner = kube_runner or pr.kubectl_runner()
@@ -57,7 +57,8 @@ def build(prof, *, session, dirs, capture, detect_pair, producer_yaml, probes, b
         check_scores=check_scores, post_scores=post_scores, okvis_pods=lambda: dp.okvis_pods(dp.Remote(run)),
         deploy_dir=str(dirs.deploy), session=session, guide_kw=dict(guide_kw), predict=predict, plan_next=plan_next,
         imu_accel=None if imu is None else imu.accel, frames0=lambda k: [p.left.y for p in capture.grab(k)],
-        sweep_detect=sweep_detect, R_live=R_live, imu_fit=imu_fit or imu_fit_default, okvis_probe=okvis_probe)
+        sweep_detect=sweep_detect, R_live=R_live, imu_fit=imu_fit or imu_fit_default, okvis_probe=okvis_probe,
+        live_fit=live_fit)
 
 
 def imu_fit_default(results, R_live) -> dict:
@@ -81,19 +82,25 @@ def holds_session(holds, name="calibtool session"):
     return Session.from_files([(p, postcheck.merge_holds(by[p])) for p in order], name=name)
 
 
-def pipeline_fit_decide(rig_path, live_config, out_name, gates=None, jobs=1):
+def pipeline_fit_decide(rig_path, live_config, out_name, gates=None, jobs=1, live_fit=None):
     """flow.Robot.fit_decide on the robot: the split of the capture-time labels, replay.evaluate (step 45, step 66 of
     new and live, decide.score, decide.verdict with the default required edges) and, on DEPLOY, step 71's KB4T OKVIS
-    file over the live config as template. live_config: () -> the live OKVIS yaml path"""
+    file over the live config as template. live_config: () -> the live OKVIS yaml path. live_fit: refit.LiveFit (the
+    flow's): its refit on the final split stands for step 45 when it covers exactly this split's FIT corners and
+    passed step 45's checks (refit.final_fit); otherwise step 45 runs. out["fit_source"] says which"""
     def fit_decide(col, holds, out_dir):
         from calibtool import decide, paths, pipeline, replay
         out_dir = Path(out_dir)
         sess = holds_session(holds)
         split = col.labeler.write_split(sess, out_dir / "split")
         live = live_config()
-        ev = replay.evaluate(sess, rig_path, split, live, out_dir, gates or decide.Gates(), jobs=jobs)
+        fit, why = (None, "no live refit") if live_fit is None else live_fit.final(split.fit_npz, out_dir / "fit")
+        ev = replay.evaluate(sess, rig_path, split, live, out_dir, gates or decide.Gates(), jobs=jobs, fit=fit)
         v = ev["verdicts"][next(iter(replay.VERDICT_KEYS))]
-        out = {"decision": v["decision"], "reasons": list(v["reasons"]), "name": out_name, "config_text": None}
+        src = (f"live refit {fit.entry['source']['live_refit']} (step 45 not run)" if fit is not None
+               else f"step 45 ({why})")
+        out = {"decision": v["decision"], "reasons": list(v["reasons"]), "name": out_name, "config_text": None,
+               "fit_source": src}
         if v["decision"] == "DEPLOY":
             ex = out_dir / "export"
             rc, _ = pipeline._run(paths.script("71_export_lens"),

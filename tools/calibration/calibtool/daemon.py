@@ -1002,7 +1002,7 @@ def _full_flow(prof, m, d, dirs, cap, pools, rig, size, res, probes, dry_run, se
     """the full session's flow over this robot (flowrobot.build); runs in its own thread. Robot-only imports here"""
     import dma_ipc
     from calibtool import (coverage, flow, flowrobot, gravity, imusweep, livecfg, neck as nk, place, protocol,
-                           replay)
+                           refit, replay)
     grav = gravity.from_robot()
     R_live, live_path = gravity.live_r_sc()
     live = livecfg.load(live_path, at_size=size)
@@ -1015,6 +1015,7 @@ def _full_flow(prof, m, d, dirs, cap, pools, rig, size, res, probes, dry_run, se
         return pools["pool"].submit_pair(yl, yr)
     check_scores, post_scores = flowrobot.scorers(prof.rig_path, live_text, dirs.fit / "scores", submit_pair)
     name = f"{prof.thor}_stereo_kb4t_{time.strftime('%Y%m%d')}_1280.yaml"
+    live_fit = refit.LiveFit(prof.rig_path)          # the final fit = its refit on the final split (step 45 if not)
     robot = flowrobot.build(
         prof, session=session, dirs=dirs, capture=cap, detect_pair=submit_pair,
         producer_yaml=res.snapshot.get("producer_yaml"), probes=probes, baseline=res.baseline, obs_box=d.obs_box,
@@ -1022,7 +1023,8 @@ def _full_flow(prof, m, d, dirs, cap, pools, rig, size, res, probes, dry_run, se
                   "stand": place.Stand(prof.stand_raise_m, prof.stand_lower_m)},
         make_collection=lambda: replay.Collection(rig, replay.capture_labeler(rig),
                                                   targets=coverage.Targets.for_per_hold(protocol.PER_HOLD)),
-        fit_decide=flowrobot.pipeline_fit_decide(prof.rig_path, lambda: live_path, name), dry_run=dry_run,
+        fit_decide=flowrobot.pipeline_fit_decide(prof.rig_path, lambda: live_path, name, live_fit=live_fit),
+        live_fit=live_fit, dry_run=dry_run,
         imu=nk.DmaImu(dma_ipc, gravity.HEAD_IMU),
         sweep_detect=lambda g: imusweep.board_normal(board.detect(g), board, live.model, live.intr[0]),
         R_live=R_live, check_scores=check_scores, post_scores=post_scores)

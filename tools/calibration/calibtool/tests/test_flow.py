@@ -190,7 +190,7 @@ class Session:
 
     def __init__(self, tmp_path, keys=None, decision="DEPLOY", motion_green=True, probe=None, crash_loop=False,
                  targets=TARGETS, store=None, robot=None, clock=None, motors=None, kube=None, resume=False,
-                 neck_backend=None):
+                 neck_backend=None, live_fit=None):
         self.tmp = tmp_path
         self.clock = clock or Clock()
         self.dirs = storage.SessionDirs(tmp_path / "root", "20261110-010203-P10").create()
@@ -254,7 +254,8 @@ class Session:
             fit_decide=fit_decide, check_scores=lambda holds, size, text: scores(0.2, 0.9),
             post_scores=self._post_scores,
             okvis_probe=lambda sha: {"log_lines": [f"({sha})", "KB4T pinhole camera 0"]},
-            okvis_pods=self._pods, deploy_dir=f"/data/calib/{self.dirs.sid}/deploy", session=self.dirs.sid)
+            okvis_pods=self._pods, deploy_dir=f"/data/calib/{self.dirs.sid}/deploy", session=self.dirs.sid,
+            live_fit=live_fit)
         self.flow = fl.FullFlow(self.m, self.robot_side, self.dirs, emit=self.says.append, ids=ids, clock=self.clock,
                                 mono=self.clock, sleep=self.clock.sleep, targets=targets)
 
@@ -562,3 +563,73 @@ def test_deploy_size_question_mark_explains_and_2_deploys_at_1280_without_a_chec
     assert "CHECK_GRID" not in [e.get("to") for e in s.events()]
     assert s.m.state["check"]["skipped"]
     assert "deploy_done" in s.kinds()
+
+
+# ---------------------------------------------------------------- the live refit (refit.LiveFit) beside the session
+
+
+class LiveFitSpy:
+    """refit.LiveFit's flow side: records the calls (and when, by fit_decide calls so far); error: raised by every
+    call; bad_future: a Future whose refit failed"""
+
+    def __init__(self, session_ref, error=None, bad_future=False):
+        self.s, self.error, self.bad_future = session_ref, error, bad_future
+        self.calls, self.closed = [], False
+
+    def _future(self, placement):
+        from concurrent.futures import Future
+        f = Future()
+        if self.bad_future:
+            f.set_exception(RuntimeError("refit process died"))
+        else:
+            f.set_result(SimpleNamespace(index=len(self.calls), placement=placement, pairs=10, rms_px=0.4,
+                                         baseline_mm=44.0, converged=True, rejected=False, seconds=0.5,
+                                         verdict="converged: fake"))
+        return f
+
+    def placement_done(self, col, holds, placement):
+        if self.error:
+            raise self.error
+        self.calls.append(("placement_done", placement, len(holds), self.s[0].fit_calls))
+        return self._future(placement)
+
+    def collection_done(self, col, holds, out_dir):
+        if self.error:
+            raise self.error
+        self.calls.append(("collection_done", str(out_dir), len(holds), self.s[0].fit_calls))
+        return self._future("final split")
+
+    def close(self):
+        self.closed = True
+
+
+def test_the_live_refit_runs_after_each_placement_and_on_the_final_split_before_the_fit(tmp_path):
+    ref = []
+    spy = LiveFitSpy(ref)
+    s = Session(tmp_path, keys=FULL_KEYS, live_fit=spy)
+    ref.append(s)
+    s.run()
+    assert s.m.phase == "DONE"
+    names = [c[1] for c in spy.calls if c[0] == "placement_done"]
+    ev = s.events()
+    upto = next(i for i, e in enumerate(ev) if e["kind"] == "collect_done")
+    assert names and names == [e["placement"] for e in ev[:upto] if e["kind"] == "grid_end"]
+    assert spy.calls[-1][0] == "collection_done" and spy.calls[-1][1] == str(s.dirs.fit)
+    assert all(c[3] == 0 for c in spy.calls) and s.fit_calls == 1        # every refit asked for before FIT
+    assert [c[2] for c in spy.calls] == sorted(c[2] for c in spy.calls) and spy.calls[-1][2] > 0
+    k = s.kinds()
+    assert k.count("live_refit") == len(spy.calls) and "live_refit_error" not in k
+    assert s.m.state["live_refit"]["placement"] == "final split"
+    assert spy.closed
+
+
+@pytest.mark.parametrize("how", ["call", "future"])
+def test_a_failing_live_refit_never_stops_the_session(tmp_path, how):
+    ref = []
+    spy = LiveFitSpy(ref, error=RuntimeError("no process") if how == "call" else None, bad_future=how == "future")
+    s = Session(tmp_path, keys=FULL_KEYS, live_fit=spy)
+    ref.append(s)
+    s.run()
+    assert s.m.phase == "DONE" and s.fit_calls == 1
+    errs = [e for e in s.events() if e["kind"] == "live_refit_error"]
+    assert errs and all(("no process" if how == "call" else "died") in e["error"] for e in errs)

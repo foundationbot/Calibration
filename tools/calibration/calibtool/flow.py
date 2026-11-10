@@ -13,11 +13,14 @@ FullFlow.run() walks the session in its own thread, one stage after the other, e
                skips) -> the spoken 5 s countdown with abort live -> GRID (grids.GridRun over neck.run_grid: HOLD,
                abort and the heartbeat honoured between poses; the neck goes home after the grid). Defaults, then the
                planner's extras until the stop rule, then the redo list once. Every hold is saved in corners/ as it is
-               captured; the placement in progress is saved pose by pose.
+               captured; the placement in progress is saved pose by pose. robot.live_fit (refit.LiveFit), when
+               given: a background refit after each placement and, once the collection ends, one on the final split
+               (it runs while the IMU sweep does); its failures are events, never the session's.
   sweep        IMU_PLACE ("board flat on the floor"; the board seen still -> "Good. Step back."; C skips the sweep) ->
                countdown -> IMU_SWEEP (imusweep.capture_sweep over a NeckSweepRig whose every move is gated like a grid
                pose) -> the IMU fit (robot.imu_fit: imusweep.to_sweep + imu.verdict).
-  decide       FIT (robot.fit_decide: split, step 45, step 66, decide.verdict) -> DECIDE. Anything but DEPLOY keeps the
+  decide       FIT (robot.fit_decide: split, step 45 -- or the live refit on the final split standing for it, see
+               flowrobot.pipeline_fit_decide -- step 66, decide.verdict) -> DECIDE. Anything but DEPLOY keeps the
                live calibration (no deploy stage runs).
   deploy_size  DEPLOY_SIZE: deploy.size_options of the previous default; keys 1 / 2, ? = this robot's facts;
                deploy.config_for_size (a size OKVIS would refuse keeps live).
@@ -127,6 +130,7 @@ class Robot:
     imu_fit: object = None          # (results, R_live) -> {"deploy", "reasons", "correction"}
     okvis_probe: object = None      # (sha12) -> postcheck.okvis_check's keyword arguments
     collect_size: tuple = (1280, 800, 15)
+    live_fit: object = None         # refit.LiveFit: placement_done / collection_done / close (fit_decide reads it)
 
 
 def default_poses(t) -> list:
@@ -351,6 +355,40 @@ class FullFlow:
             self._event("flow_stopped_loud")
         finally:
             self._save()
+            if self.robot.live_fit is not None:
+                try:
+                    self.robot.live_fit.close()
+                except Exception:  # noqa: BLE001  (the background refit's end is not the session's)
+                    pass
+
+    # ------------------------------------------------------------ the live refit (never stops the session)
+
+    def _live_fit(self, what, *args):
+        lf = self.robot.live_fit
+        if lf is None:
+            return None
+        try:
+            fut = getattr(lf, what)(*args)
+        except Exception as e:  # noqa: BLE001
+            self._event("live_refit_error", step=what, error=f"{type(e).__name__}: {e}")
+            return None
+        if fut is None:
+            return None
+        self._event("live_refit_submitted", step=what)
+
+        def done(f):
+            try:
+                r = f.result()
+            except Exception as e:  # noqa: BLE001
+                self._event("live_refit_error", step=what, error=f"{type(e).__name__}: {e}")
+                return
+            d = {"index": r.index, "placement": r.placement, "pairs": r.pairs, "rms_px": r.rms_px,
+                 "baseline_mm": r.baseline_mm, "converged": r.converged, "rejected": r.rejected,
+                 "seconds": r.seconds, "verdict": getattr(r, "verdict", "")}
+            self._event("live_refit", **d)
+            self._upd(live_refit=d)
+        fut.add_done_callback(done)
+        return fut
 
     def _start(self):
         if self.fl.get("stage") is None:
@@ -650,6 +688,7 @@ class FullFlow:
             self._event("placement_skipped", placement=target.name, result=r)
         else:
             res = self._grid(target, poses, self.pcol, "GRID", "collect")
+            self._live_fit("placement_done", self.collection, self._load_holds(), target.name)
             if res is not None:
                 for s in (res.sentences or [])[:3]:
                     self._say("gap", s)
@@ -689,6 +728,7 @@ class FullFlow:
                 self._placement(_target(it["target"]), "redo", it["poses"])
         self._event("collect_done", stop_met=self._met(), unreachable=fl.get("unreachable", []),
                     redo=fl.get("redo", []), holds=int(fl.get("next_hold") or 0))
+        self._live_fit("collection_done", self.collection, self._load_holds(), self.dirs.fit)
 
     def _st_sweep(self):
         if self.fl.get("imu") is not None:
@@ -749,7 +789,8 @@ class FullFlow:
                 p.write_text(text)
                 fl["config_file"] = str(p)
             fl["decision"] = {"decision": out.get("decision"), "reasons": list(out.get("reasons") or []),
-                              "name": out.get("name"), "imu_applied": bool(text and imu_.get("deploy"))}
+                              "name": out.get("name"), "imu_applied": bool(text and imu_.get("deploy")),
+                              "fit_source": out.get("fit_source")}
             self._save()
         self._enter("DECIDE")
         dec = fl["decision"]

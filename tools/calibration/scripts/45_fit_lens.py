@@ -53,6 +53,52 @@ def quality_gate(data, r, gates):
             z, sorted(h for h, v in z.items() if v > gates["lens_hold_max_z_m"]))
 
 
+def header(rig, model, gates, corners):
+    """the fields of step 45's JSON before the fit: model, rig, inputs (the corner file and its sha256), git_sha,
+    gates"""
+    return {"model": model, "rig": {"name": rig.name, "path": str(rig.path), "nominal_focal_px": rig.nominal_focal_px,
+                                    "nominal_baseline_m": rig.nominal_baseline_m},
+            "inputs": {"corners": str(corners), "sha256": sf.file_sha256(corners)}, "git_sha": sf.git_sha(),
+            "gates": gates}
+
+
+def gate_fields(rms, misfit, z, far):
+    """the quality gate's fields of step 45's JSON (quality_gate's output)"""
+    return {"hold_rms_px": [[h, v] for h, v in sorted(rms.items())], "hold_z_m": [[h, v] for h, v in sorted(z.items())],
+            "dropped_holds": [[h, rms[h]] for h in misfit], "dropped_far_holds": [[h, z[h]] for h in far]}
+
+
+def fit_fields(r, used, rig):
+    """the fit's fields of step 45's JSON (r: fit_converged's dict on the pairs `used`) -> (fields, warnings): an
+    unsettled trim is a warning (the verdict says it), not a failure"""
+    W, H = rig.resolution
+    f = {"intr": [np.asarray(v).tolist() for v in r["intr"]], "C": np.asarray(r["C"]).tolist(),
+         "baseline_mm": float(1e3 * np.linalg.norm(r["C"][:3, 3])), "success": bool(r["success"]),
+         "nfev": r["nfev"], "attempts": r["attempts"], "fit_pairs": int(used.n),
+         "fit_holds": int(len(np.unique(used.hold))), "kept_holds": sorted(set(used.hold.tolist())),
+         "rms_px": sf.fit_cost(r)[1], "cut_fraction": float(1 - r["kept"].mean()),
+         "rms_by_ring": sf.ring_rms(used, r["res"], ((W - 1) / 2, (H - 1) / 2)),
+         "trim_rounds": int(r["trim_rounds"]), "trim_settled": bool(r["settled"]), "trim_cap": int(r["trim_cap"])}
+    warn = [] if r["settled"] else [f"trim not settled after {r['trim_rounds']} rounds (the kept corner set still "
+                                    f"changed; cap {r['trim_cap']})"]
+    return f, warn
+
+
+def sides_text(rig, C):
+    """None when camera 1 sits on the side the rig file says, else the refusal (step 60's camera-identity rule)"""
+    side = rig.expected_dx_sign()
+    if np.sign(C[0, 3]) == side:
+        return None
+    return (f"camera sides: the fit puts camera 1 at x = {1e3 * C[0, 3]:+.1f} mm in camera 0, but "
+            f"{rig.path.name} says kalibr cam0 is the {rig.kalibr[0]['side'].upper()} eye (camera 1 at "
+            f"{'+' if side > 0 else '-'}x). Fix cameras.kalibr[].side.")
+
+
+def converged_text(r, used):
+    return (f"converged: rms {sf.fit_cost(r)[1]:.3f} px over {used.n} pairs, baseline "
+            f"{1e3 * np.linalg.norm(r['C'][:3, 3]):.2f} mm")
+
+
 def unconverged_text(r):
     """what the fit tried, from the attempts it made and the caps it ran with"""
     n = len(r["attempts"])
@@ -101,31 +147,19 @@ def main(argv=None):
     t0 = time.time()
     data = sf.Data(str(a.corners), rig.board)
     print(f"{a.corners}: {data.n} pairs in {len(np.unique(data.hold))} holds with >= 12 corners in both cameras")
-    out = {"model": a.model, "rig": {"name": rig.name, "path": str(rig.path), "nominal_focal_px": rig.nominal_focal_px,
-                                     "nominal_baseline_m": rig.nominal_baseline_m},
-           "inputs": {"corners": str(a.corners), "sha256": sf.file_sha256(a.corners)}, "git_sha": sf.git_sha(),
-           "gates": gates}
+    out = header(rig, a.model, gates, a.corners)
     if a.start:
         out["start"] = {"path": str(a.start), "sha256": sf.file_sha256(a.start)}
 
     def finish(verdict, code, r=None, used=None):
         out["verdict"] = verdict
         if r is not None:
-            W, H = rig.resolution
-            out.update({"intr": [v.tolist() for v in r["intr"]], "C": np.asarray(r["C"]).tolist(),
-                        "baseline_mm": float(1e3 * np.linalg.norm(r["C"][:3, 3])), "success": bool(r["success"]),
-                        "nfev": r["nfev"], "attempts": r["attempts"], "fit_pairs": int(used.n),
-                        "fit_holds": int(len(np.unique(used.hold))), "kept_holds": sorted(set(used.hold.tolist())),
-                        "rms_px": sf.fit_cost(r)[1], "cut_fraction": float(1 - r["kept"].mean()),
-                        "rms_by_ring": sf.ring_rms(used, r["res"], ((W - 1) / 2, (H - 1) / 2)),
-                        "trim_rounds": int(r["trim_rounds"]), "trim_settled": bool(r["settled"]),
-                        "trim_cap": int(r["trim_cap"])})
-            if not r["settled"] and verdict.startswith("converged"):
-                w = (f"trim not settled after {r['trim_rounds']} rounds (the kept corner set still changed; cap "
-                     f"{r['trim_cap']})")
-                out.setdefault("warnings", []).append(w)
-                verdict = out["verdict"] = f"{verdict}; WARNING: {w}"
-                print(f"WARNING: {w}")
+            f, warn = fit_fields(r, used, rig)
+            out.update(f)
+            if warn and verdict.startswith("converged"):
+                out.setdefault("warnings", []).extend(warn)
+                verdict = out["verdict"] = f"{verdict}; WARNING: {warn[0]}"
+                print(f"WARNING: {warn[0]}")
         out["seconds"] = round(time.time() - t0)
         sf.write_json(a.out, out)
         print(f"{verdict} -> {a.out}")
@@ -136,10 +170,7 @@ def main(argv=None):
     if not r["success"]:
         return finish(f"unconverged: {unconverged_text(r)}", 2, r, used)
     rms, misfit, z, far = quality_gate(used, r, gates)
-    out["hold_rms_px"] = [[h, v] for h, v in sorted(rms.items())]
-    out["hold_z_m"] = [[h, v] for h, v in sorted(z.items())]
-    out["dropped_holds"] = [[h, rms[h]] for h in misfit]
-    out["dropped_far_holds"] = [[h, z[h]] for h in far]
+    out.update(gate_fields(rms, misfit, z, far))
     bad = sorted(set(misfit) | set(far))
     print(f"quality gate: {len(misfit)} of {len(rms)} holds above {gates['lens_hold_rms_max_px']} px"
           + (": " + ", ".join(f"{h} ({rms[h]:.2f} px)" for h in misfit) if misfit else "")
@@ -154,13 +185,10 @@ def main(argv=None):
         out["pnp_failed_pairs"] += r["pnp_failed_pairs"]
         if not r["success"]:
             return finish(f"unconverged after dropping the quality gate's holds: {unconverged_text(r)}", 2, r, used)
-    side = rig.expected_dx_sign()
-    if np.sign(r["C"][0, 3]) != side:
-        return finish(f"camera sides: the fit puts camera 1 at x = {1e3 * r['C'][0, 3]:+.1f} mm in camera 0, but "
-                      f"{rig.path.name} says kalibr cam0 is the {rig.kalibr[0]['side'].upper()} eye (camera 1 at "
-                      f"{'+' if side > 0 else '-'}x). Fix cameras.kalibr[].side.", 3, r, used)
-    return finish(f"converged: rms {sf.fit_cost(r)[1]:.3f} px over {used.n} pairs, baseline "
-                  f"{1e3 * np.linalg.norm(r['C'][:3, 3]):.2f} mm", 0, r, used)
+    sides = sides_text(rig, r["C"])
+    if sides:
+        return finish(sides, 3, r, used)
+    return finish(converged_text(r, used), 0, r, used)
 
 
 if __name__ == "__main__":

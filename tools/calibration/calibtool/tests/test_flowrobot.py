@@ -101,3 +101,48 @@ def test_post_check_pairs_become_one_hold_with_the_board_in_both_cameras():
     holds, sync = fr.pairs_to_holds([pair(t, 200_000) for t in range(5)], detect_pair)
     assert len(holds) == 1 and len(holds[0].data["img_t0"]) == 4 and sync == pytest.approx(0.2)
     assert fr.pairs_to_holds([pair(3, 1)], detect_pair)[0] == []
+
+
+# ---------------------------------------------------------------- fit_decide: the live refit stands for step 45
+
+
+def _fit_decide_fakes(tmp_path, monkeypatch, live_fit):
+    """pipeline_fit_decide with the split, the session and replay.evaluate faked; -> (fit_decide, evaluate's kwargs)"""
+    from calibtool import replay
+    seen = {}
+    split = SimpleNamespace(fit_npz=tmp_path / "fit.npz", test_npz=tmp_path / "test.npz")
+    col = SimpleNamespace(labeler=SimpleNamespace(write_split=lambda sess, out: split))
+    monkeypatch.setattr(fr, "holds_session", lambda holds: "SESSION")
+
+    def evaluate(sess, rig_path, split_, live, out_dir, gates, jobs=1, fit=None, **kw):
+        seen.update(sess=sess, split=split_, fit=fit, jobs=jobs)
+        return {"verdicts": {k: {"decision": "KEEP_LIVE", "reasons": ["fake"]} for k in replay.VERDICT_KEYS}}
+    monkeypatch.setattr(replay, "evaluate", evaluate)
+    fd = fr.pipeline_fit_decide("rig.yaml", lambda: "live.yaml", "new.yaml", live_fit=live_fit)
+    return (lambda: fd(col, [], tmp_path / "out")), seen, split
+
+
+class LiveFitStub:
+    def __init__(self, fit, why=None):
+        self.fit, self.why, self.asked = fit, why, []
+
+    def final(self, fit_npz, out_dir):
+        self.asked.append((fit_npz, out_dir))
+        return self.fit, self.why
+
+
+def test_fit_decide_takes_the_live_refit_as_step_45_when_it_covers_the_split(tmp_path, monkeypatch):
+    fit = SimpleNamespace(entry={"source": {"live_refit": 7}}, converged=True)
+    lf = LiveFitStub(fit)
+    run, seen, split = _fit_decide_fakes(tmp_path, monkeypatch, lf)
+    out = run()
+    assert seen["fit"] is fit and lf.asked == [(split.fit_npz, tmp_path / "out" / "fit")]
+    assert out["fit_source"] == "live refit 7 (step 45 not run)" and out["decision"] == "KEEP_LIVE"
+
+
+def test_fit_decide_runs_step_45_when_the_live_refit_does_not_stand_for_it(tmp_path, monkeypatch):
+    run, seen, _ = _fit_decide_fakes(tmp_path, monkeypatch, LiveFitStub(None, "the live refit does not cover it"))
+    out = run()
+    assert seen["fit"] is None and out["fit_source"] == "step 45 (the live refit does not cover it)"
+    run, seen, _ = _fit_decide_fakes(tmp_path, monkeypatch, None)
+    assert run()["fit_source"] == "step 45 (no live refit)" and seen["fit"] is None

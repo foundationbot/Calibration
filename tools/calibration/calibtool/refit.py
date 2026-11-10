@@ -13,11 +13,17 @@ One refit (LiveRefit.update), on the FIT corners so far (step 15's corner dict, 
           gates.lens_bad_hold_max_frac of the holds bad: rejected=True, the numbers kept for display)
 The gate judges every hold again at each refit, on that refit's fit, as step 45 does on its data (a hold dropped
 while the camera was still rough comes back once it fits).
-The deciding fit is still step 45 (from nominal, on the final split): the refit shows progress and gives the
-operator a fit to score while collecting; on the stored sessions the last refit reaches step 45's numbers.
+Final fit = the last live refit (10 Nov 2026): once the collection ends, LiveFit refits once more on the final
+split's FIT corners (the held-back holds released), while the IMU sweep runs; at FIT that refit IS step 45's fit
+(final_fit: written as step 45's JSON, "source" naming the refit) when it covers exactly the final split's FIT corners
+(corner_digest: the same pairs, corners and hold grouping) and passed step 45's checks (converged, not rejected by
+the gate, camera sides as the rig file says); otherwise step 45 runs as before. On the stored sessions the refit on the
+final split equals step 45's fit from nominal within 2e-12 px.
 
 BackgroundRefit: the same in one spawned process of its own (design 10.1: the fit in its own process, never in the
 capture's), submit() after each placement -> a Future of the Refit; the state stays in that process."""
+import hashlib
+import json
 import os
 import time
 from concurrent.futures import ProcessPoolExecutor
@@ -50,11 +56,40 @@ class Refit:
     intr: list = field(repr=False)
     C: np.ndarray = field(repr=False)
     pid: int = 0                # the process that fitted it
+    settled: bool = True        # the last fit's trim settled (stereofit.trim_loop)
+    digest: str = ""            # corner_digest of the corners it was given
+    step45: dict = field(default_factory=dict, repr=False)  # step 45's JSON fields of this fit (verdict included)
+
+    @property
+    def verdict(self) -> str:
+        return str(self.step45.get("verdict", ""))
 
     def as_dict(self):
         return {k: (v.tolist() if isinstance(v, np.ndarray) else v) for k, v in self.__dict__.items()
-                if k not in ("intr", "C")} | {"intr": [np.asarray(v).tolist() for v in self.intr],
-                                               "C": np.asarray(self.C).tolist()}
+                if k not in ("intr", "C", "step45")} | {"intr": [np.asarray(v).tolist() for v in self.intr],
+                                                         "C": np.asarray(self.C).tolist(), "verdict": self.verdict}
+
+
+def corner_digest(d) -> str:
+    """sha256 of a corner dict's content, whatever its layout: per pair (by left stamp) its right stamp and its
+    corners (camera, tag, corner, u, v) in a fixed order, and the pairs' grouping into holds (not the hold ids). Two
+    dicts with the same digest give step 45 the same fit problem"""
+    d = {k: np.asarray(v) for k, v in dict(d).items()}
+    t0, t1 = d["img_t0"].astype(np.int64), d["img_t1"].astype(np.int64)
+    order = np.argsort(t0, kind="stable")
+    rank = np.empty(len(t0), np.int64)
+    rank[order] = np.arange(len(t0))
+    det = np.c_[rank[d["det_img"].astype(np.int64)], d["det_cam"], d["det_tag"], d["det_k"]].astype(np.int64)
+    co = np.lexsort(det.T[::-1])
+    groups = {}
+    for t, h in zip(t0.tolist(), d["img_hold"].tolist()):
+        groups.setdefault(int(h), []).append(int(t))
+    h = hashlib.sha256()
+    h.update(t0[order].tobytes() + t1[order].tobytes())
+    h.update(det[co].tobytes())
+    h.update(np.c_[d["det_u"], d["det_v"]].astype(float)[co].tobytes())
+    h.update(json.dumps(sorted(sorted(g) for g in groups.values())).encode())
+    return h.hexdigest()
 
 
 class LiveRefit:
@@ -92,7 +127,9 @@ class LiveRefit:
                 new = int((~known).sum())
                 r = sf.fit_converged(data, self.model, self.intr, self.C, poses, log=self.log)
             nfev = r["nfev"]
-            rms, misfit, z, far = self._v45.quality_gate(data, r, self.gates)
+            v45 = self._v45
+            rms, misfit, z, far = v45.quality_gate(data, r, self.gates)
+            gate = v45.gate_fields(rms, misfit, z, far)
             bad = sorted(set(misfit) | set(far))
             rejected = len(bad) > self.gates["lens_bad_hold_max_frac"] * len(rms)
             if bad and not rejected:
@@ -100,12 +137,24 @@ class LiveRefit:
                 data = data.select(m)
                 r = sf.fit_converged(data, self.model, r["intr"], r["C"], r["poses"][m], log=self.log)
                 nfev += r["nfev"]
+            fields, warn = v45.fit_fields(r, data, self.rig)
+            if not r["success"]:
+                verdict = f"unconverged: {v45.unconverged_text(r)}"
+            elif rejected:
+                verdict = f"rejected: {len(bad)} of {len(rms)} holds over step 45's gate"
+            else:
+                verdict = v45.sides_text(self.rig, r["C"]) or v45.converged_text(r, data)
+            if warn and verdict.startswith("converged"):
+                verdict = f"{verdict}; WARNING: {warn[0]}"
+            step45 = {"model": self.model, "gates": dict(self.gates), "pnp_failed_pairs": int(failed), **gate,
+                      **fields, "verdict": verdict} | ({"warnings": warn} if warn else {})
         self.intr, self.C = [np.array(v) for v in r["intr"]], np.array(r["C"])
         self.poses = {int(a): p for a, p in zip(stamps[data.src_pairs], r["poses"])}
         out = Refit(len(self.history) + 1, str(placement), int(data.n), int(len(np.unique(data.hold))), new, warm,
                     bool(r["success"]), bool(rejected), float(sf.fit_cost(r)[1]),
                     float(1e3 * np.linalg.norm(r["C"][:3, 3])), [int(h) for h in bad], int(failed), int(nfev),
-                    time.time() - t, self.model, self.intr, self.C, os.getpid())
+                    time.time() - t, self.model, self.intr, self.C, os.getpid(), bool(r["settled"]),
+                    corner_digest(fit_corners), step45)
         self.history.append(out)
         return out
 
@@ -129,6 +178,117 @@ class LiveRefit:
             keep[idx[~ok]] = False
             data, poses = data.select(keep), poses[keep]
         return data, poses, failed
+
+
+# ---------------------------------------------------------------- the final fit
+
+
+def final_fit_refusal(r: Refit, fit_npz) -> str | None:
+    """None when the refit r may stand for step 45 on fit_npz, else why not"""
+    if r is None:
+        return "no live refit"
+    if not r.verdict.startswith("converged"):
+        return f"the live refit's verdict: {r.verdict or 'none'}"
+    if not r.converged or r.rejected:
+        return "the live refit did not pass step 45's gate (unconverged or rejected)"
+    with np.load(fit_npz) as z:
+        want = corner_digest({k: z[k] for k in z.files})
+    if r.digest != want:
+        return f"the live refit ({r.placement}, {r.pairs} pairs) does not cover exactly the final FIT split"
+    return None
+
+
+def final_fit(r: Refit, fit_npz, out_dir, rig):
+    """the refit r as step 45's result on fit_npz: out_dir/fit-<model>.json in step 45's format (45_fit_lens.header +
+    the refit's fields, "source" naming the refit), out_dir/45.log saying so. -> (pipeline.FitResult, None), or
+    (None, why) when r may not stand for step 45 (final_fit_refusal)"""
+    from pathlib import Path
+    why = final_fit_refusal(r, fit_npz)
+    if why:
+        return None, why
+    import stereofit as sf
+    rig = pipeline.load_rig(rig)
+    v45 = paths.import_script("45_fit_lens")
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = v45.header(rig, r.model, r.step45.get("gates"), fit_npz)
+    out.update(r.step45)
+    out["source"] = {"live_refit": r.index, "placement": r.placement, "warm": r.warm, "seconds": r.seconds,
+                     "pid": r.pid, "corner_digest": r.digest}
+    out["seconds"] = 0
+    js, log = out_dir / f"fit-{r.model.lower()}.json", out_dir / "45.log"
+    sf.write_json(js, out)
+    log.write_text(f"step 45 not run: live refit {r.index} ({r.placement}) covers exactly {fit_npz} "
+                   f"(corner digest {r.digest[:12]}) and passed step 45's checks\n{r.verdict} -> {js}\n")
+    return pipeline.FitResult(js, log, r.verdict, True, float(out["rms_px"]), float(out["baseline_mm"]),
+                              int(out["fit_pairs"]), int(out["fit_holds"]), 0, 0.0, out), None
+
+
+class LiveFit:
+    """the live refit as the full session drives it: placement_done() after each placement (a refit on the FIT pairs
+    so far, capture-time labels), collection_done() once the collection ends (the split written to
+    <out_dir>/live-split and a refit on its FIT file, while the IMU sweep runs), final(fit_npz, out_dir) at FIT (the
+    last refit as step 45's result, or None and why). make() -> the background (BackgroundRefit(rig)); to_session:
+    the flow's holds -> a Session (flowrobot.holds_session). Nothing here touches the robot"""
+
+    def __init__(self, rig, solver=pipeline.DEFAULT_SOLVER, make=None, to_session=None, wait_s=600.0):
+        self.rig = rig
+        self.make = make or (lambda: BackgroundRefit(rig, solver=solver))
+        self.to_session = to_session
+        self.wait_s = float(wait_s)
+        self.bg = None
+        self.last = None            # the newest Future
+        self.final_submitted = False
+
+    def _session(self, holds):
+        if self.to_session is not None:
+            return self.to_session(holds)
+        from calibtool import flowrobot
+        return flowrobot.holds_session(holds)
+
+    def _submit(self, corners, placement):
+        if self.bg is None:
+            self.bg = self.make()
+        self.last = self.bg.submit(corners, placement)
+        return self.last
+
+    def placement_done(self, collection, holds, placement):
+        """a refit on the FIT pairs so far (capture-time labels) -> its Future, or None without FIT pairs"""
+        from calibtool import assign
+        sess = self._session(holds)
+        lab = collection.labeler.pair_labels()
+        mask = np.array([lab.get(int(t)) == assign.FIT for t in sess.pairs["t0"]], bool)
+        if not mask.any():
+            return None
+        self.final_submitted = False
+        return self._submit(sess.to_npz_dict(mask), placement)
+
+    def collection_done(self, collection, holds, out_dir):
+        """the final split written (out_dir/live-split) and a refit on its FIT corners -> its Future"""
+        from pathlib import Path
+        sess = self._session(holds)
+        split = collection.labeler.write_split(sess, Path(out_dir) / "live-split")
+        with np.load(split.fit_npz) as z:
+            corners = {k: z[k] for k in z.files}
+        f = self._submit(corners, "final split")
+        self.final_submitted = True
+        return f
+
+    def final(self, fit_npz, out_dir):
+        """-> (pipeline.FitResult, None) from the last refit, or (None, why): no final-split refit, it failed or
+        took longer than wait_s, or final_fit refuses it"""
+        if self.last is None or not self.final_submitted:
+            return None, "no live refit on the final split"
+        try:
+            r = self.last.result(timeout=self.wait_s)
+        except Exception as e:  # noqa: BLE001  (any failure of the refit: step 45 runs instead)
+            return None, f"the live refit on the final split failed: {type(e).__name__}: {e}"
+        return final_fit(r, fit_npz, out_dir, self.rig)
+
+    def close(self):
+        if self.bg is not None:
+            self.bg.close()
+            self.bg = None
 
 
 # ---------------------------------------------------------------- in a process of its own

@@ -508,11 +508,12 @@ def new_jobs(jobs, live_running):
 
 
 def evaluate(session, rig_path, split: pipeline.Split, live_config, out_dir, gates: decide.Gates, jobs=2,
-             max_fit_z=3.0, solver=pipeline.DEFAULT_SOLVER) -> dict:
+             max_fit_z=3.0, solver=pipeline.DEFAULT_SOLVER, fit=None) -> dict:
     """step 45 on the split, step 66 (new and live), decide.score of both (from step 66's own scores: no second
     scoring), decision(). jobs: processes at a time; from 2, step 66 of the live config runs beside step 45
     (live_jobs) and step 66 of the new fit forks its self-check when processes are free (new_jobs); 1: one step
-    after the other. solver: pipeline.SOLVERS, for every step"""
+    after the other. solver: pipeline.SOLVERS, for every step. fit: step 45's result already in hand (a
+    pipeline.FitResult on split.fit_npz: refit.final_fit, the last live refit): step 45 is not run"""
     pipeline.check_solver(solver)
     out_dir = Path(out_dir)
     rig = pipeline.load_rig(rig_path)
@@ -529,7 +530,9 @@ def evaluate(session, rig_path, split: pipeline.Split, live_config, out_dir, gat
         if live and jobs > 1:
             f_live = ex.submit(livecfg.validate66, live, split.test_npz, d_live, rig_path, solver=solver,
                                jobs=live_jobs(jobs))
-        fit = pipeline.fit45(split.fit_npz, rig_path, out_dir / "fit", max_z=max_fit_z, solver=solver)
+        given = fit is not None
+        if not given:
+            fit = pipeline.fit45(split.fit_npz, rig_path, out_dir / "fit", max_z=max_fit_z, solver=solver)
         tm["fit45_s"] = time.time() - t
         v_new = v_live = None
         if fit.converged:
@@ -543,7 +546,8 @@ def evaluate(session, rig_path, split: pipeline.Split, live_config, out_dir, gat
             except NOT_SCORABLE as e:
                 live_err = f"step 66 on the live config: {type(e).__name__}: {e}"
     tm["step66_s"] = time.time() - t - tm["fit45_s"]
-    res = {"fit": fit.as_dict(), "validate_new": None, "validate_live": None,
+    res = {"fit": {**fit.as_dict(), "source": "live refit" if given else "step 45"}, "validate_new": None,
+           "validate_live": None,
            "live": {"config": str(live_config), "model": live.model if live else None,
                     "size": list(live.size) if live else None,
                     "scaled_from": list(live.scaled_from) if live and live.scaled_from else None,

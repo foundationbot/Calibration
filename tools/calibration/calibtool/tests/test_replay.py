@@ -612,3 +612,21 @@ def test_settle_trim_replay_decides_as_before(name, data_root, tmp_path, monkeyp
     assert js["verdicts"][ALL4]["decision"] == ref["all4"]
     worse = [s["name"] for s in js["paired"]["stats"] if s["judged"] and not s["diff"] < 0]
     assert not worse, f"new not better on {worse}"
+
+
+def test_evaluate_with_a_fit_in_hand_does_not_run_step_45(monkeypatch, tmp_path):
+    """the live refit standing for step 45 (refit.final_fit): evaluate takes it, step 45 never runs, the report says
+    where the fit came from"""
+    rig_path, split = _fake_steps(monkeypatch, tmp_path)
+
+    def no_fit45(*a, **k):
+        raise AssertionError("step 45 ran")
+    given = SimpleNamespace(converged=True, json_path=tmp_path / "fit.json", verdict="converged",
+                            as_dict=lambda: {"verdict": "converged"})
+    monkeypatch.setattr(pipeline, "fit45", no_fit45)
+    ev = replay().evaluate(None, rig_path, split, _live(tmp_path), tmp_path / "out", decide.Gates(), jobs=1, fit=given)
+    assert ev["fit"]["source"] == "live refit" and ev["verdicts"][DEFAULT]["decision"] == "DEPLOY"
+    monkeypatch.undo()
+    rig_path, split = _fake_steps(monkeypatch, tmp_path)
+    assert replay().evaluate(None, rig_path, split, _live(tmp_path), tmp_path / "out", decide.Gates(),
+                             jobs=1)["fit"]["source"] == "step 45"

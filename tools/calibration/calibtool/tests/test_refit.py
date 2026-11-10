@@ -7,8 +7,10 @@ FIT corners, reaches step 45's fit from nominal. BackgroundRefit runs the same i
 its state kept there from one placement to the next."""
 import importlib
 import importlib.util
+import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -173,3 +175,224 @@ def test_live_refit_on_a_stored_session_ends_at_step_45s_fit(name, data_root, tm
         ray = lensmodel.unproject("KB4T", f.entry["intr"][c], g)
         assert np.abs(lensmodel.project("KB4T", last["intr"][c], ray) - g).max() < 1e-3
     assert np.abs(np.array(last["C"])[:3, 3] - np.array(f.entry["C"])[:3, 3]).max() < 1e-6       # m
+
+
+# ---------------------------------------------------------------- the final fit = the last live refit (10 Nov 2026)
+
+
+def _reordered(d, seed=0):
+    """the same corners in another layout: pairs in another order (renumbered), corner rows shuffled, hold ids moved"""
+    d = {k: np.asarray(v) for k, v in d.items()}
+    rng = np.random.default_rng(seed)
+    p = rng.permutation(len(d["img_t0"]))
+    new_of_old = np.argsort(p)
+    out = {k: d[k][p] for k in ("img_t0", "img_t1")}
+    out["img_hold"] = d["img_hold"][p] + 1000
+    c = rng.permutation(len(d["det_u"]))
+    out.update({k: d[k][c] for k in ("det_cam", "det_tag", "det_k", "det_u", "det_v")})
+    out["det_img"] = new_of_old[d["det_img"][c]]
+    return out
+
+
+def test_the_corner_digest_names_the_corners_not_their_layout():
+    d = {k: np.asarray(v) for k, v in S.fit_sweep().items()}
+    a = refit.corner_digest(d)
+    assert refit.corner_digest(_reordered(d)) == a
+    moved = dict(d, det_u=d["det_u"] + np.r_[0.01, np.zeros(len(d["det_u"]) - 1)])
+    assert refit.corner_digest(moved) != a
+    assert refit.corner_digest(_placements(d)[1]) != a
+    regroup = dict(d, img_hold=np.where(d["img_hold"] == d["img_hold"][0], d["img_hold"][-1], d["img_hold"]))
+    assert refit.corner_digest(regroup) != a
+
+
+def _npz(tmp_path, d, name="fit.npz"):
+    p = tmp_path / name
+    np.savez_compressed(p, **{k: np.asarray(v) for k, v in d.items()})
+    return p
+
+
+def test_the_refit_on_the_final_split_is_written_as_step_45s_result(tmp_path, monkeypatch):
+    """final_fit: step 45's JSON from the refit (every key step 45 writes, plus "source"), the same fit as step 45
+    from nominal on the same corner file (same solver), and a FitResult replay.evaluate takes"""
+    monkeypatch.setenv("CALIB_SOLVER", "fast")
+    m45 = importlib.import_module("45_fit_lens")
+    npz = _npz(tmp_path, S.fit_sweep())
+    assert m45.main([str(npz), str(tmp_path / "ref.json"), "--rig", str(S.RIG12), "--max-z", str(refit.MAX_Z)]) == 0
+    ref = json.loads((tmp_path / "ref.json").read_text())
+    r = refit.LiveRefit(S.RIG12).update(dict(np.load(npz)), "final split")
+    fit, why = refit.final_fit(r, npz, tmp_path / "fit", S.RIG12)
+    assert why is None and fit.converged and fit.returncode == 0 and fit.json_path.is_file()
+    e = json.loads(fit.json_path.read_text())          # strict JSON
+    assert set(e) == set(ref) | {"source"}
+    assert e["source"]["placement"] == "final split" and e["inputs"]["sha256"] == ref["inputs"]["sha256"]
+    assert e["verdict"].startswith("converged") and e["fit_pairs"] == ref["fit_pairs"] == fit.fit_pairs
+    assert e["kept_holds"] == ref["kept_holds"] and e["dropped_holds"] == ref["dropped_holds"]
+    assert e["gates"] == ref["gates"] and e["trim_settled"]
+    for c in (0, 1):
+        assert _grid_diff("KB4T", e["intr"], ref["intr"], c) < 1e-6
+    assert abs(e["baseline_mm"] - ref["baseline_mm"]) < 1e-6
+    assert "step 45 not run" in fit.log_path.read_text()
+
+
+def test_a_refit_that_does_not_cover_the_split_or_failed_a_check_is_not_the_final_fit(tmp_path):
+    from dataclasses import replace
+    parts = _placements(S.fit_sweep())
+    r = refit.LiveRefit(S.RIG12).update(parts[1], "P2")
+    assert refit.final_fit_refusal(r, _npz(tmp_path, parts[1], "same.npz")) is None
+    assert refit.final_fit_refusal(r, _npz(tmp_path, _reordered(parts[1]), "layout.npz")) is None
+    fit, why = refit.final_fit(r, _npz(tmp_path, parts[2], "other.npz"), tmp_path / "fit", S.RIG12)
+    assert fit is None and "does not cover exactly" in why and not (tmp_path / "fit").exists()
+    npz = tmp_path / "same.npz"
+    for bad, word in ((replace(r, rejected=True), "gate"), (replace(r, converged=False), "gate"),
+                      (replace(r, step45={**r.step45, "verdict": "camera sides: camera 1 at x = -44 mm"}), "sides"),
+                      (replace(r, step45={**r.step45, "verdict": "unconverged: 3 attempts"}), "unconverged"),
+                      (None, "no live refit")):
+        assert word in refit.final_fit_refusal(bad, npz)
+
+
+class _Done:
+    """a finished Future"""
+
+    def __init__(self, value=None, error=None):
+        self.value, self.error = value, error
+
+    def result(self, timeout=None):
+        if self.error is not None:
+            raise self.error
+        return self.value
+
+    def add_done_callback(self, fn):
+        fn(self)
+
+
+class FakeBg:
+    """BackgroundRefit's interface over a recording LiveRefit.update stand-in (no fit)"""
+
+    def __init__(self, error=None):
+        self.seen, self.closed, self.error = [], False, error
+
+    def submit(self, corners, placement=""):
+        self.seen.append((placement, {k: np.asarray(v) for k, v in corners.items()}))
+        r = refit.Refit(len(self.seen), placement, len(corners["img_t0"]), 0, 0, len(self.seen) > 1, True, False,
+                        0.4, 44.0, [], 0, 10, 0.1, "KB4T", [np.zeros(10)] * 2, np.eye(4),
+                        digest=refit.corner_digest(corners),
+                        step45={"verdict": "converged: fake", "rms_px": 0.4, "baseline_mm": 44.0, "fit_pairs":
+                                len(corners["img_t0"]), "fit_holds": 1, "gates": {}})
+        return _Done(error=self.error) if self.error else _Done(r)
+
+    def close(self):
+        self.closed = True
+
+
+class Labeler:
+    """the capture labeler's interface over a session: FIT = every other pair of the placements seen so far; the
+    split releases the first FIT pair to TEST (as finish() releases held-back holds)"""
+
+    def __init__(self, session):
+        self.s, self.seen = session, []
+
+    def pair_labels(self):
+        from calibtool import assign
+        t0, take = self.s.pairs["t0"], self.s.pairs["take"]
+        idx = np.flatnonzero(np.isin(take, self.seen))
+        return {int(t0[i]): (assign.FIT if k % 2 == 0 else assign.TEST) for k, i in enumerate(idx)}
+
+    def write_split(self, session, out_dir):
+        from calibtool import assign
+        out_dir.mkdir(parents=True, exist_ok=True)
+        lab = self.pair_labels()
+        fit = [t for t, v in lab.items() if v == assign.FIT][1:]
+        mask = np.isin(session.pairs["t0"], fit)
+        f = out_dir / "fit.npz"
+        np.savez_compressed(f, **session.to_npz_dict(mask))
+        return SimpleNamespace(fit_npz=f)
+
+
+def _collection(tmp_path):
+    from calibtool import pipeline, replay
+    TR = _test_module("test_replay")
+    session = replay.load_session(TR.synth_stored(pipeline.load_rig(TR.RIG_PATH), tmp_path))
+    return TR, session, SimpleNamespace(labeler=Labeler(session))
+
+
+def test_live_fit_refits_after_each_placement_and_once_on_the_final_split(tmp_path):
+    TR, session, col = _collection(tmp_path)
+    bg = FakeBg()
+    lf = refit.LiveFit(TR.RIG_PATH, make=lambda: bg, to_session=lambda holds: session)
+    for name in session.take_order:
+        col.labeler.seen.append(name)
+        assert lf.placement_done(col, None, name) is not None
+        n_fit = sum(v == "FIT" for v in col.labeler.pair_labels().values())
+        assert len(bg.seen[-1][1]["img_t0"]) == n_fit
+    assert lf.final(tmp_path / "x.npz", tmp_path / "fit") == (None, "no live refit on the final split")
+    lf.collection_done(col, None, tmp_path / "work")
+    assert [p for p, _ in bg.seen] == list(session.take_order) + ["final split"]
+    live_split = np.load(tmp_path / "work" / "live-split" / "fit.npz")
+    assert np.array_equal(np.sort(bg.seen[-1][1]["img_t0"]), np.sort(live_split["img_t0"]))
+    assert len(live_split["img_t0"]) == len(bg.seen[-2][1]["img_t0"]) - 1          # one pair released
+    # fit_decide writes the split again (its own folder): the same corners, so the refit stands for step 45
+    split = col.labeler.write_split(session, tmp_path / "decide" / "split")
+    fit, why = lf.final(split.fit_npz, tmp_path / "decide" / "fit")
+    assert why is None and fit.entry["source"]["placement"] == "final split" and fit.converged
+    # the last placement's refit (before the release) does not cover the split: step 45 would run
+    other = _npz(tmp_path, bg.seen[-2][1], "other.npz")
+    fit, why = lf.final(other, tmp_path / "other-fit")
+    assert fit is None and "does not cover exactly" in why
+    # a placement after the final refit (a redo) makes the final refit stale until the next collection_done
+    col.labeler.seen.append(session.take_order[0])
+    lf.placement_done(col, None, "redo")
+    assert lf.final(split.fit_npz, tmp_path / "f2") == (None, "no live refit on the final split")
+    lf.close()
+    assert bg.closed
+
+
+def test_a_failed_final_refit_falls_back_to_step_45(tmp_path):
+    TR, session, col = _collection(tmp_path)
+    col.labeler.seen.extend(session.take_order)
+    lf = refit.LiveFit(TR.RIG_PATH, make=lambda: FakeBg(error=RuntimeError("worker died")),
+                       to_session=lambda holds: session)
+    lf.collection_done(col, None, tmp_path / "work")
+    fit, why = lf.final(tmp_path / "work" / "live-split" / "fit.npz", tmp_path / "fit")
+    assert fit is None and "worker died" in why
+
+
+@pytest.mark.replay
+@pytest.mark.parametrize("name", ["p21_1105", "p10_1106"])
+def test_the_final_live_refit_stands_for_step_45_on_a_stored_session(name, data_root, tmp_path):
+    """the live flow's path on a stored session: a background refit after each placement (capture order, capture-time
+    labels), one on the final split once the collection ends; at FIT that refit covers exactly the split fit_decide
+    writes, and its step-45 JSON is step 45's fit from nominal on that file (projection < 1e-3 px; measured 2e-12).
+    Printed (LIVEFIT line): step 45's time, the final refit's own time and the wait for it at FIT"""
+    import time as _time
+    from calibtool import assign, pipeline, replay, sessions
+    st = sessions.get(name)
+    session = replay.load_session(st)
+    rig = pipeline.load_rig(st.rig_path)
+    col = replay.Collection.for_session(session, rig, "capture", max_fit_z=refit.MAX_Z)
+    lf = refit.LiveFit(st.rig_path, to_session=lambda holds: session)
+    cur = None
+    try:
+        for h in assign.capture_holds(session):
+            if cur is not None and h.placement != cur:
+                col.end_placement(cur)
+                lf.placement_done(col, None, cur)
+            col.add(h)
+            cur = h.placement
+        col.end_placement(cur)
+        lf.placement_done(col, None, cur)
+        lf.collection_done(col, None, tmp_path / "work")
+        split = col.labeler.write_split(session, tmp_path / "decide" / "split")
+        t = _time.time()
+        fit, why = lf.final(split.fit_npz, tmp_path / "decide" / "fit")
+        waited = _time.time() - t
+    finally:
+        lf.close()
+    assert why is None, why
+    ref = pipeline.fit45(split.fit_npz, st.rig_path, tmp_path / "ref", max_z=refit.MAX_Z)
+    print(f"LIVEFIT {name}: step 45 {ref.seconds:.1f} s; final refit {fit.entry['source']['seconds']:.1f} s "
+          f"(warm {fit.entry['source']['warm']}), waited {waited:.1f} s at FIT; pairs {fit.fit_pairs}")
+    assert ref.converged and fit.fit_pairs == ref.fit_pairs and fit.entry["kept_holds"] == ref.entry["kept_holds"]
+    g = np.stack(np.meshgrid(np.arange(0, 1280, 32.0), np.arange(0, 800, 32.0)), -1).reshape(-1, 2)
+    for c in (0, 1):
+        ray = S.lensmodel.unproject("KB4T", ref.entry["intr"][c], g)
+        assert np.abs(S.lensmodel.project("KB4T", fit.entry["intr"][c], ray) - g).max() < 1e-3
