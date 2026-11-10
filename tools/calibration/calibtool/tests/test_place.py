@@ -566,3 +566,19 @@ def test_without_auto_skip_the_operator_decides_reachability():
 def test_profile_reads_the_stands_auto_skip():
     from calibtool import profile
     assert profile.load("P10").stand_auto_skip is False
+
+
+@pytest.mark.parametrize("limit", [None, 0, 0.0])
+def test_a_trial_without_a_time_limit_never_skips_by_itself(tmp_path, limit):
+    """10 Nov (phantom10): 'Skipping this one.' came without warning after 3 minutes while the operator was still
+    trying. With no limit (the profile's null / 0) only the operator's C ends a placement"""
+    tr = place.Trial([place.target("0.5 m"), place.target("1.1 m")], tmp_path / "t.jsonl", timeout_s=limit, focal=F,
+                     size=(W, H))
+    tr.start(0.0)
+    says = []
+    for k in range(1, 2001):
+        says += tr.update(k * 0.5, None) if k % 2 else tr.tick(k * 0.5)
+    assert "skip" not in [s.kind for s in says] and tr.records == [] and not tr.finished
+    assert tr.state(1000.0)["timeout_s"] is None
+    assert tr.key(1000.0, "C")[0].text.startswith("Placement 2 of 2.")
+    assert [r["result"] for r in tr.records] == ["unreachable"]

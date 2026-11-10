@@ -42,7 +42,7 @@ the target's nominal band is accepted.
 
 Trial(targets, log_path) runs the timed trials (an existing log is read back: a restarted calibd continues with the
 next placement): an intro per placement, the guide until "Good" (placed) or "out of reach" (unreachable), key C =
-"can't put it there" (unreachable), and after timeout_s "Skipping this one." (timeout); trial.jsonl gets one line per
+"can't put it there" (unreachable), and after timeout_s "Skipping this one." (timeout; None = no limit, only C skips); trial.jsonl gets one line per
 placement (seconds from the intro to the board coming to rest, result, prompts spoken); summary() = success rate and
 seconds against the 60 s budget (design 10.4); state() names the CURRENT placement (9 Nov: a stale "placement 2 of 6"
 misled everyone)."""
@@ -90,6 +90,12 @@ AUTO_OFF_RANGE_M = 1.5
 SKIP_TEXT = "Skipping this one."
 KEEP_HEIGHT = "Keep the same height."
 TIMEOUT_S = 180.0
+
+
+def time_limit(v):
+    """a placement's time limit in seconds, or None = no limit (null or 0 in a robot profile: 10 Nov, phantom10's
+    operator wants only their own C to skip a placement)"""
+    return None if v is None or float(v) <= 0 else float(v)
 BUDGET_S = 60.0                 # design 10.4: target < 1 min per placement
 YOUR_LEFT = "to YOUR left (the robot's right)"
 YOUR_RIGHT = "to YOUR right (the robot's left)"
@@ -449,7 +455,7 @@ class Trial:
                  gravity=None, stand=None, **guide_kw):
         self.targets = list(targets)
         self.log_path = Path(log_path)
-        self.timeout_s, self.focal, self.size, self.budget_s = timeout_s, focal, size, budget_s
+        self.timeout_s, self.focal, self.size, self.budget_s = time_limit(timeout_s), focal, size, budget_s
         self.gravity, self.stand = gravity, stand or Stand()
         self.guide_kw = guide_kw
         self.ids = itertools.count(1)
@@ -564,7 +570,7 @@ class Trial:
     def tick(self, t) -> list:
         """the placement's clock without a new detection (calibd calls it every step: a slow or stuck detector must
         not stop the timeout)"""
-        if self.finished or self.guide is None or t - self.t_intro < self.timeout_s:
+        if self.finished or self.guide is None or self.timeout_s is None or t - self.t_intro < self.timeout_s:
             return []
         self.t_last = t
         # 9 Nov trial: placements ran out silently; say it before moving on

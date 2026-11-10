@@ -1029,7 +1029,7 @@ def _full_flow(prof, m, d, dirs, cap, pools, rig, size, res, probes, dry_run, se
         imu=nk.DmaImu(dma_ipc, gravity.HEAD_IMU),
         sweep_detect=lambda g: imusweep.board_normal(board.detect(g), board, live.model, live.intr[0]),
         R_live=R_live, check_scores=check_scores, post_scores=post_scores)
-    return flow.FullFlow(m, robot, dirs, emit=d.say, ids=d.ids)
+    return flow.FullFlow(m, robot, dirs, emit=d.say, ids=d.ids, place_timeout_s=prof.placement_timeout_s)
 
 
 def _connect(sock, timeout=2.0):

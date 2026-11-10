@@ -206,7 +206,7 @@ class FullFlow:
         self.clock, self.mono, self.sleep = clock, mono, sleep
         self.targets = list(targets)
         self.countdown_s, self.step_s, self.max_extras = int(countdown_s), float(step_s), int(max_extras)
-        self.place_timeout_s = float(place_timeout_s)
+        self.place_timeout_s = place.time_limit(place_timeout_s)     # None: no limit, only the operator's C skips
         self.rec = robot.recorder
         self.remote = dp.Remote(robot.run, dry_run=robot.dry_run, log=self.rec.hook("deploy"))
         self.spec = Spec.from_yaml(robot.producer_yaml)
@@ -571,7 +571,7 @@ class FullFlow:
                     self.emit(s)
             if g.done:
                 return g.result or "placed"
-            if self.mono() - t0 - paused > self.place_timeout_s:
+            if self.place_timeout_s is not None and self.mono() - t0 - paused > self.place_timeout_s:
                 self._say("skip", place.SKIP_TEXT)
                 return "timeout"
             self._idle()
@@ -596,7 +596,7 @@ class FullFlow:
                 elif self.mono() - since >= FLAT_STILL_S:
                     self._say("good", place.DONE_TEXT)
                     return "placed"
-            if self.mono() - t0 > self.place_timeout_s:
+            if self.place_timeout_s is not None and self.mono() - t0 > self.place_timeout_s:
                 self._say("skip", place.SKIP_TEXT)
                 return "timeout"
             self._idle()

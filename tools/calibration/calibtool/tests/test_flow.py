@@ -633,3 +633,29 @@ def test_a_failing_live_refit_never_stops_the_session(tmp_path, how):
     assert s.m.phase == "DONE" and s.fit_calls == 1
     errs = [e for e in s.events() if e["kind"] == "live_refit_error"]
     assert errs and all(("no process" if how == "call" else "died") in e["error"] for e in errs)
+
+
+@pytest.mark.parametrize("limit", [None, 0])
+def test_without_a_time_limit_only_the_operators_c_ends_a_placement(tmp_path, limit):
+    """10 Nov (phantom10): the full session's PLACE gave up after 3 minutes ("Skipping this one.") while the operator
+    was still trying; with the profile's limit off nothing skips by itself"""
+    s = Session(tmp_path)
+    s.robot_side.board_obs = lambda: (True, None)
+    flow = fl.FullFlow(s.m, s.robot_side, s.dirs, emit=s.says.append, ids=itertools.count(1), clock=s.clock,
+                       mono=s.clock, sleep=s.clock.sleep, targets=TARGETS, place_timeout_s=limit)
+    s.m.heartbeat()
+    t0 = s.clock.t
+    s.op.hooks.append(lambda: s.clock.t - t0 > 900 and s.m.phase == "PLACE" and s.m.key("C"))
+    assert flow._guide(place.target("0.75 m"), "PLACE", "default") == "unreachable"
+    assert s.clock.t - t0 > 900
+    assert place.SKIP_TEXT not in [x.text for x in s.says]
+
+
+def test_the_full_session_keeps_the_time_limit_when_one_is_set(tmp_path):
+    s = Session(tmp_path)
+    s.robot_side.board_obs = lambda: (True, None)
+    flow = fl.FullFlow(s.m, s.robot_side, s.dirs, emit=s.says.append, ids=itertools.count(1), clock=s.clock,
+                       mono=s.clock, sleep=s.clock.sleep, targets=TARGETS, place_timeout_s=60.0)
+    s.m.heartbeat()
+    assert flow._guide(place.target("0.75 m"), "PLACE", "default") == "timeout"
+    assert s.says[-1].text == place.SKIP_TEXT
