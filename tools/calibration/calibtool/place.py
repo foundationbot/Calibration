@@ -175,7 +175,10 @@ class PlacementGuide:
             move = _cm(max(0.1, (60.0 - span) * z / self.f + 0.05) if span < 60 else 0.1)
             first = {"left": "Move the board to your left.", "right": "Move the board to your right.",
                      "top": "Lower the board.", "bottom": "Raise the board."}[side]
-            return "correction", f"{first} About {move} centimetres."
+            # height on the chair-shaped stand moves only in coarse steps (operator, 9 Nov: "lower maybe 40 cm or raise
+            # by 30 cm"), so up/down says the minimum; sideways stays approximate
+            amount = "At least" if side in ("top", "bottom") else "About"
+            return "correction", f"{first} {amount} {move} centimetres."
         lo, hi = t.accept
         z = obs.z
         if t.refuse_beyond_m is not None and z > t.refuse_beyond_m:

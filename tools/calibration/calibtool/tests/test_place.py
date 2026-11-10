@@ -110,9 +110,9 @@ def test_cut_sides_name_the_operators_side():
     s = feed(guide(), [obs(u=100, cut=("left",))] * 4)[0].text
     assert s.startswith("Move the board to your left.")      # image left = robot's left: move toward the robot's right
     s = feed(guide(), [obs(v=760, cut=("bottom",))] * 4)[0].text
-    assert s.startswith("Raise the board.")
+    assert s.startswith("Raise the board. At least ")      # the stand's height moves only in coarse steps
     s = feed(guide(), [obs(v=40, cut=("top",))] * 4)[0].text
-    assert s.startswith("Lower the board.")
+    assert s.startswith("Lower the board. At least ")
 
 
 def test_bearing_target_corrects_sideways():
