@@ -166,7 +166,8 @@ class Guide:
             return None
         self.done = True
         self.result = self.results.get(self.target.name, "placed")
-        text = place.DONE_TEXT if self.result == "placed" else place.UNREACHABLE_TEXT
+        self.near_z = 0.88 if self.result == "placed_near" else None
+        text = place.DONE_TEXT if self.result.startswith("placed") else place.UNREACHABLE_TEXT
         return place.Say(next(self.ids), t, "good", text)
 
     def interrupted(self):
@@ -659,3 +660,17 @@ def test_the_full_session_keeps_the_time_limit_when_one_is_set(tmp_path):
     s.m.heartbeat()
     assert flow._guide(place.target("0.75 m"), "PLACE", "default") == "timeout"
     assert s.says[-1].text == place.SKIP_TEXT
+
+
+def test_a_close_enough_placement_runs_its_grid_and_the_report_says_where(tmp_path, monkeypatch):
+    """10 Nov: a near placement the operator cannot quite reach is used where the board is ("Close enough. Using 88
+    centimetres."); its holds count toward the band they measured, and the report states the distance"""
+    monkeypatch.setattr(Guide, "results", {"0.75 m": "placed_near"})
+    s = Session(tmp_path, keys=FULL_KEYS).run()
+    assert s.m.phase == "DONE"
+    assert "0.75 m" in [e["placement"] for e in s.events() if e["kind"] == "grid_end"]
+    assert "placement_skipped" not in s.kinds()
+    rep = json.loads((s.dirs.report / "session.json").read_text())
+    assert rep["collection"]["done"][:2] == ["0.75 m", "1.6 m"] and rep["collection"]["unreachable"] == []
+    assert rep["collection"]["near"] == {"0.75 m": 0.88}
+    assert "0.75 m at 88 centimetres" in (s.dirs.report / "session.md").read_text()

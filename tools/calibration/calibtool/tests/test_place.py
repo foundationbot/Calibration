@@ -582,3 +582,77 @@ def test_a_trial_without_a_time_limit_never_skips_by_itself(tmp_path, limit):
     assert tr.state(1000.0)["timeout_s"] is None
     assert tr.key(1000.0, "C")[0].text.startswith("Placement 2 of 2.")
     assert [r["result"] for r in tr.records] == ["unreachable"]
+
+
+
+# ------------------------------------------------------------------ near placements: close enough (10 Nov, phantom10)
+# The 0.5 m placement bounced between "Lower" and "Raise": a near board raised gets cut by the image's top edge. After
+# two corrections that did not bring the board more than ~3 cm nearer, a board within 15 cm of a near target is used
+# where it is.
+
+def rest(g, o, t0):
+    """the board at rest for 1.5 s from t0 (rests 20 s apart: the last prompt has been spoken and acted on)"""
+    return feed(g, [o] * 4, t0=t0)
+
+
+def test_a_near_board_that_stops_improving_is_close_enough():
+    g = guide(place.target("0.5 m"))
+    assert rest(g, obs(z=0.66, v=40, cut=("top",)), 0.0)[0].text.startswith("Lower the board.")
+    assert rest(g, obs(z=0.70, v=600), 20.0)[0].text.startswith("Good. Raise the board")
+    s = rest(g, obs(z=0.64, v=40, cut=("top",)), 40.0)
+    assert [(x.kind, x.text) for x in s] == [("good", "Close enough. Using 64 centimetres.")]
+    assert g.done and g.result == "placed_near" and g.near_z == pytest.approx(0.64)
+
+
+def test_a_near_board_still_getting_closer_is_guided_on():
+    g = guide(place.target("0.5 m"))
+    rest(g, obs(z=0.80, v=600), 0.0)
+    rest(g, obs(z=0.72, v=600), 20.0)
+    s = rest(g, obs(z=0.64, v=40, cut=("top",)), 40.0)                 # 16 cm better than two corrections ago
+    assert s[0].kind == "correction" and not g.done
+
+
+def test_close_enough_needs_two_corrections_first():
+    g = guide(place.target("0.5 m"))
+    rest(g, obs(z=0.64, v=40, cut=("top",)), 0.0)
+    s = rest(g, obs(z=0.64, v=40, cut=("top",), u=700), 20.0)          # one correction so far
+    assert s[0].kind == "correction" and not g.done
+
+
+@pytest.mark.parametrize("name,z", [("0.5 m", 0.70), ("1.1 m", 1.40)])
+def test_close_enough_only_within_15_cm_of_a_near_target(name, z):
+    g = guide(place.target(name))
+    for i in range(4):
+        cut = ("top",) if i % 2 == 0 else ()
+        s = rest(g, obs(z=z, v=40 if cut else 600, cut=cut, u=640 + 20 * i), 20.0 * i)
+        assert s and s[0].kind == "correction", (i, [x.text for x in s])
+    assert not g.done
+
+
+def test_close_enough_with_gravity_and_the_operator_deciding_reachability():
+    """phantom10's profile (auto_skip off): raised, the board is cut at the top; lowered, it is too far"""
+    g = gguide("0.5 m", stand=place.Stand(auto_skip=False))
+    o1 = at(-0.25, 0.62, cut=("top",))
+    o1.lo[1] = 2.0
+    o2 = at(-0.45, 0.55)
+    o3 = at(-0.27, 0.62, cut=("top",))
+    o3.lo[1] = 2.0
+    assert all(abs(o.z - 0.5) <= 0.15 for o in (o1, o3)) and o2.z >= 0.625
+    assert rest(g, o1, 0.0)[0].kind == "correction"
+    assert rest(g, o2, 20.0)[0].kind == "correction"
+    s = rest(g, o3, 40.0)
+    assert s[0].kind == "good" and s[0].text == f"Close enough. Using {int(round(o3.z * 100))} centimetres."
+    assert g.result == "placed_near"
+
+
+def test_the_trial_logs_a_close_enough_placement_with_its_distance(tmp_path):
+    tr = place.Trial([place.target("0.5 m"), place.target("1.1 m")], tmp_path / "t.jsonl", focal=F, size=(W, H))
+    tr.start(0.0)
+    says = []
+    for t0, o in ((1.0, obs(z=0.66, v=40, cut=("top",))), (21.0, obs(z=0.70, v=600)),
+                  (41.0, obs(z=0.64, v=40, cut=("top",)))):
+        for i in range(4):
+            says += tr.update(t0 + 0.5 * i, o)
+    assert "Close enough. Using 64 centimetres." in [x.text for x in says]
+    assert tr.records[0]["result"] == "placed_near" and tr.records[0]["z_m"] == pytest.approx(0.64)
+    assert tr.summary()["placed"] == 1

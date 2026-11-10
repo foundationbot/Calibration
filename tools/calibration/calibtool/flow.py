@@ -207,6 +207,7 @@ class FullFlow:
         self.targets = list(targets)
         self.countdown_s, self.step_s, self.max_extras = int(countdown_s), float(step_s), int(max_extras)
         self.place_timeout_s = place.time_limit(place_timeout_s)     # None: no limit, only the operator's C skips
+        self.near_z = None              # the distance the last close-enough placement used (m)
         self.rec = robot.recorder
         self.remote = dp.Remote(robot.run, dry_run=robot.dry_run, log=self.rec.hook("deploy"))
         self.spec = Spec.from_yaml(robot.producer_yaml)
@@ -545,7 +546,8 @@ class FullFlow:
         return f"{lead} {where}".strip()
 
     def _guide(self, target, phase, kind):
-        """-> "placed" | "unreachable" (C, or the guide's out of reach) | "timeout\""""
+        """-> "placed" | "placed_near" (close enough: self.near_z the distance used) | "unreachable" (C, or the
+        guide's out of reach) | "timeout\""""
         self._enter(phase)
         g = self.robot.make_guide(target, ids=self.ids, **self.robot.guide_kw)
         intro = self._intro(target, kind)
@@ -570,6 +572,7 @@ class FullFlow:
                 if s is not None:
                     self.emit(s)
             if g.done:
+                self.near_z = getattr(g, "near_z", None)
                 return g.result or "placed"
             if self.place_timeout_s is not None and self.mono() - t0 - paused > self.place_timeout_s:
                 self._say("skip", place.SKIP_TEXT)
@@ -683,10 +686,13 @@ class FullFlow:
         fl["current"] = {"target": _tdict(target), "kind": kind, "poses": [list(p) for p in poses]}
         self._save()
         r = self._guide(target, "PLACE", kind)
-        if r != "placed":
+        if r not in place.PLACED:
             fl.setdefault("unreachable", []).append(target.name)
             self._event("placement_skipped", placement=target.name, result=r)
         else:
+            if r == "placed_near":
+                fl.setdefault("near", {})[target.name] = round(float(self.near_z), 3)
+                self._event("placement_near", placement=target.name, z_m=fl["near"][target.name])
             res = self._grid(target, poses, self.pcol, "GRID", "collect")
             self._live_fit("placement_done", self.collection, self._load_holds(), target.name)
             if res is not None:
@@ -1026,6 +1032,7 @@ class FullFlow:
                "check": fl.get("check"), "deploy": st.get("deploy"), "postcheck": fl.get("postcheck"),
                "rollback": st.get("rollback"), "restore": st.get("restore"), "motors": st.get("motors"),
                "collection": {"done": fl.get("done", []), "unreachable": fl.get("unreachable", []),
+                              "near": fl.get("near", {}),
                               "redo": fl.get("redo", []), "holds": int(fl.get("next_hold") or 0)},
                "commands": str(Path(self.dirs.root) / "commands.txt")}
         d = Path(self.dirs.report)
@@ -1043,6 +1050,9 @@ class FullFlow:
             md.append(f"- post-check: {rep['postcheck']['decision']}")
         md.append(f"- placements: {', '.join(rep['collection']['done']) or 'none'}; unreachable: "
                   f"{', '.join(rep['collection']['unreachable']) or 'none'}; holds {rep['collection']['holds']}")
+        if rep["collection"]["near"]:
+            md.append("- placed where the operator could reach (close enough): " + ", ".join(
+                f"{k} at {int(round(v * 100))} centimetres" for k, v in rep["collection"]["near"].items()))
         md.append(f"- robot commands: {rep['commands']}")
         (d / "session.md").write_text("\n".join(md) + "\n")
         self._event("report", outcome=rep["outcome"], aborted=aborted)

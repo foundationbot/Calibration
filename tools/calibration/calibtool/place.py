@@ -16,6 +16,8 @@ important first:
                                   without gravity -> the camera distance alone, as before ("About N centimetres")
   off the target bearing       -> sideways (only for targets with a bearing: adaptive extras)
   otherwise                    -> "Good. That one is done. Step back."
+  a near target (< 1 m) the board does not get nearer to: after two distance corrections that did not bring it more
+  than 3 cm nearer, within 15 cm of the target -> "Close enough. Using N centimetres." (result placed_near, near_z)
 After the operator moved the board and it rests again: the same problem, smaller -> "Not yet. N more centimetres
 closer." (what is left); the same problem, not smaller -> "Not yet. " + the instruction; another problem -> "Good. " +
 the instruction. Unchanged and unmoved, an instruction is repeated at most once, after repeat_s. A board not seen for
@@ -84,6 +86,15 @@ HEIGHT_STEP_M = 0.01     # the stand's range is searched in these steps
 BAND_STEP_M = 0.05       # depths of the target's band tried when its own is out of reach (phantom10: 1.6 m is)
 BAND_MARGIN_M = 0.05     # ... this far inside the band's edges
 DONE_TEXT = "Good. That one is done. Step back."
+# 10 Nov (phantom10): the 0.5 m placement bounced between "Lower" and "Raise" (raised, a near board is cut by the
+# image's top edge). A near target's board that two corrections did not bring more than NEAR_GAIN_M nearer, within
+# NEAR_WITHIN_M of the target, is used where it is (its holds count toward the band they measure)
+NEAR_TARGET_M = 1.0
+NEAR_GAIN_M = 0.03
+NEAR_WITHIN_M = 0.15
+NEAR_KEYS = frozenset({"closer", "back", "far", "near", "raise", "lower", "raise_head", "cut_top", "cut_bottom",
+                       "noplace"})
+PLACED = ("placed", "placed_near")      # the results a placement's grid runs for
 UNREACHABLE_TEXT = "This one is out of reach. Skipping."
 NOPLACE_TEXT = "I cannot find a good spot. Press C to skip this one."
 AUTO_OFF_RANGE_M = 1.5
@@ -237,7 +248,9 @@ class PlacementGuide:
         self.up = up                    # 'up' in camera 0: a vector, a callable giving one (or None), or None
         self.stand = stand or Stand()
         self.done = False
-        self.result = None              # placed | unreachable, once done
+        self.result = None              # placed | placed_near | unreachable, once done
+        self.near_z = None              # placed_near: the distance used (m)
+        self._near_z = []               # the board's distance at each distance correction spoken at a new rest
         self.rest_t = None              # when the board came to rest for the accepted check
         self.h0 = None                  # the board's height (m above the camera) at the first rest that got an
                                         # instruction in this placement (the stand's base)
@@ -323,6 +336,12 @@ class PlacementGuide:
             self.rest_t = self._start[0]
             return self._say(t, kind, UNREACHABLE_TEXT)
         self._unreach_n = 0
+        if self._spoken_at is None and key in NEAR_KEYS:
+            if self._close_enough(float(obs.z)):
+                self.done, self.result, self.near_z = True, "placed_near", float(obs.z)
+                self.rest_t = self._start[0]
+                return self._say(t, "good", f"Close enough. Using {int(round(obs.z * 100))} centimetres.")
+            self._near_z.append(float(obs.z))
         if self.h0 is None and sp is not None:
             self.h0 = sp[0]                 # the stand's base: the first rest the operator gets an instruction at
         if self._spoken_at is None and self._last_key is not None:
@@ -335,6 +354,14 @@ class PlacementGuide:
                 text = "Not yet. " + text
         self._last_key, self._last_err = key, err
         return self._say(t, kind, text)
+
+    def _close_enough(self, z) -> bool:
+        """a near target, two distance corrections spoken, the board not more than NEAR_GAIN_M nearer the target than
+        two corrections ago, and within NEAR_WITHIN_M of it"""
+        D = self.target.distance_m
+        if D >= NEAR_TARGET_M or len(self._near_z) < 2 or abs(z - D) > NEAR_WITHIN_M + 1e-9:
+            return False
+        return abs(self._near_z[-2] - D) - abs(z - D) <= NEAR_GAIN_M + 1e-9
 
     def interrupted(self):
         """the trial was interrupted (HOLD, a stalled camera): the board may have moved meanwhile, so the rest, the
@@ -589,7 +616,7 @@ class Trial:
         return []
 
     def summary(self) -> dict:
-        placed = [r["seconds"] for r in self.records if r["result"] == "placed"]
+        placed = [r["seconds"] for r in self.records if r["result"] in PLACED]
         n = len(self.records)
         return {"placements": n, "placed": len(placed), "success_rate": len(placed) / n if n else None,
                 "mean_s": statistics.mean(placed) if placed else None,
