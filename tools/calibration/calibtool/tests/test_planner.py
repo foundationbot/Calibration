@@ -178,10 +178,10 @@ def test_p21_counterfactual_top_suggestion_is_left_edge_toward_robots_left(data_
 @pytest.mark.xfail(strict=True, reason=(
     "M1 B2 measured 9 Nov: no tilted placement in the top 3. Without dleft/dtiltleft the comparative rule finds no "
     "bottom-edge deficit (cam0, all pairs: bottom 2,674 vs top 2,574 corners); for the bottom-left box the model "
-    "predicts the tilted board adds 45-54 corners vs 120-168 for an upright board to the robot's left (the real dtiltleft take "
-    "added 3 there, 726 on the bottom edge). The tilted board is the best single fill of the bottom 0.9-1.3 m TEST "
-    "entry (20-23 holds vs 10-12) but greedy summed value prefers upright boards that also fill edges and other "
-    "entries. Decision for the lead (C3): a bottom-edge target, or one suggestion per top deficit."))
+    "predicts the tilted board adds 45-54 corners vs 120-168 for an upright board to the robot's left (the real "
+    "dtiltleft take added 3 there, 726 on the bottom edge). The tilted board is the best single fill of the bottom "
+    "0.9-1.3 m TEST entry (20-23 holds vs 10-12) but greedy summed value prefers upright boards that also fill edges "
+    "and other entries. Decision for the lead (C3): a bottom-edge target, or one suggestion per top deficit."))
 def test_p21_counterfactual_asks_for_a_tilted_placement_for_the_bottom(data_root):
     sug = _counterfactual()["suggestions"]
     low = [x for x in sug if x.candidate.tilted and any(
