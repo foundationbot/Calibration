@@ -9,11 +9,13 @@ the rig file's nominal camera, never a deployed calibration; every pair carries 
 no max_radius cut (Fit A used every corner). numpy + scipy; cv2 only for the PnP start."""
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -34,10 +36,38 @@ GROSS_PX = 20.0                      # residuals beyond this are detection failu
 SOLVER_ENV = "CALIB_SOLVER"          # "fast": solve() and lensscore.score() by calibtool.solver / calibtool.score (M3)
 
 
+SOLVERS = ("fast", "scipy")
+_scope = threading.local()           # solver_scope's choice in this thread (a stack: scopes nest)
+
+
+@contextlib.contextmanager
+def solver_scope(name):
+    """inside the block, in this thread only, solve() and lensscore.score() use `name` ("fast" | "scipy") whatever
+    CALIB_SOLVER says; the environment is never changed (other threads and child processes are not affected)"""
+    if name not in SOLVERS:
+        raise ValueError(f"solver {name!r}: one of {SOLVERS}")
+    stack = _scope.__dict__.setdefault("stack", [])
+    stack.append(name)
+    try:
+        yield
+    finally:
+        stack.pop()
+
+
+def solver_name():
+    """the solver in force here: the innermost solver_scope of this thread, else CALIB_SOLVER ("fast" -> fast; unset
+    or anything else -> scipy)"""
+    stack = getattr(_scope, "stack", None)
+    if stack:
+        return stack[-1]
+    return "fast" if os.environ.get(SOLVER_ENV, "").strip().lower() == "fast" else "scipy"
+
+
 def fast_solver(model, free_intr=False):
-    """calibtool.solver when CALIB_SOLVER=fast and it takes this solve (free intrinsics: KB4/KB4T only), else None
-    (unset or "scipy": the scipy least squares below, unchanged)"""
-    if os.environ.get(SOLVER_ENV, "").strip().lower() != "fast":
+    """calibtool.solver when the solver in force (solver_name: a solver_scope, else CALIB_SOLVER) is "fast" and it
+    takes this solve (free intrinsics: KB4/KB4T only), else None (unset or "scipy": the scipy least squares below,
+    unchanged)"""
+    if solver_name() != "fast":
         return None
     cal = str(Path(__file__).resolve().parents[1])
     if cal not in sys.path:

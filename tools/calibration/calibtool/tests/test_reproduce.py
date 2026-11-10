@@ -4,7 +4,11 @@ the two stored sessions through them reproduces what the recorded runs concluded
 Fast tests (no marker): the wrappers read verdicts from the steps' JSON, never from exit codes (fake steps); step 16 on
 the stored corner files gives the recorded FIT/TEST files array for array. `replay` tests (minutes each, -m replay):
 the fit, both validations and the summary rows against the recorded numbers (sessions.Recorded), and the reference
-numbers of phantom21's live radtan config (P21_LIVE_RADTAN below), which phase B's livecfg must reproduce."""
+numbers of phantom21's live radtan config (P21_LIVE_RADTAN below), which phase B's livecfg must reproduce.
+
+The recorded numbers are scipy's (the recorded runs predate the fast solver): every step here runs with
+solver="scipy" (SOLVER), whatever calibtool's default. The fast solver's acceptance on the same sessions is
+test_replay's fast-mode tests."""
 import json
 import subprocess
 import sys
@@ -26,6 +30,7 @@ NAMES = ["p21_1105", "p10_1106"]
 ENTRY_TOL_PCT = 0.02          # per-entry step-66 median (plan A3)
 RMS_TOL_PX, BASELINE_TOL_MM = 0.005, 0.01
 SUMMARY_TOL_PCT, ROWS_TOL_PX = 0.02, 0.005
+SOLVER = "scipy"              # the recorded runs' least squares
 
 # phantom21's LIVE radtan config (p21/etc-okvis/mk12_stereo_holevisor-radtan-pre-daksh.yaml) scored by step 66 and the
 # summary row on the TEST pairs of split16(p21_1105) (= the recorded p21/kit/final/test.npz), through a temporary
@@ -86,7 +91,7 @@ def _summary_with_shim(shim_dir, calib_json, test_npz, rig_path):
     """pipeline.summary in its own process with the radtan shim loaded (it patches lensmodel process-wide)"""
     code = (f"import sys, json; sys.path[:0] = [{str(shim_dir)!r}, {str(paths.CAL)!r}]\n"
             "import radtan_shim\nfrom calibtool import pipeline\n"
-            f"r = pipeline.summary({str(calib_json)!r}, {str(test_npz)!r}, {str(rig_path)!r})\n"
+            f"r = pipeline.summary({str(calib_json)!r}, {str(test_npz)!r}, {str(rig_path)!r}, solver={SOLVER!r})\n"
             "print('JSON', json.dumps(r.as_dict()))\n")
     p = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
     line = [ln for ln in p.stdout.splitlines() if ln.startswith("JSON ")][-1]
@@ -222,7 +227,7 @@ def test_summary_of_the_recorded_files(name, data_root, tmp_path):
     recorded numbers: the summary math alone, before any fit is reproduced"""
     st = sessions.get(name)
     f = st.recorded.files
-    got = pipeline.summary(data_root / f["fit_json"], data_root / f["test_npz"], st.rig_path)
+    got = pipeline.summary(data_root / f["fit_json"], data_root / f["test_npz"], st.rig_path, solver=SOLVER)
     off = _summary_off("new", got.as_dict(), st.recorded.summary_new)
     assert got.n_pairs == st.recorded.test_pairs_16
     if st.live_model != "RADTAN":
@@ -231,8 +236,8 @@ def test_summary_of_the_recorded_files(name, data_root, tmp_path):
         mine = json.loads(live.read_text())
         assert mine["model"] == rec["model"]
         assert np.allclose(mine["intr"], rec["intr"], atol=1e-9) and np.allclose(mine["C"], rec["C"], atol=1e-9)
-        off += _summary_off("live", pipeline.summary(live, data_root / f["test_npz"], st.rig_path).as_dict(),
-                            st.recorded.summary_live)
+        off += _summary_off("live", pipeline.summary(live, data_root / f["test_npz"], st.rig_path,
+                                                     solver=SOLVER).as_dict(), st.recorded.summary_live)
     assert not off, "\n".join(off)
 
 
@@ -243,7 +248,7 @@ def test_replay_reproduces_the_recorded_run(name, data_root, tmp_path):
     run. Every mismatch is collected and reported together"""
     st, rec = sessions.get(name), sessions.get(name).recorded
     sp = pipeline.split16(Session.load(st), tmp_path / "split", st.rig_path, max_fit_z=3.0, holdout_every=2)
-    fit = pipeline.fit45(sp.fit_npz, st.rig_path, tmp_path / "fit", max_z=3.0)
+    fit = pipeline.fit45(sp.fit_npz, st.rig_path, tmp_path / "fit", max_z=3.0, solver=SOLVER)
     off, table = [], {"session": name, "fit": fit.as_dict()}
     assert fit.converged, fit.verdict
     if fit.fit_pairs != rec.fit_used_pairs:
@@ -252,9 +257,9 @@ def test_replay_reproduces_the_recorded_run(name, data_root, tmp_path):
         off.append(f"fit rms {fit.rms_px:.5f} px vs recorded {rec.fit_rms_px:.5f} px")
     if abs(fit.baseline_mm - rec.baseline_mm) > BASELINE_TOL_MM:
         off.append(f"baseline {fit.baseline_mm:.4f} mm vs recorded {rec.baseline_mm:.4f} mm")
-    jobs = {"new": (fit.json_path, dict(fit_report=fit.json_path))}
+    jobs = {"new": (fit.json_path, dict(fit_report=fit.json_path, solver=SOLVER))}
     if st.live_model != "RADTAN":
-        jobs["live"] = (_live_json(st, tmp_path / "live.json"), {})
+        jobs["live"] = (_live_json(st, tmp_path / "live.json"), dict(solver=SOLVER))
     with ThreadPoolExecutor(len(jobs)) as ex:
         futs = {k: ex.submit(pipeline.validate66, cal, sp.test_npz, tmp_path / f"validate-{k}", rig=st.rig_path,
                              **kw) for k, (cal, kw) in jobs.items()}
@@ -263,7 +268,7 @@ def test_replay_reproduces_the_recorded_run(name, data_root, tmp_path):
     if val["new"].verdict != rec.new_verdict:
         off.append(f"66 new: {val['new'].verdict} vs recorded {rec.new_verdict} ({val['new'].text})")
     off += _entries_off(val["new"].entries, rec.new_entries, ENTRY_TOL_PCT)
-    sm = pipeline.summary(fit.json_path, sp.test_npz, st.rig_path).as_dict()
+    sm = pipeline.summary(fit.json_path, sp.test_npz, st.rig_path, solver=SOLVER).as_dict()
     table["summary_new"] = sm
     off += _summary_off("new", sm, rec.summary_new)
     if "live" in val:
@@ -273,7 +278,7 @@ def test_replay_reproduces_the_recorded_run(name, data_root, tmp_path):
             off.append(f"66 live: {v.verdict} on {v.n_validated} vs recorded {rec.live_verdict} on "
                        f"{rec.live_n_validated} ({v.text})")
         off += [f"live {x}" for x in _entries_off(v.failing, rec.live_failing, ENTRY_TOL_PCT)]
-        sl = pipeline.summary(jobs["live"][0], sp.test_npz, st.rig_path).as_dict()
+        sl = pipeline.summary(jobs["live"][0], sp.test_npz, st.rig_path, solver=SOLVER).as_dict()
         table["summary_live"] = sl
         off += _summary_off("live", sl, rec.summary_live)
     print(f"REPRODUCED {name}: " + json.dumps(table, default=str))
@@ -293,7 +298,8 @@ def test_p21_live_radtan_reference(data_root, tmp_path):
     assert np.allclose(mine["intr"], recorded_json["intr"], atol=1e-9)
     assert np.allclose(mine["C"], recorded_json["C"], atol=1e-9)
     shim_dir, runner = _radtan_runner(data_root, tmp_path)
-    v = pipeline.validate66(live, sp.test_npz, tmp_path / "validate-live", rig=st.rig_path, script=runner)
+    v = pipeline.validate66(live, sp.test_npz, tmp_path / "validate-live", rig=st.rig_path, script=runner,
+                            solver=SOLVER)
     sm = _summary_with_shim(shim_dir, live, sp.test_npz, st.rig_path)
     print("P21 LIVE RADTAN: " + json.dumps({"validate": v.as_dict(), "summary": sm}, default=str))
     off = []

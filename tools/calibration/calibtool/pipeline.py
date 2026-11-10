@@ -22,6 +22,18 @@ from calibtool import paths
 # run_lens_kb4t.BANDS: the summary row's distance bands, (lo, hi] m; step 66 bins are [lo, hi)
 BANDS = ((0.0, 1.0), (1.0, 1.3), (1.3, 1.7), (1.7, 9.9))
 VERDICTS = ("PASS", "FAIL", "NO RESULT")
+# the least squares behind 45 / 66 / the summary: "fast" (calibtool.solver, M3) is calibtool's default; "scipy" is
+# the standalone scripts' default (and the recorded runs'). Steps 45 and 66 get it as CALIB_SOLVER in their own
+# environment, the in-process scoring through stereofit.solver_scope: the caller's environment is never changed
+SOLVERS = ("fast", "scipy")
+DEFAULT_SOLVER = "fast"
+SOLVER_ENV = "CALIB_SOLVER"
+
+
+def check_solver(solver):
+    if solver not in SOLVERS:
+        raise ValueError(f"solver {solver!r}: one of {SOLVERS}")
+    return solver
 
 
 class PipelineError(RuntimeError):
@@ -41,9 +53,11 @@ def _rig_path(rig) -> Path:
     return Path(rig) if isinstance(rig, (str, Path)) else Path(rig.path)
 
 
-def _run(script, args, log):
-    """script (a path) with args as its own process, stdout+stderr to log -> (exit code, seconds)"""
+def _run(script, args, log, solver=DEFAULT_SOLVER):
+    """script (a path) with args as its own process, stdout+stderr to log, CALIB_SOLVER=solver in its environment
+    -> (exit code, seconds)"""
     env = dict(os.environ)
+    env[SOLVER_ENV] = check_solver(solver)
     env["PYTHONPATH"] = os.pathsep.join([str(paths.SCRIPTS)] + [p for p in [env.get("PYTHONPATH")] if p])
     t = time.time()
     with open(log, "w") as fh:
@@ -119,14 +133,15 @@ class FitResult:
         return d
 
 
-def fit45(fit_npz, rig, out_dir, max_z=3.0, model="KB4T", script=None, extra=()) -> FitResult:
+def fit45(fit_npz, rig, out_dir, max_z=3.0, model="KB4T", script=None, extra=(), solver=DEFAULT_SOLVER) -> FitResult:
     """step 45 (--model, --max-z, --rig) on fit_npz -> out_dir/fit-<model>.json, log out_dir/45.log. script: run this
-    instead of 45_fit_lens.py with the same arguments (tests); extra: more arguments"""
+    instead of 45_fit_lens.py with the same arguments (tests); extra: more arguments; solver: SOLVERS"""
+    check_solver(solver)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     out, log = out_dir / f"fit-{model.lower()}.json", out_dir / "45.log"
     args = [fit_npz, out, "--model", model, "--max-z", max_z, "--rig", _rig_path(rig)] + list(extra)
-    rc, sec = _run(script or paths.script("45_fit_lens"), args, log)
+    rc, sec = _run(script or paths.script("45_fit_lens"), args, log, solver)
     if not out.is_file():
         raise PipelineError(f"step 45 (exit {rc}) wrote no {out}:\n{_tail(log)}")
     e = json.loads(out.read_text())
@@ -167,16 +182,18 @@ class ValidateResult:
         return d
 
 
-def validate66(calib_json, test_npz, out_dir, rig, fit_report=None, script=None) -> ValidateResult:
+def validate66(calib_json, test_npz, out_dir, rig, fit_report=None, script=None,
+               solver=DEFAULT_SOLVER) -> ValidateResult:
     """step 66 of calib_json on test_npz -> out_dir/report.json (+ report.md), log out_dir.log. The verdict is read
     from report.json and checked against the printed verdict line. script: run this instead of 66_validate_lens.py
-    with the same arguments (a runner that registers a lens model first, or a test's fake)"""
+    with the same arguments (a runner that registers a lens model first, or a test's fake); solver: SOLVERS"""
+    check_solver(solver)
     out_dir = Path(out_dir)
     out_dir.parent.mkdir(parents=True, exist_ok=True)
     log = out_dir.parent / f"{out_dir.name}.log"
     args = [calib_json, test_npz, out_dir] + (["--fit-report", fit_report] if fit_report else [])
     args += ["--rig", _rig_path(rig)]
-    rc, sec = _run(script or paths.script("66_validate_lens"), args, log)
+    rc, sec = _run(script or paths.script("66_validate_lens"), args, log, solver)
     rp = out_dir / "report.json"
     if not rp.is_file():
         raise PipelineError(f"step 66 (exit {rc}) wrote no {rp}:\n{_tail(log)}")
@@ -216,10 +233,10 @@ class SummaryResult:
         return d
 
 
-def summary(calib_json, test_npz, rig, bands=BANDS) -> SummaryResult:
+def summary(calib_json, test_npz, rig, bands=BANDS, solver=DEFAULT_SOLVER) -> SummaryResult:
     """run_lens_kb4t.summary_row's numbers (same math), as data: the TEST depth error of the calibration (lensscore
     board scale - 1: median, IQR, per distance band) and its row error. The lens model must be known to lensmodel
-    (a radtan config needs its model registered first)"""
+    (a radtan config needs its model registered first). solver: SOLVERS, for this call (stereofit.solver_scope)"""
     import cv2
     import lensmodel
     import lensscore
@@ -227,7 +244,8 @@ def summary(calib_json, test_npz, rig, bands=BANDS) -> SummaryResult:
     rig = load_rig(rig)
     model, intr, C = sf.load_calibration(str(calib_json))
     data = sf.Data(str(test_npz), rig.board)
-    rec, _, solves = lensscore.score(model, intr, C, data)
+    with sf.solver_scope(check_solver(solver)):
+        rec, _, solves = lensscore.score(model, intr, C, data)
     sc = np.array(rec["scale"]) - 1
     zz = np.array(rec["z"])
     T10 = np.linalg.inv(C)

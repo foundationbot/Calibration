@@ -218,24 +218,25 @@ def load(okvis_yaml, at_size=None) -> LiveCalib:
 # ---------------------------------------------------------------- scoring
 
 
-def summary(live: LiveCalib, test_npz, rig, work_dir):
+def summary(live: LiveCalib, test_npz, rig, work_dir, solver="fast"):
     """pipeline.summary of the live config (its JSON written to work_dir/live-<model>.json), RADTAN registered while
-    it runs"""
+    it runs. solver: pipeline.SOLVERS"""
     from calibtool import pipeline
     Path(work_dir).mkdir(parents=True, exist_ok=True)
     js = live.write_json(Path(work_dir) / f"live-{live.model.lower()}.json")
     with model_scope(live.model):
-        return pipeline.summary(js, test_npz, rig)
+        return pipeline.summary(js, test_npz, rig, solver=solver)
 
 
-def validate66(live: LiveCalib, test_npz, out_dir, rig):
+def validate66(live: LiveCalib, test_npz, out_dir, rig, solver="fast"):
     """pipeline.validate66 of the live config (its JSON beside out_dir); a RADTAN config runs through this file's
-    runner, which registers the model in step 66's process"""
+    runner, which registers the model in step 66's process. solver: pipeline.SOLVERS"""
     from calibtool import pipeline
     out_dir = Path(out_dir)
     out_dir.parent.mkdir(parents=True, exist_ok=True)
     js = live.write_json(out_dir.parent / f"{out_dir.name}-{live.model.lower()}.json")
-    return pipeline.validate66(js, test_npz, out_dir, rig, script=Path(__file__) if live.model == "RADTAN" else None)
+    return pipeline.validate66(js, test_npz, out_dir, rig, script=Path(__file__) if live.model == "RADTAN" else None,
+                               solver=solver)
 
 
 def _main(argv):

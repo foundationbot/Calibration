@@ -323,7 +323,8 @@ def test_verdict_as_dict_is_json():
 @pytest.mark.replay
 @pytest.mark.parametrize("name", ["p21_1105", "p10_1106"])
 def test_stored_sessions_new_beats_live(name, data_root, tmp_path):
-    """the recorded fit vs the robot's live config on the recorded TEST split: new better on every paired statistic,
+    """the recorded fit vs the robot's live config on the recorded TEST split, scored with scipy (the recorded
+    numbers are scipy's): new better on every paired statistic,
     DEPLOY with the default required edges (left, right, bottom); with all four required p21 is NOT_ENOUGH_DATA (no
     judged top entry)"""
     from calibtool import livecfg, pipeline, sessions
@@ -336,9 +337,9 @@ def test_stored_sessions_new_beats_live(name, data_root, tmp_path):
     place = decide.placements(test_npz, Session.load(st))
     with ThreadPoolExecutor(1) as ex:
         fut = ex.submit(pipeline.validate66, fit_json, test_npz, tmp_path / "validate-new", st.rig_path,
-                        fit_report=fit_json)
-        new = decide.score(fit_json, test_npz, st.rig_path, place)
-        old = decide.score(live.write_json(tmp_path / "live.json"), test_npz, st.rig_path, place)
+                        fit_report=fit_json, solver="scipy")
+        new = decide.score(fit_json, test_npz, st.rig_path, place, solver="scipy")
+        old = decide.score(live.write_json(tmp_path / "live.json"), test_npz, st.rig_path, place, solver="scipy")
         v66 = fut.result()
     assert v66.verdict == "PASS"
     loose = decide.verdict(new, old, v66, decide.Gates())

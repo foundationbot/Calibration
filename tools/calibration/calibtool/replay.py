@@ -495,14 +495,15 @@ class _Now:
 
 
 def evaluate(session, rig_path, split: pipeline.Split, live_config, out_dir, gates: decide.Gates, jobs=2,
-             max_fit_z=3.0) -> dict:
+             max_fit_z=3.0, solver=pipeline.DEFAULT_SOLVER) -> dict:
     """step 45 on the split, step 66 (new and live), decide.score of both, decision(). jobs: processes at a time
-    (2: the step-66 runs in a second process while this one scores)"""
+    (2: the step-66 runs in a second process while this one scores); solver: pipeline.SOLVERS, for every step"""
+    pipeline.check_solver(solver)
     out_dir = Path(out_dir)
     rig = pipeline.load_rig(rig_path)
     tm = {}
     t = time.time()
-    fit = pipeline.fit45(split.fit_npz, rig_path, out_dir / "fit", max_z=max_fit_z)
+    fit = pipeline.fit45(split.fit_npz, rig_path, out_dir / "fit", max_z=max_fit_z, solver=solver)
     tm["fit45_s"] = time.time() - t
     live, live_err = None, None
     try:
@@ -524,14 +525,14 @@ def evaluate(session, rig_path, split: pipeline.Split, live_config, out_dir, gat
         new_sc = live_sc = None
         with (_Now() if jobs <= 1 else ThreadPoolExecutor(max(1, jobs - 1))) as ex:
             f_new = ex.submit(pipeline.validate66, fit.json_path, split.test_npz, out_dir / "validate-new", rig_path,
-                              fit_report=fit.json_path)
-            f_live = ex.submit(livecfg.validate66, live, split.test_npz, out_dir / "validate-live", rig_path) \
-                if live else None
-            new_sc = decide.score(fit.json_path, split.test_npz, rig_path, place)
+                              fit_report=fit.json_path, solver=solver)
+            f_live = ex.submit(livecfg.validate66, live, split.test_npz, out_dir / "validate-live", rig_path,
+                               solver=solver) if live else None
+            new_sc = decide.score(fit.json_path, split.test_npz, rig_path, place, solver=solver)
             if live:
                 try:
                     js = live.write_json(out_dir / f"live-{live.model.lower()}.json")
-                    live_sc = decide.score(js, split.test_npz, rig_path, place)
+                    live_sc = decide.score(js, split.test_npz, rig_path, place, solver=solver)
                 except NOT_SCORABLE as e:
                     live_err = f"live config not scored: {type(e).__name__}: {e}"
             v_new = f_new.result()
@@ -566,14 +567,17 @@ def load_session(stored, exclude_takes=()) -> Session:
 
 
 def run(stored, assignment="capture", out_dir=None, gates=None, exclude_takes=(), *, fit=True, targets=None, k=3,
-        jobs=2, head=None, log=None, stop_at_rule=False, per_hold=cv.STORED_PER_HOLD) -> dict:
+        jobs=2, head=None, log=None, stop_at_rule=False, per_hold=cv.STORED_PER_HOLD,
+        solver=pipeline.DEFAULT_SOLVER) -> dict:
     """replay a stored session (sessions.StoredSession or its name; anything with name, robot, rig_path, take_order,
     corner_files, live_config, live_model) -> the report (dict, as written to out_dir/report.json; report.md beside
     it). assignment: "capture" (assign.Assigner) | "split16" (step 16's split, the recorded runs'). fit=False stops
     after the planner (no split written, no fit). head: placement.Head for the planner (default: from the live
     config). jobs: processes at a time in the fit/validate part. per_hold: pairs per pose of the session's corner
     files (targets default to coverage.Targets.for_per_hold(per_hold); the planner simulates that many pairs a pose).
-    stop_at_rule: cut the session at the stop rule's point (Collection.stop; the whole session when never met)"""
+    stop_at_rule: cut the session at the stop rule's point (Collection.stop; the whole session when never met).
+    solver: pipeline.SOLVERS ("fast", calibtool's default; "scipy": the recorded runs' least squares)"""
+    pipeline.check_solver(solver)
     t_all = time.time()
     if isinstance(stored, str):
         stored = sessions.get(stored)
@@ -614,7 +618,7 @@ def run(stored, assignment="capture", out_dir=None, gates=None, exclude_takes=()
            "live": {"config": str(stored.live_config), "model": getattr(stored, "live_model", None), "scorable": None,
                     "error": None},
            "stats": None, "paired": None, "verdicts": None, "timings": tm, "stop": stop, "per_hold": per_hold,
-           "targets": asdict(targets)}
+           "targets": asdict(targets), "solver": solver}
     if fit:
         t = time.time()
         sd = out_dir / "split"
@@ -625,7 +629,7 @@ def run(stored, assignment="capture", out_dir=None, gates=None, exclude_takes=()
                         "near_test_pairs": split.near_test_pairs, "far_test_pairs": split.far_test_pairs,
                         "fit_npz": str(split.fit_npz), "test_npz": str(split.test_npz)}
         ev = evaluate(session, stored.rig_path, split, stored.live_config, out_dir, gates, jobs=jobs,
-                      max_fit_z=col.max_fit_z)
+                      max_fit_z=col.max_fit_z, solver=solver)
         tm.update(ev.pop("timings"))
         rep.update(ev)
     tm["total_s"] = time.time() - t_all
@@ -667,7 +671,7 @@ def render_md(rep: dict) -> str:
         L += [f"{i}. {s['say']}" for i, s in enumerate(rep["suggestions"], 1)]
     else:
         L.append("None: no candidate placement reduces a deficit.")
-    L += ["", "## Fit and validation", ""]
+    L += ["", "## Fit and validation", "", f"Least squares: {rep.get('solver', 'fast')} solver.", ""]
     if rep["fit"] is None:
         L += ["Fit not run (collection-only replay).", ""]
     else:

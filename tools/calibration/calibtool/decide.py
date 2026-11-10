@@ -152,14 +152,14 @@ def row_errors(model, intr, C, test_npz, rig):
     return (np.concatenate(srcs) if srcs else np.zeros(0, int)), (np.concatenate(dys) if dys else np.zeros(0))
 
 
-def score(calib_json, test_npz, rig, placement) -> Scores:
+def score(calib_json, test_npz, rig, placement, solver="fast") -> Scores:
     """a calibration (any step-66 JSON: step 45's fit, livecfg's live config) scored on the TEST file: pipeline.summary
-    (lensscore) and row_errors, the model registered while it runs (a RADTAN live config)"""
+    (lensscore) and row_errors, the model registered while it runs (a RADTAN live config). solver: pipeline.SOLVERS"""
     import stereofit as sf
     from calibtool import livecfg, pipeline
     model, intr, C = sf.load_calibration(str(calib_json))
     with livecfg.model_scope(model):
-        sm = pipeline.summary(calib_json, test_npz, rig)
+        sm = pipeline.summary(calib_json, test_npz, rig, solver=solver)
         cs, dy = row_errors(model, intr, C, test_npz, rig)
     return Scores.from_records(sm.records, placement, cs, dy, sm)
 

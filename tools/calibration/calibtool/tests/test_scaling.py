@@ -183,8 +183,8 @@ def test_960_config_unscaled_scores_on_1280_data(data_root, tmp_path):
     assert l960.size == (1280, 800) and l960.scaled_from == (960, 600)
     assert np.allclose(l960.intr[0][:2], l1280.intr[0][:2], rtol=1e-12)
     assert np.allclose(np.subtract(l960.intr[0][2:4], l1280.intr[0][2:4]), 0.5 / 0.75 - 0.5, atol=1e-9)
-    a = livecfg.summary(l960, test_npz, st.rig_path, tmp_path / "a")
-    b = livecfg.summary(l1280, test_npz, st.rig_path, tmp_path / "b")
+    a = livecfg.summary(l960, test_npz, st.rig_path, tmp_path / "a", solver="scipy")     # vs the recorded (scipy)
+    b = livecfg.summary(l1280, test_npz, st.rig_path, tmp_path / "b", solver="scipy")
     print(f"P10 960->1280: median {a.median_pct:+.4f} IQR {a.iqr_pct} rows {a.rows_px:.4f}; 1280: median "
           f"{b.median_pct:+.4f} IQR {b.iqr_pct} rows {b.rows_px:.4f}")
     assert a.n_pairs == b.n_pairs == st.recorded.test_pairs_16

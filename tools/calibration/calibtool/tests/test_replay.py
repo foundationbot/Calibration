@@ -28,7 +28,7 @@ P21_BOTTOM_LEFT = "Left camera, bottom-left corner: 50 corners vs 588 in the bot
 DEFAULT, ALL4 = "required_edges=left,right,bottom", "required_edges=all"     # the report's two verdicts
 REPORT_KEYS = {"session", "robot", "assignment", "exclude_takes", "take_order", "capture_order", "placements",
                "final", "suggestions", "split", "fit", "validate_new", "validate_live", "live", "stats", "paired",
-               "verdicts", "timings", "stop", "targets", "per_hold"}
+               "verdicts", "timings", "stop", "targets", "per_hold", "solver"}
 
 
 def _load_test_module(name):
