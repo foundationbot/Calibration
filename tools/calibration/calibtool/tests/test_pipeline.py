@@ -359,29 +359,66 @@ def test_step66_scores_of_another_calibration_test_file_or_solver_are_not_used(t
     assert pipeline.step66_scores(tmp_path / "nowhere", cal, npz) is None
 
 
-@pytest.mark.parametrize("jobs, want", [(1, [1, 1]), (2, [1, 1]), (3, [2, 1]), (4, [2, 2])])
-def test_evaluate_runs_both_step66_at_once_with_two_processes_or_more(jobs, want, tmp_path, monkeypatch):
-    """jobs: processes at a time. 1: one step after the other; 2: step 66 of the new fit and of the live config at
-    once; 3-4: as 2, and a step 66 also rescoring its self-check in a second process (--jobs 2)"""
+def _scheduled(monkeypatch, tmp_path, jobs, live_done_first):
+    """evaluate() with fake steps that log start/end: step 45 waits (up to 5 s) for step 66 of the live config to end
+    when live_done_first, else step 66 of the live config waits for step 66 of the new fit to start -> the log
+    [(event, step, --jobs)]"""
     from calibtool import livecfg, replay
-    calls, args = _recording_steps(monkeypatch, tmp_path)
-    started, seen = threading.Barrier(2, timeout=5), []
+    _, args = _recording_steps(monkeypatch, tmp_path)
     TD = _test_module("test_decide")
+    log, live_end, new_start = [], threading.Event(), threading.Event()
+    fit = pipeline.fit45
+
+    def fit45(*a, **k):
+        log.append(("start", "45", 1))
+        if jobs >= 2 and live_done_first:
+            live_end.wait(5)
+        log.append(("end", "45", 1))
+        return fit(*a, **k)
 
     def step(name):
         def f(*a, **k):
-            seen.append((name, k.get("jobs", 1)))
-            if jobs >= 2:
-                started.wait()              # both must be running: a BrokenBarrierError if they ran one by one
+            log.append(("start", name, k.get("jobs", 1)))
+            if name == "new":
+                new_start.set()
+            elif jobs >= 2 and not live_done_first:
+                new_start.wait(5)
+            log.append(("end", name, k.get("jobs", 1)))
+            if name == "live":
+                live_end.set()
             v = TD.step66()
             v.as_dict = lambda: {"verdict": "PASS"}
             return v
         return f
 
+    monkeypatch.setattr(pipeline, "fit45", fit45)
     monkeypatch.setattr(pipeline, "validate66", step("new"))
     monkeypatch.setattr(livecfg, "validate66", step("live"))
-    replay.evaluate(*args, jobs=jobs)
-    assert sorted(seen) == [("live", want[1]), ("new", want[0])]
+    ev = replay.evaluate(*args, jobs=jobs)
+    assert ev["verdicts"]
+    return log
+
+
+def test_one_process_runs_the_steps_one_after_the_other(tmp_path, monkeypatch):
+    log = _scheduled(monkeypatch, tmp_path, 1, True)
+    assert log == [("start", "45", 1), ("end", "45", 1), ("start", "new", 1), ("end", "new", 1),
+                   ("start", "live", 1), ("end", "live", 1)]
+
+
+@pytest.mark.parametrize("jobs, live_jobs", [(2, 1), (3, 2), (4, 2)])
+def test_step66_of_the_live_config_runs_beside_the_fit(jobs, live_jobs, tmp_path, monkeypatch):
+    """it needs only the TEST split: it starts with step 45 (live_jobs processes beside step 45's one); step 66 of the
+    new fit then gets two processes (its self-check forked) when the live one is done"""
+    log = _scheduled(monkeypatch, tmp_path, jobs, True)
+    assert log.index(("end", "live", live_jobs)) < log.index(("end", "45", 1)) < log.index(("start", "new", 2))
+
+
+@pytest.mark.parametrize("jobs, new_jobs", [(2, 1), (3, 1), (4, 2)])
+def test_step66_of_the_new_fit_shares_the_processes_with_a_live_one_still_running(jobs, new_jobs, tmp_path,
+                                                                                   monkeypatch):
+    log = _scheduled(monkeypatch, tmp_path, jobs, False)
+    assert ("start", "new", new_jobs) in log
+    assert log.index(("start", "new", new_jobs)) < log.index(("end", "live", min(2, jobs - 1)))
 
 
 # ---------------------------------------------------------------- step 66 --jobs 2: the self-check in a second process
