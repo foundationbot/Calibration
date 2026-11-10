@@ -203,6 +203,40 @@ def test_radtan_scope_nests():
     assert "RADTAN" not in lensmodel.MODELS and (lensmodel.project, lensmodel.unproject) == before
 
 
+def test_radtan_scope_two_threads_closing_out_of_order():
+    """thread A enters, thread B enters, A leaves first: RADTAN stays registered while B is inside, and lensmodel is
+    exactly as before once B has left too (no scope may restore another one's saved state)"""
+    import threading
+    before_models, before = dict(lensmodel.MODELS), (lensmodel.project, lensmodel.unproject)
+    a_in, b_in, a_out, b_check = (threading.Event() for _ in range(4))
+    seen = {}
+
+    def a():
+        with livecfg.radtan_scope():
+            a_in.set()
+            b_in.wait(5)
+        a_out.set()
+
+    def b():
+        a_in.wait(5)
+        with livecfg.radtan_scope():
+            b_in.set()
+            a_out.wait(5)
+            seen["models"] = "RADTAN" in lensmodel.MODELS
+            seen["px"] = lensmodel.project("RADTAN", _radtan_intr(), _points(5))
+        b_check.set()
+
+    ts = [threading.Thread(target=f) for f in (a, b)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join(10)
+    assert b_check.is_set()
+    assert seen["models"] and np.array_equal(seen["px"], livecfg.radtan_project(_radtan_intr(), _points(5)))
+    assert lensmodel.MODELS == before_models and "RADTAN" not in lensmodel.MODELS
+    assert (lensmodel.project, lensmodel.unproject) == before
+
+
 def test_model_scope_only_for_radtan():
     with livecfg.model_scope("KB4T"):
         assert "RADTAN" not in lensmodel.MODELS

@@ -10,7 +10,8 @@ A config written for another image size is brought back to the scoring size with
 RADTAN (OKVIS's / OpenCV's radial-tangential, k1 k2 p1 p2, pinhole) is not one of lensmodel's models: the package
 fits only KB4/KB4T. radtan_scope() registers it in lensmodel for as long as the block runs (lensmodel.MODELS gets
 "RADTAN", lensmodel.project/unproject learn it) and puts lensmodel back exactly as it was on the way out, exception or
-not. The registration is process-wide while active (other threads see it too); scopes nest.
+not. The registration is process-wide while active (other threads see it too); scopes nest and may overlap across
+threads in any order (counted under a lock: the last one to close restores lensmodel).
 
 Step 66 runs as its own process: for a RADTAN config it runs through this file as a script (`python livecfg.py
 <step-66 arguments>`), which enters radtan_scope and runs 66_validate_lens.py's main in the same process."""
@@ -18,6 +19,7 @@ import contextlib
 import json
 import sys
 import tempfile
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -82,27 +84,42 @@ def radtan_unproject(intr, uv):
     return r / np.linalg.norm(r, axis=1, keepdims=True)
 
 
+_SCOPE_LOCK = threading.Lock()
+_scope = {"count": 0, "saved": None}     # scopes open, process-wide; lensmodel's state before the first of them
+
+
 @contextlib.contextmanager
 def radtan_scope():
     """lensmodel knows "RADTAN" inside the block, and is exactly as before after it (MODELS the same dict with the same
-    entries, project/unproject the same functions), whether the block returns or raises"""
-    models, saved_models = lensmodel.MODELS, dict(lensmodel.MODELS)
-    proj, unproj = lensmodel.project, lensmodel.unproject
+    entries, project/unproject the same functions), whether the block returns or raises. Scopes are counted under a
+    lock: the first one opened registers RADTAN, the last one closed restores lensmodel, so scopes may overlap in any
+    order (threads, nesting)"""
+    with _SCOPE_LOCK:
+        if _scope["count"] == 0:
+            models = lensmodel.MODELS
+            proj, unproj = lensmodel.project, lensmodel.unproject
+            _scope["saved"] = (models, dict(models), proj, unproj)
 
-    def project(model, intr, P):
-        return radtan_project(intr, P) if model == "RADTAN" else proj(model, intr, P)
+            def project(model, intr, P):
+                return radtan_project(intr, P) if model == "RADTAN" else proj(model, intr, P)
 
-    def unproject(model, intr, uv):
-        return radtan_unproject(intr, uv) if model == "RADTAN" else unproj(model, intr, uv)
+            def unproject(model, intr, uv):
+                return radtan_unproject(intr, uv) if model == "RADTAN" else unproj(model, intr, uv)
 
-    models["RADTAN"] = RADTAN_N
-    lensmodel.project, lensmodel.unproject = project, unproject
+            models["RADTAN"] = RADTAN_N
+            lensmodel.project, lensmodel.unproject = project, unproject
+        _scope["count"] += 1
     try:
         yield
     finally:
-        lensmodel.project, lensmodel.unproject = proj, unproj
-        models.clear()
-        models.update(saved_models)
+        with _SCOPE_LOCK:
+            _scope["count"] -= 1
+            if _scope["count"] == 0:
+                models, saved_models, proj, unproj = _scope["saved"]
+                lensmodel.project, lensmodel.unproject = proj, unproj
+                models.clear()
+                models.update(saved_models)
+                _scope["saved"] = None
 
 
 def model_scope(model):
