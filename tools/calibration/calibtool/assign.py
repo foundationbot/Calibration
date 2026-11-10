@@ -201,6 +201,19 @@ class Assigner:
 
     # ------------------------------------------------------------ results
 
+    def recell(self, pp) -> dict:
+        """{hold: (capture-time cell, cell against pp)} for the holds whose cell differs against principal point pp
+        (after the fit: the fitted one, which step 66 uses)"""
+        import lenscells
+        out = {}
+        for h in self.holds.values():
+            if h.entry is None:
+                continue
+            c = str(lenscells.cell_of(h.u - pp[0], h.v - pp[1])[0])
+            if c != h.entry[0]:
+                out[h.hold] = (h.entry[0], c)
+        return out
+
     def pair_labels(self):
         """{left stamp: FIT | TEST} per observed pair: a far or unmeasured pair is TEST whatever its hold"""
         out = {}

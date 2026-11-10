@@ -297,3 +297,65 @@ def test_deterministic_for_the_same_input(rig, tmp_path):
                     {k: np.load(f)[k].tolist() for f in (sp.fit_npz, sp.test_npz) for k in ("img_t0", "img_hold")}))
     assert out[0][0] == out[1][0] and out[0][1] == out[1][1]
     assert out[0][2] == out[1][2]
+
+
+def test_recell_names_the_holds_another_principal_point_moves(rig):
+    """the cell is set against the nominal principal point at capture; recell(pp) reports the holds whose cell
+    differs against another one (the fitted principal point, after the fit)"""
+    a, _ = run(rig, synth_session(rig.board, [("A", [("centre", 0.75, 2), ("left", 0.75, 2), ("bottom", 0.75, 2)])]))
+    assert a.recell(PP) == {}
+    moved = a.recell((PP[0], PP[1] + 300))          # pp 300 px lower: the centre hold now reads top
+    assert moved == {0: ("centre", "top"), 1: ("left", "top-left"), 2: ("bottom", "centre")}
+
+
+# ---------------------------------------------------------------- the stored sessions (fast: no fit)
+
+NAMES = ["p21_1105", "p10_1106"]
+MIN_HOLDS = 8                     # gates.lens_min_holds: holds a step-66 entry needs to be judged
+
+
+def _judged(counts):
+    """step-66 entries (DIST_BINS) with >= MIN_HOLDS TEST holds"""
+    import lenscells
+    return sorted(e for e, n in counts.items() if e[1] in lenscells.DIST_BINS and n >= MIN_HOLDS)
+
+
+@pytest.mark.parametrize("name", NAMES)
+def test_stored_session_capture_split(name, data_root, rig, tmp_path):
+    st = sessions.get(name)
+    s = Session.load(st)
+    from calibtool import assign
+    r = pipeline.load_rig(st.rig_path)
+    a = assign.Assigner(r, (r.resolution[0] / 2, r.resolution[1] / 2), r.nominal_focal_px)
+    for h in assign.capture_holds(s):
+        a.observe(h)
+    sp = a.write_split(s, tmp_path)
+    mine = {k: np.load(f) for k, f in (("fit", sp.fit_npz), ("test", sp.test_npz))}
+    rec = {k: np.load(data_root / st.recorded.files[f"{k}_npz"]) for k in ("fit", "test")}
+    # the rough distance is step 16's, pair for pair; the far pairs are 16's far pairs
+    z16 = {int(t): float(z) for f in rec.values() for t, z in zip(f["img_t0"], f["img_z"])}
+    zme = {int(t): float(z) for f in mine.values() for t, z in zip(f["img_t0"], f["img_z"])}
+    assert set(z16) == set(zme) == set(s.pairs["t0"].tolist())
+    assert all((math.isnan(z16[t]) and math.isnan(zme[t])) or abs(z16[t] - zme[t]) <= 1e-6 for t in z16)
+    far = lambda f: set(f["img_t0"][~(np.nan_to_num(f["img_z"], nan=np.inf) <= 3.0)].tolist())   # noqa: E731
+    assert far(mine["test"]) == far(rec["test"]) and not far(mine["fit"])
+    # the rule's properties on real holds
+    ec = a.entry_counts()
+    for e, c in ec.items():
+        assert abs(c.test - c.holds / 2) <= 1, (e, c)
+        if c.placements >= 2:
+            assert c.test_placements >= 2, (e, c)
+    # entries with >= 8 TEST holds, counted with the capture-time entries: this split vs step 16's
+    lab16 = {int(t): "TEST" for t in rec["test"]["img_t0"]}
+    n16, nme = {}, {}
+    for h in a.holds.values():
+        if h.entry is None:
+            continue
+        nme[h.entry] = nme.get(h.entry, 0) + (h.label == "TEST")
+        near_t0 = h.pair_t0[h.near]
+        n16[h.entry] = n16.get(h.entry, 0) + any(lab16.get(int(t)) == "TEST" for t in near_t0)
+    j16, jme = _judged(n16), _judged(nme)
+    print(f"CAPTURE SPLIT {name}: FIT {sp.fit_pairs} TEST {sp.test_pairs} pairs; judged at capture: mine {len(jme)} "
+          f"{jme}; step 16 {len(j16)} {j16}; held back {sum(c.held_back for c in ec.values())}, released "
+          f"{sum(c.released for c in ec.values())}")
+    assert len(jme) >= len(j16)
