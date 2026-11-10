@@ -19,3 +19,9 @@ scripts/81_tbs_handeye.py
 scripts/handeye_px.py
 scripts/handeye.py
 scripts/neckfk.py
+# Robot rig files calibtool loads (devel has rig.yaml, rig-phantom09, rig-phantom12 only). File names keep the robots'
+# names at recording time: rig-phantom11* = today's phantom10 (P10), rig-phantom21 = P12 (renamed to phantom12).
+config/rig-phantom11.yaml
+config/rig-phantom11-960.yaml
+config/rig-phantom15.yaml
+config/rig-phantom21.yaml
