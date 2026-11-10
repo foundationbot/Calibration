@@ -158,7 +158,7 @@ class Stat:
     new: float
     live: float
     diff: float                 # new - live (negative: new better)
-    ci: tuple                   # 95 % interval of diff, None when not judged
+    ci: tuple                   # Gates.level_pct (95 %) interval of diff, None when not judged
     n_pairs: int
     n_placements: int
     judged: bool
@@ -171,6 +171,7 @@ class Paired:
     placements: list
     dropped_pairs: dict         # pairs scored by one side only: {"new": n, "live": n}
     gates: Gates
+    boot: dict = field(default=None, repr=False)    # {name: new - live per bootstrap resample} (nan: no data)
 
     def stat(self, name):
         return next(s for s in self.stats if s.name == name)
@@ -252,7 +253,8 @@ def paired(new: Scores, live: Scores, gates: Gates = Gates()) -> Paired:
         ci = None if why else tuple(float(x) for x in np.percentile(valid, q))
         nv, lv = full[k]
         out.append(Stat(k, nv, lv, float(nv - lv) if n else float("nan"), ci, n, npl, not why, why))
-    return Paired(out, ids, {"new": int(len(new.src) - len(common)), "live": int(len(live.src) - len(common))}, gates)
+    return Paired(out, ids, {"new": int(len(new.src) - len(common)), "live": int(len(live.src) - len(common))}, gates,
+                  boot)
 
 
 # ---------------------------------------------------------------- the verdict
@@ -283,9 +285,9 @@ class Verdict:
                 "missing_edges": list(self.missing_edges), "gates": asdict(self.gates)}
 
 
-def _fmt(s: Stat, unit):
+def _fmt(s: Stat, unit, level_pct=95.0):
     ci = f"{s.ci[0]:+.3f} .. {s.ci[1]:+.3f}" if s.ci else "-"
-    return f"{s.new:.3f} vs live {s.live:.3f} {unit}, difference {s.diff:+.3f} (95 % {ci})"
+    return f"{s.new:.3f} vs live {s.live:.3f} {unit}, difference {s.diff:+.3f} ({level_pct:g} % {ci})"
 
 
 def verdict(new: Scores, live, step66_new, gates: Gates = Gates(), live_error=None) -> Verdict:
@@ -325,17 +327,17 @@ def verdict(new: Scores, live, step66_new, gates: Gates = Gates(), live_error=No
         return Verdict("NOT_ENOUGH_DATA", [f"new vs live not comparable: {depth.why or rows.why}"], paired=pr, **base)
     reasons, keep = [], False
     if depth.ci[1] < -gates.depth_margin_pct:
-        reasons.append("new better on median |depth error|: " + _fmt(depth, "%"))
+        reasons.append("new better on median |depth error|: " + _fmt(depth, "%", gates.level_pct))
     else:
         keep = True
-        reasons.append("new not shown better on median |depth error|: " + _fmt(depth, "%"))
+        reasons.append("new not shown better on median |depth error|: " + _fmt(depth, "%", gates.level_pct))
     if rows.ci[1] < -gates.rows_margin_px:
-        reasons.append("new better on row error: " + _fmt(rows, "px"))
+        reasons.append("new better on row error: " + _fmt(rows, "px", gates.level_pct))
     else:
         keep = True
-        reasons.append("new not shown better on row error: " + _fmt(rows, "px"))
+        reasons.append("new not shown better on row error: " + _fmt(rows, "px", gates.level_pct))
     for s in pr.stats:
         if s.name.startswith("band ") and s.judged and s.ci[0] > gates.band_worse_margin_pct:
             keep = True
-            reasons.append(f"new worse in {s.name} m: " + _fmt(s, "%"))
+            reasons.append(f"new worse in {s.name} m: " + _fmt(s, "%", gates.level_pct))
     return Verdict("KEEP_LIVE" if keep else "DEPLOY", reasons, paired=pr, **base)

@@ -97,6 +97,61 @@ def test_one_placement_is_not_judged():
     assert not pr.stat("depth").judged and "placement" in pr.stat("depth").why
 
 
+def _signed(err, dy, placements=4, z=0.75):
+    """Scores with the given signed depth errors (%) and signed row errors (px), one corner per pair, pairs dealt round
+    robin over `placements` takes"""
+    err, dy = np.asarray(err, float), np.asarray(dy, float)
+    n = len(err)
+    return decide.Scores(src=np.arange(n), hold=np.arange(n), placement=np.array([f"t{i % placements}"
+                                                                                  for i in range(n)]),
+                         err_pct=err, z=np.full(n, z), corner_src=np.arange(n), corner_dy=dy)
+
+
+def test_paired_uses_absolute_values_for_depth_and_rows():
+    """median |x| is not |median x| on mixed-sign errors: paired() must take the absolute values first, for the depth
+    error and for the row error dy (which is signed)"""
+    err = [-3.0, -2.5, -2.0, 0.5, 1.0, 1.5, -2.2, 0.7]
+    dy = [-0.9, -0.8, -0.7, 0.1, 0.2, 0.3, -0.75, 0.15]
+    new = _signed(err, dy)
+    live = _signed(np.zeros(8), np.zeros(8))
+    assert np.median(np.abs(err)) != abs(np.median(err)) and np.median(np.abs(dy)) != abs(np.median(dy))
+    pr = decide.paired(new, live, decide.Gates(boot=50))
+    assert pr.stat("depth").new == pytest.approx(np.median(np.abs(err)))
+    assert pr.stat("rows").new == pytest.approx(np.median(np.abs(dy)))
+    assert pr.stat("band 0.6-0.9").new == pytest.approx(np.median(np.abs(err)))
+    st = decide.stats(new)
+    assert st["depth"] == pytest.approx(np.median(np.abs(err))) and st["rows"] == pytest.approx(np.median(np.abs(dy)))
+
+
+@pytest.mark.parametrize("level", [95.0, 80.0])
+def test_interval_holds_level_pct_of_the_resamples(level):
+    """the interval is the central level_pct % of the bootstrap distribution (default 95 %): its ends are the
+    distribution's percentiles, and it holds about level_pct % of the resamples (a little more: medians of few
+    placements repeat, so resamples tie at the ends)"""
+    assert decide.Gates().level_pct == 95.0
+    pr = decide.paired(synthetic(0.5, 0.5), synthetic(), decide.Gates(level_pct=level))
+    for name in ("depth", "rows"):
+        s, b = pr.stat(name), pr.boot[name]
+        inside = np.mean((b >= s.ci[0]) & (b <= s.ci[1]))
+        assert level / 100 - 0.01 <= inside <= level / 100 + 0.05, (name, inside)
+        assert s.ci[0] == pytest.approx(np.percentile(b, (100 - level) / 2))
+        assert s.ci[1] == pytest.approx(np.percentile(b, 100 - (100 - level) / 2))
+
+
+def test_a_band_from_too_few_placements_is_not_judged():
+    """a band with enough pairs from one placement only is not judged (band_min_placements): its pairs share the
+    board's position. Here that band is much worse for the new fit, yet the verdict stays DEPLOY"""
+    full = synthetic(placements=6, holds=30)
+    one = [s for s, p, z in zip(full.src, full.placement, full.z) if 0.9 <= z < 1.3 and p != "take0"]
+    new = synthetic(0.3, 0.3, placements=6, holds=30, band_shift=(2, 3.0), drop_src=one)
+    live = synthetic(placements=6, holds=30, drop_src=one)
+    v = decide.verdict(new, live, step66())
+    band = v.paired.stat("band 0.9-1.3")
+    assert band.n_pairs >= decide.Gates().band_min_pairs and band.n_placements == 1
+    assert not band.judged and "placement" in band.why
+    assert v.decision == "DEPLOY", v.reasons
+
+
 # ---------------------------------------------------------------- the verdict
 
 
@@ -170,6 +225,33 @@ def test_live_not_scorable_needs_the_explicit_gate():
     assert any("omni" in r for r in v.reasons), v.reasons
     assert decide.verdict(synthetic(), None, step66(verdict="FAIL"), g).decision == "KEEP_LIVE"
     assert decide.Gates().allow_deploy_without_live is False
+
+
+def test_depth_is_judged_on_the_intervals_upper_end():
+    """depth interval straddling 0 (new not shown better on depth) while rows are clearly better: KEEP_LIVE. No band is
+    judged here, so only the depth rule can keep live"""
+    new, live = synthetic(rows_scale=0.3, seed=8), synthetic()
+    v = decide.verdict(new, live, step66(), decide.Gates(band_min_pairs=10**6))
+    d, r = v.paired.stat("depth"), v.paired.stat("rows")
+    assert d.ci[0] < 0 < d.ci[1], d
+    assert r.ci[1] < 0, r
+    assert v.decision == "KEEP_LIVE", v.reasons
+    assert any("not shown better on median |depth error|" in x for x in v.reasons)
+
+
+def test_without_live_the_entry_and_edge_checks_still_apply():
+    """live not scorable, deploy without live allowed: fewer than 6 judged entries, or an image edge with no judged
+    entry, is still NOT_ENOUGH_DATA"""
+    g = decide.Gates(allow_deploy_without_live=True, require_all_edges=True)
+    few = dict(list(ALL_EDGES.items())[:5])
+    assert len(few) == 5 and decide.edges_judged(few) == set(decide.EDGES)
+    v = decide.verdict(synthetic(0.3, 0.3), None, step66(few), g)
+    assert v.decision == "NOT_ENOUGH_DATA" and any("5 judged" in r for r in v.reasons), v.reasons
+    no_top = {k: x for k, x in ALL_EDGES.items() if k[0] != "top"}
+    no_top[("right", (0.9, 1.3))] = 0.1
+    v = decide.verdict(synthetic(0.3, 0.3), None, step66(no_top), g)
+    assert v.decision == "NOT_ENOUGH_DATA" and v.missing_edges == ["top"], v.reasons
+    assert decide.verdict(synthetic(0.3, 0.3), None, step66(), g).decision == "LIVE_NOT_SCORABLE_DEPLOY"
 
 
 def test_thresholds_are_named_parameters():
