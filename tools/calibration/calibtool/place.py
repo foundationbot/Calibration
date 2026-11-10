@@ -12,6 +12,7 @@ important first:
                                   height." (or "further back"); reachable only higher / lower within the stand's range
                                   -> "Raise the board. At least N centimetres." (or Lower); not within the stand's
                                   range -> "This one is out of reach. Skipping." and the placement ends as unreachable
+                                  (after 1 s of rest: it is final)
                                   without gravity -> the camera distance alone, as before ("About N centimetres")
   off the target bearing       -> sideways (only for targets with a bearing: adaptive extras)
   otherwise                    -> "Good. That one is done. Step back."
@@ -30,7 +31,9 @@ current direction, reaches depth D (exactly: depth is linear in the floor distan
   - |dh| < D sin(STEEPEST_DEG): not nearly straight below or above the head, where the robot's body is (the plain
     rule "|dh| >= D cannot reach distance D", with a margin), and
   - its centre within MAX_OFF_AXIS_DEG of the optical axis (the image is +-40 deg tall; the board spans +-10-16 deg).
-The board's position is the PnP centre (BoardObs.p); acceptance stays the depth band (protocol.band_of) as before.
+D is the target's own depth, else another depth of its band (BAND_MARGIN_M inside the edges): on phantom10 (camera
+65.9 deg down) 1.6 m deep that close to the axis is near the floor, but the band's 1.4 m is not. The board's position
+is the PnP centre (BoardObs.p); acceptance stays the depth band (protocol.band_of) as before.
 
 Default placements (design section 4 step 1): 0.5, 0.75, 1.1, 1.6 m, the far one (asked at protocol.FAR_ASK_M,
 accepted in FAR_ACCEPT_M, too far beyond FAR_REFUSE_BEYOND_M) and the tilted one at 0.75 m (leaning back on the chair).
@@ -56,6 +59,7 @@ from calibtool import protocol
 
 STILL_S = 0.4            # 9 Nov trial: 1.0 s, then 0.6 s, plus slow detection felt laggy
 STILL_PX = 6.0
+UNREACHABLE_STILL_S = 1.0  # "out of reach" ends the placement, so it waits for a longer rest
 FEW_TAGS = 20          # of 35: fewer readable tags with the board in view = seen too obliquely (9 Nov trial: 8)
 FEW_TAGS_STILL_PX = 25.0   # few tags make the centroid jitter; stillness is judged more loosely then
 LOST_S = 6.0
@@ -66,6 +70,8 @@ REPEAT_S = 30.0          # the same instruction is repeated at most once, after 
 STEEPEST_DEG = 75.0      # a board further below / above the camera than this, seen from the camera: under the head
 MAX_OFF_AXIS_DEG = 30.0  # the board's centre at most this far from the optical axis (image: +-40 deg tall)
 HEIGHT_STEP_M = 0.01     # the stand's range is searched in these steps
+BAND_STEP_M = 0.05       # depths of the target's band tried when its own is out of reach (phantom10: 1.6 m is)
+BAND_MARGIN_M = 0.05     # ... this far inside the band's edges
 DONE_TEXT = "Good. That one is done. Step back."
 UNREACHABLE_TEXT = "This one is out of reach. Skipping."
 SKIP_TEXT = "Skipping this one."
@@ -276,6 +282,8 @@ class PlacementGuide:
             self.rest_t = self._start[0]
             return self._say(t, kind, DONE_TEXT)
         if kind == "unreachable":
+            if t - self._start[0] < UNREACHABLE_STILL_S:
+                return None                 # final: a pause while carrying the board must not end the placement
             self.done, self.result = True, "unreachable"
             self.rest_t = self._start[0]
             return self._say(t, kind, UNREACHABLE_TEXT)
@@ -301,20 +309,38 @@ class PlacementGuide:
         kind, text, _, _ = self._judge(obs, up, sp)
         return {"good": (kind, DONE_TEXT), "unreachable": (kind, UNREACHABLE_TEXT)}.get(kind, (kind, text))
 
+    def depths(self):
+        """the depths to aim for, best first: the target's own, then the rest of its band (a capture counts toward
+        the band it measured) in BAND_STEP_M steps, BAND_MARGIN_M inside its edges"""
+        t = self.target
+        D = t.distance_m
+        lo, hi = t.accept
+        if t.refuse_beyond_m is not None:
+            hi = min(hi, t.refuse_beyond_m)
+        hi = min(hi, D + 1.0)
+        out = [D]
+        for k in range(1, 40):
+            for d in (D - k * BAND_STEP_M, D + k * BAND_STEP_M):
+                if lo + BAND_MARGIN_M - 1e-9 <= d <= hi - BAND_MARGIN_M + 1e-9:
+                    out.append(d)
+        return out
+
     def _distance(self, obs, up, sp):
-        """the distance correction with gravity: (kind, text, key, err)"""
-        D = self.target.distance_m
+        """the distance correction with gravity: (kind, text, key, err). At this height if any depth of the band can
+        be reached there (the target's own preferred), else the smallest height change within the stand's range"""
         dh, dxy, h = sp
-        x = floor_distance_for(D, dh, up, h)
-        if x is not None:
-            move = dxy - x
-            key, word = ("closer", "closer") if move > 0 else ("back", "further back")
-            return "correction", f"Move the board {_cm(move)} centimetres {word}. {KEEP_HEIGHT}", key, abs(move)
+        depths = self.depths()
+        for d in depths:
+            x = floor_distance_for(d, dh, up, h)
+            if x is not None:
+                move = dxy - x
+                key, word = ("closer", "closer") if move > 0 else ("back", "further back")
+                return "correction", f"Move the board {_cm(move)} centimetres {word}. {KEEP_HEIGHT}", key, abs(move)
         h0 = dh if self.h0 is None else self.h0
         lo, hi = h0 - self.stand.lower_max_m, h0 + self.stand.raise_max_m
         n = int(math.floor((hi - lo) / HEIGHT_STEP_M + 1e-9))
         ok = [lo + k * HEIGHT_STEP_M for k in range(n + 1)]
-        ok = [v for v in ok if floor_distance_for(D, v, up, h) is not None]
+        ok = [v for v in ok if any(floor_distance_for(d, v, up, h) is not None for d in depths)]
         if not ok:
             return "unreachable", UNREACHABLE_TEXT, "unreachable", None
         best = min(ok, key=lambda v: abs(v - dh))

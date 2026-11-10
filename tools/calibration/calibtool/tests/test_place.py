@@ -228,11 +228,11 @@ def at(dh, dxy, pitch=PITCH, lateral=0.0, n_tags=35, cut=()):
     return detect.BoardObs(c, float(p[2]), n_tags, 4 * n_tags, bool(cut), tuple(cut), c - 150, c + 150, p)
 
 
-def gguide(name, **kw):
-    return guide(place.target(name), up=up_cam(), stand=STAND, **kw)
+def gguide(name, pitch=PITCH, **kw):
+    return guide(place.target(name), up=up_cam(pitch), stand=STAND, **kw)
 
 
-AT_FEET = (-1.1, 0.45)                              # board centre 0.4 m above the floor, 45 cm in front of the camera
+AT_FEET = (-1.2, 0.45)          # a board standing on the floor at the feet: centre 0.3 m up, 45 cm in front
 
 
 def test_a_board_at_the_feet_is_already_in_the_1_1_m_band():
@@ -244,18 +244,26 @@ def test_a_board_at_the_feet_is_already_in_the_1_1_m_band():
 
 @pytest.mark.parametrize("name", ["0.75 m", "0.5 m", "tilted"])
 def test_a_placement_the_stand_cannot_reach_is_skipped_at_once(name):
-    """at the feet the board is 1.1 m below the camera; raised by the stand's 30 cm it is still 0.8 m below, too low
-    for any board 0.75 m from the camera: say so and finish, no 180 s wait"""
+    """at the feet the board is 1.2 m below the camera; raised by the stand's 30 cm it is still 0.9 m below, too low
+    for any board in the 0.75 m band (up to 0.925 m deep): say so and finish, no 180 s wait"""
     g = gguide(name)
     s = feed(g, [at(*AT_FEET)] * 4)
     assert [(x.kind, x.text) for x in s] == [("unreachable", "This one is out of reach. Skipping.")]
     assert g.done and g.result == "unreachable"
 
 
+def test_a_short_pause_while_carrying_does_not_skip_a_placement():
+    """the skip is final, so it waits for a full second of rest, not the 0.4 s a correction waits for"""
+    g = gguide("0.75 m")
+    assert feed(g, [at(*AT_FEET)] * 4, dt=0.2) == []               # 0.6 s at rest, then carried on
+    assert feed(g, [at(-0.9, 0.9 + 0.1 * i) for i in range(6)], t0=1.0, dt=0.2) == []
+    assert not g.done
+
+
 def test_a_board_too_low_but_within_the_stands_reach_is_raised_first():
     g = gguide("0.75 m")
     s1 = feed(g, [at(-0.9, 0.9)] * 4)[0]
-    assert (s1.kind, s1.text) == ("correction", "Raise the board. At least 20 centimetres.")
+    assert (s1.kind, s1.text) == ("correction", "Raise the board. At least 10 centimetres.")
     s2 = feed(g, [at(-0.6, 0.9)] * 4, t0=10.0)[0].text            # raised 30 cm (one stand step)
     m = re.fullmatch(r"Good\. Move the board (\d+) centimetres (closer|further back)\. Keep the same height\.", s2)
     assert m, s2
@@ -266,9 +274,9 @@ def test_a_board_too_low_but_within_the_stands_reach_is_raised_first():
 
 def test_a_far_board_too_high_to_be_seen_at_that_distance_is_lowered():
     """the camera looks down 50 deg: 1.8 m away, a board only 0.6 m below the camera would sit ~34 deg above the
-    optical axis, at the image's top edge; lowered ~12 cm it is within 30 deg"""
+    optical axis, at the image's top edge; a little lower (and at 1.75 m, still in the far band) it is within 30 deg"""
     s = feed(gguide("far"), [at(-0.6, 0.9)] * 4)[0]
-    assert (s.kind, s.text) == ("correction", "Lower the board. At least 20 centimetres.")
+    assert (s.kind, s.text) == ("correction", "Lower the board. At least 10 centimetres.")
 
 
 @pytest.mark.parametrize("name,dh,dxy", [("1.6 m", -1.1, 0.45), ("1.1 m", -0.6, 2.0), ("far", -0.9, 1.2),
@@ -315,6 +323,54 @@ def test_partial_progress_wording_for_every_direction():
     feed(g, [obs(v=40, cut=("top",))] * 4)
     s = feed(g, [obs(v=4, cut=("top",))] * 4, t0=10.0)
     assert s[0].text.startswith("Not yet. Lower the board.")
+
+
+def follow(g, dh, dxy, pitch=PITCH, steps=6):
+    """an operator who does exactly what the guide says (the stand's height in whole 10 cm steps): the texts"""
+    texts, t = [], 0.0
+    for _ in range(steps):
+        s = feed(g, [at(dh, dxy, pitch)] * 4, t0=t)
+        t += 10.0
+        if not s:
+            break
+        texts.append(s[0].text)
+        if s[0].kind in ("good", "unreachable"):
+            break
+        m = re.search(r"(\d+) (?:more )?centimetres", s[0].text)
+        n = int(m.group(1)) / 100.0
+        if "closer" in s[0].text:
+            dxy -= n
+        elif "further back" in s[0].text:
+            dxy += n
+        elif "Raise" in s[0].text or "higher" in s[0].text:
+            dh += n
+        elif "Lower" in s[0].text or "lower" in s[0].text:
+            dh -= n
+    return texts, dh
+
+
+@pytest.mark.parametrize("pitch", [50.0, 65.9])
+def test_following_the_guide_ends_good_or_out_of_reach_never_beyond_the_stand(pitch):
+    """from any resting place in front of the robot, for every default placement: the guide says at once that it is
+    out of reach, or an operator following it (height only within the stand's range) gets 'Good' in a few steps"""
+    for name in ("0.5 m", "0.75 m", "1.1 m", "1.6 m", "far"):
+        for dh0 in (-1.2, -1.0, -0.8, -0.6, -0.4):
+            for dxy0 in (0.3, 0.6, 0.9, 1.2, 1.6):
+                if at(dh0, dxy0, pitch).z <= 0.2:
+                    continue
+                texts, dh = follow(gguide(name, pitch), dh0, dxy0, pitch)
+                where = (name, dh0, dxy0, texts)
+                assert texts[-1] in (place.DONE_TEXT, place.UNREACHABLE_TEXT), where
+                if texts[-1] == place.UNREACHABLE_TEXT:
+                    assert len(texts) == 1, where
+                assert dh0 - STAND.lower_max_m - 1e-9 <= dh <= dh0 + STAND.raise_max_m + 1e-9, where
+
+
+def test_a_band_depth_short_of_the_nominal_counts_when_the_nominal_is_out_of_reach():
+    """phantom10 (camera 65.9 deg down, 9 Nov live): 1.6 m deep within 30 deg of the axis is near the floor, out of
+    the stand's reach; the 1.6 m band starts at 1.35 m, which the trial reached (1.43 m) -> guide there, not skip"""
+    texts, _ = follow(gguide("1.6 m", 65.9), -0.6, 0.72, pitch=65.9)
+    assert texts[-1] == place.DONE_TEXT, texts
 
 
 def test_a_height_change_counts_as_movement():
