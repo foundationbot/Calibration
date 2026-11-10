@@ -467,7 +467,8 @@ def test_replay_new_beats_live_and_deploys(name, assignment, data_root, tmp_path
     assert not worse, f"new not better on {worse}"
     v = js["verdicts"][DEFAULT]
     assert v["decision"] == "DEPLOY", v["reasons"]
-    assert js["verdicts"][ALL4]["decision"] in decide.DECISIONS
+    # all four edges required: p21 has no judged top entry (measured 9 Nov, both assignments)
+    assert js["verdicts"][ALL4]["decision"] == {"p21_1105": "NOT_ENOUGH_DATA", "p10_1106": "DEPLOY"}[name]
     if name == "p21_1105":
         last = js["placements"][-1]["sentences"]
         assert any(s.startswith(P21_LEFT) for s in last) and any(s.startswith(P21_BOTTOM_LEFT) for s in last)

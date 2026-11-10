@@ -184,9 +184,17 @@ lists; defaults + one tilted placement only, which leaves out p10 `n6_litR/nearR
 | judged >= 6 entries at 10 TEST holds | 5 | 5 | no |
 | each side judged | left, right, top (not bottom) | right, bottom (not left, top) | no |
 
+"Each side judged" under the shared edge rule (C3: a corner cell counts for both its edges, `coverage.edges_of_cell`,
+the rule coverage, planner and verdict now share): the row does not change, so it was not re-measured. No entry
+judged at 10 TEST holds in either session is a corner cell (the lists below), and the most TEST holds in one cell of
+each side are the same under both rules on the stored sessions (step 16's split: p21 left 9, top 8, right 21, bottom
+16; p10 left 12, top 12, right 25, bottom 9, where bottom-left 0.9-1.3 also has 9). Checked 9 Nov with
+`replay.Collection` on both sessions (`~/calibtool/c3-work/reached.json` on Moonstone).
+
 Step 66 judged 9 and 7 entries itself. It needs 8 holds and uses the fitted principal point, and both sessions passed.
 So the 10-hold, 6-entry, thirds and rim thresholds are stricter than any passing session reached. Those are C3's
-numbers to set.
+numbers to set. **Set in C3 (9 Nov):** each target is now the lower of what the two sessions reached, counted as the
+replay counts it (capture-time assignment), x 2/3 for per_hold 2; see the design plan section 5 and `coverage.py`.
 
 What a target costs in poses: a TEST entry needs 10 TEST holds, which is about 20 detected holds in its (cell, bin)
 at holdout_every 2. A default placement delivers that for at most 1-3 entries; each of the 0.9-1.3 m edge entries took
