@@ -31,22 +31,22 @@ def rig():
     return pipeline.load_rig(RIG_PATH)
 
 
-def _project(P):
-    """camera-frame points -> pixels, plain equidistant lens (r = f theta) at FOCAL and PP"""
+def _project(P, pp=PP):
+    """camera-frame points -> pixels, plain equidistant lens (r = f theta) at FOCAL and principal point pp"""
     rr = np.hypot(P[:, 0], P[:, 1])
     th = np.arctan2(rr, P[:, 2])
     s = np.where(rr > 1e-12, FOCAL * th / np.maximum(rr, 1e-12), FOCAL / P[:, 2])
-    return np.c_[PP[0] + s * P[:, 0], PP[1] + s * P[:, 1]]
+    return np.c_[pp[0] + s * P[:, 0], pp[1] + s * P[:, 1]]
 
 
-def _patch_pixels(board, cell, z, tags=PATCH_TAGS, jitter=0.0, rng=None):
+def _patch_pixels(board, cell, z, tags=PATCH_TAGS, jitter=0.0, rng=None, pp=PP):
     """(tag, k, u, v) of the patch facing the camera at depth z with its corners' mean pixel in `cell`"""
     obj = np.concatenate([board.obj_points(t) for t in tags])
     du, dv = OFFSET[cell]
     d = math.hypot(du, dv)
     lat = np.zeros(2) if d == 0 else z * math.tan(d / FOCAL) * np.array([du, dv]) / d
     P = obj - obj.mean(0) + np.r_[lat, z]
-    uv = _project(P)
+    uv = _project(P, pp)
     if jitter and rng is not None:
         uv = uv + rng.normal(0, jitter, uv.shape)
     tag = np.repeat(np.asarray(tags), 4)
@@ -54,9 +54,9 @@ def _patch_pixels(board, cell, z, tags=PATCH_TAGS, jitter=0.0, rng=None):
     return tag, k, uv
 
 
-def synth_take(board, holds, t_start, seed=0):
+def synth_take(board, holds, t_start, seed=0, pp=PP):
     """a step-15b corner dict. holds: [(cell, z or [z per pair], n_pairs)] in time order, pose = position in the
-    list; z None: the pair sees one tag only (too few corners for a distance: nan)"""
+    list; z None: the pair sees one tag only (too few corners for a distance: nan); pp: the lens's principal point"""
     rng = np.random.default_rng(seed)
     out = {k: [] for k in ("img_hold", "img_t0", "img_t1", "img_yaw", "img_pitch", "img_ay", "img_ap", "det_img",
                            "det_cam", "det_tag", "det_k", "det_u", "det_v")}
@@ -74,9 +74,9 @@ def synth_take(board, holds, t_start, seed=0):
             out["img_ap"].append(0)
             t += 50_000_000
             if zp is None:
-                tag, k, uv = _patch_pixels(board, cell, 0.75, tags=PATCH_TAGS[:1])
+                tag, k, uv = _patch_pixels(board, cell, 0.75, tags=PATCH_TAGS[:1], pp=pp)
             else:
-                tag, k, uv = _patch_pixels(board, cell, zp, jitter=0.05, rng=rng)
+                tag, k, uv = _patch_pixels(board, cell, zp, jitter=0.05, rng=rng, pp=pp)
             zz = 0.75 if zp is None else zp
             for cam, shift in ((0, 0.0), (1, -FOCAL * 0.044 / zz)):
                 for (tg, kk), (u, v) in zip(zip(tag, k), uv):
@@ -91,9 +91,9 @@ def synth_take(board, holds, t_start, seed=0):
     return {k: np.asarray(v, np.int64 if k in ints else float) for k, v in out.items()}
 
 
-def synth_session(board, takes):
+def synth_session(board, takes, pp=PP):
     """takes: [(name, holds)], recorded one after the other in list order"""
-    files = [(name, synth_take(board, holds, t_start=(i + 1) * 10**12, seed=i)) for i, (name, holds) in
+    files = [(name, synth_take(board, holds, t_start=(i + 1) * 10**12, seed=i, pp=pp)) for i, (name, holds) in
              enumerate(takes)]
     return Session.from_files(files, name="synth")
 
@@ -130,6 +130,38 @@ def test_far_and_unmeasurable_pairs_are_test(rig, tmp_path):
         if p["hold"][i] == 1 or (p["hold"][i] == 2 and i % 2 == 1) or (p["hold"][i] == 4 and i % 2 == 1):
             assert zz is not None and far_or_nan(np.array([zz]))[0], (i, zz)
     assert math.isclose(tz[int(p["t0"][s.pairs["hold"] == 1][0])], 3.5, rel_tol=1e-3)
+
+
+def test_far_pairs_of_a_fit_hold_are_test(rig, tmp_path):
+    """a hold labelled FIT keeps its far pair (beyond max_fit_z) and its unmeasurable pair (one tag) on the TEST side:
+    the pair's label is TEST whatever its hold's (rule 1, as step 16)"""
+    s = synth_session(rig.board, [("A", [("centre", 0.5, 2), ("centre", [0.5, 3.5], 2), ("centre", 0.5, 2),
+                                         ("centre", [0.5, None], 2)])])
+    a, seen = run(rig, s)
+    assert [lab for *_, lab in seen] == ["TEST", "FIT", "TEST", "FIT"]
+    lab = a.pair_labels()
+    p = s.pairs
+    for h, odd in ((1, "far"), (3, "nan")):
+        t0 = p["t0"][p["hold"] == h]
+        assert lab[int(t0[0])] == "FIT" and lab[int(t0[1])] == "TEST", (h, odd)
+    sp = a.write_split(s, tmp_path)
+    test_t0 = set(np.load(sp.test_npz)["img_t0"].tolist())
+    assert {int(p["t0"][p["hold"] == h][1]) for h in (1, 3)} <= test_t0
+
+
+def test_an_off_centre_principal_point_is_used(rig):
+    """distance and cell are measured against the NOMINAL principal point given to the Assigner, not the image
+    centre: holds made with a lens whose principal point is (800, 250) read their constructed cell and distance"""
+    pp = (800.0, 250.0)
+    s = synth_session(rig.board, [("A", [("centre", 0.5, 2), ("left", 0.75, 2), ("bottom", 1.1, 2)])], pp=pp)
+    from calibtool import assign
+    a = assign.Assigner(rig, pp, FOCAL)
+    for h in assign.capture_holds(s):
+        a.observe(h)
+    got = {h.hold: h.entry for h in a.holds.values()}
+    assert got == {0: ("centre", (0.4, 0.6)), 1: ("left", (0.6, 0.9)), 2: ("bottom", (0.9, 1.3))}, got
+    for h, z in zip(a.holds.values(), (0.5, 0.75, 1.1)):
+        assert h.z == pytest.approx(z, rel=2e-3), (h.hold, h.z)
 
 
 # ---------------------------------------------------------------- 5. the written split
@@ -274,6 +306,20 @@ def test_entry_never_given_a_second_placement(rig):
     a, _ = run(rig, s, release_at_end=False)
     a.finish()
     assert [h.label for h in a.holds.values()].count("TEST") == 5
+
+
+@pytest.mark.parametrize("target,captured,released", [(10, [0, 2, 4, 6, 8], [10, 12]),
+                                                        (6, [0, 2, 4], [6, 8, 10, 12])])
+def test_which_held_back_holds_are_released(rig, target, captured, released):
+    """rule 3 releases the held-back holds spread evenly over them in capture order: of `held` held-back holds, with
+    `need` to release, the int((i + 0.5) x held / need)-th for i < need. 14 holds of one placement: target 10 holds
+    back holds 9-13 and releases 2 (10, 12); target 6 holds back 5-13 and releases 4 (6, 8, 10, 12)"""
+    s = synth_session(rig.board, [("P1", [("centre", 0.5, 2)] * 14)])
+    a, seen = run(rig, s, target_test=target)
+    assert [h for h, _, lab in seen if lab == "TEST"] == captured
+    a.finish()
+    assert sorted(h.hold for h in a.holds.values() if h.released) == released
+    assert sorted(h.hold for h in a.holds.values() if h.label == "TEST") == sorted(captured + released)
 
 
 def test_observe_after_finish_is_refused(rig):
