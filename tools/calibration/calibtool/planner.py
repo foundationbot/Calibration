@@ -111,9 +111,9 @@ def _sum_dicts(ds) -> dict:
 
 def gain(fit: cv.FitTally, entries: dict, far_bands: dict, d: cv.Deficit, test_holds=10) -> float:
     """what a (simulated) contribution adds to deficit d, in d's units"""
-    if d.kind in ("edge", "box", "third", "rim"):
+    if d.kind in ("edge", "strip", "box", "third", "rim"):
         t = fit.cams[d.cam]
-        if d.kind == "edge":
+        if d.kind in ("edge", "strip"):
             return t.edges[d.region]
         if d.kind == "box":
             return t.boxes[d.region]

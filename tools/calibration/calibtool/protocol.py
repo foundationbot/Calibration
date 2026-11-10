@@ -32,6 +32,9 @@ from calibtool import paths
 
 MIN_TAGS = 6
 STILL_PX = 1.0
+# stereo pairs kept per still pose (15b --per-hold): 2 is the smallest with no measurable loss (protocol results
+# section 2: per_hold 1/2/3/5 on p10 6 Nov); the stored sessions have 3 (coverage.STORED_PER_HOLD)
+PER_HOLD = 2
 SEC_PER_POSE = 3.1                       # measured: neckgrid logs "(3.1 s)" per pose, ramp 1.0 + hold 2.0 s
 NOMINAL = (0.5, 0.75, 1.1, 1.6, 2.0, 3.0)
 GRID_PITCH = tuple(float(v) for v in np.arange(-24, 25, 8))          # = planner.GRID_PITCH

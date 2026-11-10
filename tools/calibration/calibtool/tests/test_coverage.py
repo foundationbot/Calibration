@@ -84,7 +84,7 @@ def _tally(edges, boxes, n=10000, rim=2000, thirds=6000):
 
 P21_E0 = {"left": 176, "right": 1099, "top": 2983, "bottom": 3648}
 P21_B0 = {"top-left": 89, "top-right": 155, "bottom-left": 50, "bottom-right": 588}
-FINE_E = {"left": 1000, "right": 1000, "top": 1000, "bottom": 1000}
+FINE_E = {"left": 3000, "right": 3000, "top": 3000, "bottom": 3000}      # above every absolute strip target
 FINE_B = {"top-left": 500, "top-right": 500, "bottom-left": 500, "bottom-right": 500}
 
 
@@ -159,11 +159,12 @@ def test_edge_sentence_direction(edge, cam):
     b = FINE_B
     cov = _cov(e0=e, b0=b) if cam == 0 else _cov(e1=e, b1=b, e0=FINE_E, b0=FINE_B)
     d = cov.deficits(cv.Targets())
-    assert [(x.kind, x.cam, x.region) for x in d] == [("edge", cam, edge)]
+    want = [("edge", cam, edge)] + ([("strip", cam, "bottom")] if edge == "bottom" else [])
+    assert [(x.kind, x.cam, x.region) for x in d] == want
     s = cv.sentence(d[0])
     cam_word = "Left camera" if cam == 0 else "Right camera"
     opp = cv.MIRROR[edge]
-    assert s.startswith(f"{cam_word}, {edge} edge: 100 corners vs 1,000 on the {opp} edge (10x fewer).")
+    assert s.startswith(f"{cam_word}, {edge} edge: 100 corners vs 3,000 on the {opp} edge (30x fewer).")
     assert EDGE_WORDS[edge] in s
     _check_wording(s)
 
@@ -199,7 +200,8 @@ def test_sentences_wording_for_every_kind():
     for s in ss:
         _check_wording(s)
         assert "robot's right" not in s or "YOUR left" in s
-    assert any(s.startswith("Left camera, top-left third: 1,000 corners of 5,000 wanted") for s in ss)
+    assert any(s.startswith(f"Left camera, top-left third: 1,000 corners of {cv.Targets().third_min:,} wanted")
+               for s in ss)
     assert any("Far boards" in s for s in ss)
     # an unfinished TEST entry, with its side named from the operator
     ent = [s for s, x in zip(ss, d) if x.kind == "entry"]
@@ -225,6 +227,111 @@ def test_a_judged_corner_cell_covers_both_its_edges():
     assert (sides["bottom"].have, sides["right"].have, sides["left"].have) == (4, 4, 0)
     for cell in lenscells.CELLS:
         assert cv.edges_of_cell(cell) == decide.edges_judged([(cell, (0.6, 0.9))]), cell
+
+
+# ---------------------------------------------------------------- targets re-based on the stored sessions (C3)
+
+
+def test_targets_are_what_both_stored_sessions_reached():
+    """per_hold 3 (the stored sessions): each pair/corner target is the lower of what p21 5 Nov and p10 6 Nov reached,
+    as replay.Collection counts it at the end (capture-time assignment, the labels finish() leaves). Hold counts are
+    the same values (a hold is a pose, whatever per_hold)"""
+    t3 = cv.Targets.for_per_hold(3)
+    assert (t3.pairs_min, t3.third_min, t3.rim_min, t3.far_pairs_min, t3.strip_min) == \
+        (cv.REACHED_FIT_PAIRS, cv.REACHED_THIRD, cv.REACHED_RIM, cv.REACHED_FAR_PAIRS,
+         {"bottom": cv.REACHED_STRIP_BOTTOM})
+    assert (cv.REACHED_FIT_PAIRS, cv.REACHED_THIRD, cv.REACHED_RIM, cv.REACHED_FAR_PAIRS, cv.REACHED_STRIP_BOTTOM) == \
+        (476, 3665, 486, 79, 3004)
+    assert (t3.test_holds, t3.judged_min, t3.side_holds, t3.far_band_min) == (10, 6, 9, 21)
+    assert t3.required_sides == cv.REQUIRED_EDGES == frozenset({"left", "right", "bottom"})
+
+
+def test_default_targets_are_scaled_to_two_pairs_per_pose():
+    """the protocol's per_hold 2 keeps 2/3 of the pairs and corners of per_hold 3 (protocol results, section 2):
+    pair and corner targets x 2/3 (rounded down), hold targets unchanged"""
+    from calibtool import protocol
+    assert protocol.PER_HOLD == cv.PER_HOLD == 2 and cv.STORED_PER_HOLD == 3
+    t, t3 = cv.Targets(), cv.Targets.for_per_hold(3)
+    assert t == cv.Targets.for_per_hold(2)
+    assert (t.pairs_min, t.third_min, t.rim_min, t.far_pairs_min, t.strip_min["bottom"]) == (317, 2443, 324, 52, 2002)
+    assert (t.test_holds, t.judged_min, t.side_holds, t.far_band_min) == \
+        (t3.test_holds, t3.judged_min, t3.side_holds, t3.far_band_min)
+    assert cv.Targets.for_per_hold(3, judged_min=7).judged_min == 7
+
+
+def _fine_test(entries=None):
+    """a TEST tally with every side covered, both far bands full, 7 judged entries; entries ({entry: holds}) override"""
+    ent = {("left", (0.6, 0.9)): 12, ("right", (0.6, 0.9)): 12, ("bottom", (0.6, 0.9)): 12, ("top", (0.6, 0.9)): 12,
+           ("centre", (0.6, 0.9)): 12, ("centre", (0.4, 0.6)): 12, ("centre", (0.9, 1.3)): 12}
+    ent.update(entries or {})
+    return cv.TestTally(entries={k: v for k, v in ent.items() if v}, far_bands={(1.3, 1.7): 30, (1.7, 2.3): 30})
+
+
+def test_bottom_strip_target_per_camera():
+    e = dict(FINE_E, bottom=1500, top=1500)                  # balanced, but below the absolute bottom-strip target
+    cov = _cov(e0=e, b0=FINE_B, e1=e, b1=FINE_B)
+    d = cov.deficits(cv.Targets())
+    assert [(x.kind, x.cam, x.region, x.have, x.want) for x in d] == \
+        [("strip", c, "bottom", 1500, cv.Targets().strip_min["bottom"]) for c in (0, 1)]
+    assert all(x.blocks and x.weight == cv.Targets().weights["strip"] for x in d)
+    s = cv.sentence(d[0])
+    assert s.startswith(f"Left camera, bottom edge strip: 1,500 corners of {cv.Targets().strip_min['bottom']:,} "
+                        f"wanted (502 short).")
+    assert "lower" in s and "tilted" in s
+
+
+def test_stop_rule_blocking_and_requested_deficits():
+    """the stop rule (Coverage.stop_met): no blocking deficit. Blocking: the absolute FIT targets (thirds, rim, pairs,
+    far pairs, bottom strip), the judged-entry count, the far bands and a required side (left, right, bottom) without
+    side_holds TEST holds in one of its cells. Asked for, not blocking: the comparative edge/box balance (neither
+    passing session met it: p21 left edge 176 vs 1,099, p10 right 143 vs 408), single entries short of test_holds,
+    and the top side"""
+    t = cv.Targets()
+    cov = _cov(e0=FINE_E, b0=FINE_B)
+    cov.test = _fine_test()
+    assert cov.deficits(t) == [] and cov.stop_met(t)
+    cov = _cov()                                             # p21's lopsided left edge and bottom-left box
+    cov.test = _fine_test({("top", (0.6, 0.9)): 3, ("left", (0.9, 1.3)): 4})
+    d = cov.deficits(t)
+    kinds = {(x.kind, x.region): x.blocks for x in d}
+    assert kinds == {("edge", "left"): False, ("box", "bottom-left"): False, ("side", "top"): False,
+                     ("entry", ("top", (0.6, 0.9))): False, ("entry", ("left", (0.9, 1.3))): False}, kinds
+    assert cov.stop_met(t) and cov.blocking(t) == []
+    side = next(x for x in d if x.kind == "side")
+    assert "not required" in cv.sentence(side)
+    for kw, kind in (({"thirds": 100}, "third"), ({"rim": 10}, "rim"), ({"far": 5}, "far")):
+        c = _cov(e0=FINE_E, b0=FINE_B, **kw)
+        c.test = _fine_test()
+        assert not c.stop_met(t) and {x.kind for x in c.blocking(t)} == {kind}
+    for side_ in ("left", "right", "bottom"):
+        c = _cov(e0=FINE_E, b0=FINE_B)
+        c.test = _fine_test({(side_, (0.6, 0.9)): 8})
+        b = c.blocking(t)
+        assert [(x.kind, x.region, x.have, x.want) for x in b] == [("side", side_, 8, 9)], b
+        assert "not required" not in cv.sentence(b[0])
+    c = _cov(e0=FINE_E, b0=FINE_B)
+    c.test = _fine_test({("centre", (0.4, 0.6)): 0, ("centre", (0.9, 1.3)): 0})
+    assert [x.kind for x in c.blocking(t)] == ["judged"]
+    c.test = cv.TestTally(_fine_test().entries, {(1.3, 1.7): 30, (1.7, 2.3): 20})
+    assert [(x.kind, x.region) for x in c.blocking(t)] == [("far_band", (1.7, 2.3))]
+    with pytest.raises(ValueError, match="TEST"):
+        _cov().stop_met(t)
+
+
+def test_side_counts_holds_from_side_holds_on():
+    """a side is covered by side_holds (9) TEST holds in one of its cells, a corner cell counting for both its sides
+    (the weakest required side either stored session reached: p21 left 9)"""
+    c = _cov(e0=FINE_E, b0=FINE_B)
+    c.test = _fine_test({("left", (0.6, 0.9)): 0, ("bottom-left", (0.9, 1.3)): 9})
+    assert not any(x.kind == "side" for x in c.deficits(cv.Targets()))
+
+
+def test_deficit_order_edges_strips_boxes_rest():
+    e = dict(FINE_E, right=50, bottom=1000, top=1000)
+    b = dict(FINE_B, **{"top-left": 10})
+    d = _cov(e0=e, b0=b, thirds=1000).deficits(cv.Targets())
+    kinds = [x.kind for x in d]
+    assert kinds[:3] == ["edge", "strip", "box"], kinds
 
 
 def test_ratio_words():

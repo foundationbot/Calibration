@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from calibtool.protocol import PER_HOLD
+
 EDGE_PX = 80
 EDGE_BOX_PX = 160
 RIM_FRAC = 0.8
@@ -180,31 +182,77 @@ def split16_assignment(session, z, max_fit_z=3.0, holdout_every=2) -> dict:
 
 # ---------------------------------------------------------------- targets and deficits
 
+# Targets re-based in M1 C3 (9 Nov 2026, decided with the user). The 4 Nov handheld-route targets (COLLECT-lens-data.md:
+# thirds >= ~5,000, rim >= ~1,500, >= 50 far pairs, >= 6 entries at 10 TEST holds) were met by neither stored neck-grid
+# session, yet both gave the best results so far (held-out median -0.04 / +0.04 %, rows 0.28 / 0.21 px). So each target
+# is now what BOTH sessions reached, the lower of the two, measured the way the stop rule counts (replay.Collection at
+# the end of the session: capture-time assignment, labels as finish() leaves them; regions and far pairs over all
+# corners captured, pairs = FIT pairs). Values at the stored sessions' 3 pairs per pose:
+STORED_PER_HOLD = 3         # the stored sessions' corner files: 15b per_hold 3
+REACHED_FIT_PAIRS = 476     # FIT pairs: p21 476, p10 557
+REACHED_THIRD = 3665        # corners per image-corner third, each camera: p21 min 3,665 (cam0 top-left), p10 min 5,814
+REACHED_RIM = 486           # rim corners, each camera: p21 912 / 972, p10 486 (cam0) / 1,034
+REACHED_FAR_PAIRS = 79      # pairs at 1.7-3.0 m: p21 79, p10 127
+REACHED_STRIP_BOTTOM = 3004     # corners within EDGE_PX of the image bottom, each camera: p21 3,648 / 4,428,
+                                # p10 3,004 (cam0) / 3,465
+# hold counts (a hold is a pose: the same at any per_hold)
+REACHED_JUDGED = 6          # entries with >= 10 TEST holds: p21 6, p10 7
+REACHED_SIDE_HOLDS = 9      # most TEST holds in one cell of a required side, weakest side: p21 left 9 (p10 left 11,
+                            # bottom 12); step 66 needs 8
+REACHED_FAR_BAND = 21       # TEST holds per far band: p21 21 / 21, p10 51 / 25
+
+
+def per_hold_scaled(n, per_hold) -> int:
+    """a pair or corner count reached at STORED_PER_HOLD pairs per pose, at per_hold (rounded down): per_hold 2 keeps
+    2/3 of the pairs and corners (protocol results section 2: 783 vs 1,159 pairs on p10 6 Nov)"""
+    return int(n * per_hold) // STORED_PER_HOLD
+
 
 @dataclass(frozen=True)
 class Targets:
-    """what a session should reach (COLLECT-lens-data.md, design section 5). The relative edge/box rule: a strip or
-    box with fewer than ratio x its mirror image's count is short (p21 5 Nov: left 176 vs right 1,099)."""
-    pairs_min: int = 500
-    third_min: int = 5000               # each image-corner third
-    rim_min: int = 1500
-    far_pairs_min: int = 50
+    """what a session should reach before it stops (design section 5, re-based in M1 C3: the REACHED_* constants),
+    by default for PER_HOLD (2) pairs per pose; Targets.for_per_hold(3) for the stored sessions.
+
+    The stop rule (Coverage.stop_met): no blocking deficit. Blocking: pairs, the corner thirds, the rim, the far pairs,
+    the bottom edge strip (strip_min, per camera), the judged-entry count, each far band, and each required side
+    (required_sides: left, right, bottom) with side_holds TEST holds in one of its cells. Asked for but not blocking:
+    the comparative edge/box balance (a strip or box with fewer than ratio x its mirror image's count; p21 5 Nov: left
+    176 vs right 1,099; neither passing session met it, p10's right edge 143 vs 408), each single entry short of
+    test_holds, and the top side."""
+    pairs_min: int = per_hold_scaled(REACHED_FIT_PAIRS, PER_HOLD)
+    third_min: int = per_hold_scaled(REACHED_THIRD, PER_HOLD)          # each image-corner third, each camera
+    rim_min: int = per_hold_scaled(REACHED_RIM, PER_HOLD)
+    far_pairs_min: int = per_hold_scaled(REACHED_FAR_PAIRS, PER_HOLD)
+    # absolute edge-strip targets {edge: corners}, each camera: the bottom (the tilted placement's job)
+    strip_min: dict = field(default_factory=lambda: {"bottom": per_hold_scaled(REACHED_STRIP_BOTTOM, PER_HOLD)})
     edge_ratio: float = 0.5
     box_ratio: float = 0.5
     edge_min: int = 0
     box_min: int = 0
     fit_cams: tuple = (0, 1)
-    test_holds: int = 10                # TEST holds an entry needs (8 required + margin)
-    judged_min: int = 6
-    far_band_min: int = 10
+    test_holds: int = 10                # TEST holds that judge an entry (8 required + margin)
+    judged_min: int = REACHED_JUDGED
+    side_holds: int = REACHED_SIDE_HOLDS
+    required_sides: frozenset = REQUIRED_EDGES
+    far_band_min: int = REACHED_FAR_BAND
     # the planner's weights per deficit kind (default 1): edge strips weigh most, corner boxes next (the handoff's
-    # order: p21's left edge first, its bottom-left box second), a side of the image with no judged TEST entry 2
-    weights: dict = field(default_factory=lambda: {"edge": 3.0, "box": 2.0, "side": 2.0})
+    # order: p21's left edge first, its bottom-left box second), a side of the image short of TEST holds 2
+    weights: dict = field(default_factory=lambda: {"edge": 3.0, "strip": 3.0, "box": 2.0, "side": 2.0})
+
+    @classmethod
+    def for_per_hold(cls, per_hold, **kw):
+        """the targets for a session with per_hold pairs per pose (pair and corner counts scaled; kw override)"""
+        base = dict(pairs_min=per_hold_scaled(REACHED_FIT_PAIRS, per_hold),
+                    third_min=per_hold_scaled(REACHED_THIRD, per_hold), rim_min=per_hold_scaled(REACHED_RIM, per_hold),
+                    far_pairs_min=per_hold_scaled(REACHED_FAR_PAIRS, per_hold),
+                    strip_min={"bottom": per_hold_scaled(REACHED_STRIP_BOTTOM, per_hold)})
+        base.update(kw)
+        return cls(**base)
 
 
 @dataclass
 class Deficit:
-    kind: str           # edge | box | third | rim | pairs | far | entry | side | judged | far_band
+    kind: str           # edge | strip | box | third | rim | pairs | far | entry | side | judged | far_band
     cam: object         # 0 / 1 for camera tallies, None otherwise
     region: object      # edge / box / third name; entry: (cell, (lo, hi)); far_band: (lo, hi); side: edge name
     have: int
@@ -212,6 +260,7 @@ class Deficit:
     ref_region: object = None
     ref_have: object = None
     weight: float = 1.0
+    blocks: bool = True     # holds up the stop rule (False: asked for only)
 
     @property
     def short(self) -> float:
@@ -236,7 +285,11 @@ class Coverage:
                     ref = counts[MIRROR[r]]
                     want = max(ratio * ref, amin)
                     if counts[r] < want:
-                        out.append(Deficit(kind, c, r, counts[r], want, MIRROR[r], ref, w.get(kind, 1.0)))
+                        out.append(Deficit(kind, c, r, counts[r], want, MIRROR[r], ref, w.get(kind, 1.0),
+                                           blocks=False))
+            for r, want in targets.strip_min.items():
+                if t.edges[r] < want:
+                    out.append(Deficit("strip", c, r, t.edges[r], want, weight=w.get("strip", 1.0)))
             for r, (i, j) in CORNER_THIRDS.items():
                 if t.thirds[i, j] < targets.third_min:
                     out.append(Deficit("third", c, r, int(t.thirds[i, j]), targets.third_min, weight=w.get("third", 1)))
@@ -252,11 +305,13 @@ class Coverage:
             judged = [k for k, n in ent.items() if n >= targets.test_holds]
             for k, n in ent.items():
                 if n < targets.test_holds:
-                    out.append(Deficit("entry", None, k, n, targets.test_holds, weight=w.get("entry", 1.0)))
+                    out.append(Deficit("entry", None, k, n, targets.test_holds, weight=w.get("entry", 1.0),
+                                       blocks=False))
             for side in EDGE_CELLS:
-                if not any(side in edges_of_cell(c) for c, _ in judged):
-                    have = max([n for (c, _), n in ent.items() if side in edges_of_cell(c)], default=0)
-                    out.append(Deficit("side", None, side, have, targets.test_holds, weight=w.get("side", 1.0)))
+                have = max([n for (c, _), n in ent.items() if side in edges_of_cell(c)], default=0)
+                if have < targets.side_holds:
+                    out.append(Deficit("side", None, side, have, targets.side_holds, weight=w.get("side", 1.0),
+                                       blocks=side in targets.required_sides))
             if len(judged) < targets.judged_min:
                 out.append(Deficit("judged", None, "judged", len(judged), targets.judged_min,
                                    weight=w.get("judged", 1.0)))
@@ -264,9 +319,21 @@ class Coverage:
                 if n < targets.far_band_min:
                     out.append(Deficit("far_band", None, band, n, targets.far_band_min, weight=w.get("far_band", 1)))
         edges = sorted([d for d in out if d.kind == "edge"], key=lambda d: d.have / max(d.ref_have, 1))
+        strips = sorted([d for d in out if d.kind == "strip"], key=lambda d: d.have / max(d.want, 1e-9))
         boxes = sorted([d for d in out if d.kind == "box"], key=lambda d: d.have / max(d.ref_have, 1))
-        rest = sorted([d for d in out if d.kind not in ("edge", "box")], key=lambda d: d.have / max(d.want, 1e-9))
-        return edges + boxes + rest
+        rest = sorted([d for d in out if d.kind not in ("edge", "strip", "box")],
+                      key=lambda d: d.have / max(d.want, 1e-9))
+        return edges + strips + boxes + rest
+
+    def blocking(self, targets: Targets = Targets()) -> list:
+        """the deficits that hold up the stop rule (Targets' docstring); needs the TEST tally"""
+        if self.test is None:
+            raise ValueError("the stop rule needs the TEST tally (Coverage.test)")
+        return [d for d in self.deficits(targets) if d.blocks]
+
+    def stop_met(self, targets: Targets = Targets()) -> bool:
+        """the stop rule: no blocking deficit"""
+        return not self.blocking(targets)
 
 
 # ---------------------------------------------------------------- sentences
@@ -303,6 +370,9 @@ def sentence(d: Deficit) -> str:
     if d.kind == "edge":
         return (f"{cam}, {d.region} edge: {d.have:,} corners vs {d.ref_have:,} on the {d.ref_region} edge "
                 f"({ratio_words(d.have, d.ref_have)}). {direction(d.region)}")
+    if d.kind == "strip":
+        return (f"{cam}, {d.region} edge strip: {d.have:,} corners of {int(d.want):,} wanted ({int(d.short):,} short). "
+                f"{direction(d.region)}")
     if d.kind == "box":
         return (f"{cam}, {d.region} corner: {d.have:,} corners vs {d.ref_have:,} in the {d.ref_region} corner "
                 f"({ratio_words(d.have, d.ref_have)}). {direction(d.region)}")
@@ -323,8 +393,8 @@ def sentence(d: Deficit) -> str:
         return (f"Held-out check, {cell} cell at {lo:g}-{hi:g} m: {d.have} of {int(d.want)} held-out holds. "
                 f"Put the board {where(cell)}, {lo:g}-{hi:g} m from the head.")
     if d.kind == "side":
-        return (f"Held-out check, image {d.region} side: no {d.region} cell judged yet (best {d.have} of "
-                f"{int(d.want)} held-out holds). {direction(d.region)}")
+        return (f"Held-out check, image {d.region} side: best {d.have} of {int(d.want)} held-out holds in a "
+                f"{d.region} cell. {direction(d.region)}" + ("" if d.blocks else " (Asked for, not required.)"))
     if d.kind == "judged":
         return (f"Held-out check: {d.have} of {int(d.want)} entries judged. Placements at 0.4-1.3 m with the board "
                 "off-centre add entries.")
