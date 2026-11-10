@@ -17,7 +17,8 @@ row_reference: what a future calibration-health monitor needs (13.2): the method
 (left/centre/right thirds, top/bottom edges), the frame conditions and the deployed config's sha, stored next to the
 deployed config and in the session report.
 
-The thresholds are named placeholders until fixed with the user (design Q2)."""
+Thresholds agreed with the user on 10 Nov 2026: worse = +0.15 % depth or +0.15 px rows; OKVIS rectified rows +0.5 px;
+latency 1.5x. Floor tilt (1 deg) is reported only."""
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -28,9 +29,10 @@ from calibtool import decide as dc
 from calibtool.deploy import crash_loop  # noqa: F401  (re-exported: the post-check's crash-loop rule)
 
 SYNC_MS = 0.5
-DEPTH_WORSE_PCT = 0.10          # median |depth error|, percentage points
-ROWS_WORSE_PX = 0.10            # median |row error| on the board corners, px
-RECT_WORSE_PX = 0.30            # |median row offset| on OKVIS's rectified pair, px
+# agreed with the user on 10 Nov 2026 (were placeholders 0.10 / 0.10 / 0.30)
+DEPTH_WORSE_PCT = 0.15          # median |depth error|, percentage points
+ROWS_WORSE_PX = 0.15            # median |row error| on the board corners, px
+RECT_WORSE_PX = 0.50            # |median row offset| on OKVIS's rectified pair, px
 LATENCY_FACTOR = 1.5
 FLOOR_TILT_WARN_DEG = 1.0
 ROWFEAT_METHOD = "rowfeat-orb"

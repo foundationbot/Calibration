@@ -16,6 +16,11 @@ The tool exists and runs on a real robot.
 
 ## Robot state (phantom10 = P10, machine-id 60776b088362)
 
+Re-checked read-only on 10 Nov 13:10 PST by `CalibrationV10`: no reboot since 9 Nov 12:37, the session folder is intact
+in `/tmp` (state HOLD, motors_on), calibd not running, no orphan workers, master 2.1.1 motor_state 2, e-stop false, no
+loco pods, producer 1280x800 @ 15 (lease held by the session), head camera on 10 Gb/s USB, no OKVIS pod. The fleet
+recorders (dma-recorder, dma-mcap-recorder, dma-video-recorder, universal-recorder) run since ~12:03.
+
 | Item | State |
 |---|---|
 | Motors | **ON**, enabled by the user (`dma_cmd_client enable-motors`) to hold the head level; neck held at about pitch +1.7 / yaw -0.5 deg by the fixed tool |
@@ -73,15 +78,16 @@ If `/tmp` was wiped, copy the session back from `/root/calibtool-sessions/` firs
    - "Close enough" (accept within 0.15 m after two non-improving corrections) is built but not tried live.
    - The tilted placement's guidance does not model a board leaning back; it gave 15 "move closer" prompts and timed out once.
    - Consider modelling tilt, or replacing the tilted pass by neck pitch.
-9. **The stale-lease self-restore timer is built but not installed.** The user approved installing it on phantom10. P10's profile root is `/tmp`, so a reboot clears the kit and lease: move the root to `/data/calib`, then run `python -m calibtool install-restore-timer --root /data/calib --hours 2 [--dry-run]` (exact command in the M5 plan status).
-10. **Thresholds proposed, waiting for the user's OK:**
+9. **The stale-lease self-restore timer is built but not installed.** The user agreed (10 Nov) to move P10's root to
+   `/data/calib` AFTER the paused session ends (not mid-session: the resume reads `/tmp/calibtool-m2`). The user approved installing it on phantom10. P10's profile root is `/tmp`, so a reboot clears the kit and lease: move the root to `/data/calib`, then run `python -m calibtool install-restore-timer --root /data/calib --hours 2 [--dry-run]` (exact command in the M5 plan status).
+10. **Thresholds AGREED by the user on 10 Nov (in the code since this handoff's update):**
     - deploy only if new is better on depth AND rows (95 % interval, as coded);
     - post-check rollback if new is worse by > 0.15 % depth or > 0.15 px rows (same method);
     - OKVIS rectified rows > 0.5 px;
     - latency > 1.5x;
-    - check grid at the deploy size "not worse than live".
+    - check grid at the deploy size "not worse than live" (`deploy.check_verdict`: keep live only when shown worse).
 
-    The code still has placeholders (0.10).
+    `postcheck.py`: DEPTH_WORSE_PCT 0.15, ROWS_WORSE_PX 0.15, RECT_WORSE_PX 0.50, LATENCY_FACTOR 1.5.
 11. **Kept for the next version:**
     - **M6:** the devel PR. Branch off devel, carry calibtool + `DEPS.txt` files, port AI-1184's `calibration-tests` CI job with pytest-xdist; `devel_compat.sh` passes today.
     - **Stereo health monitor:** separate project, plan 13.2.

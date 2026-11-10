@@ -6,12 +6,15 @@ banner (calibd's banner lines), the preflight checks, capture counters, the boar
 recent health events and the key help. Tui(send, speaker): step(line) handles one state line from calibd (speaks a
 prompt whose id is new and whose age is under SPEAK_MAX_AGE_S, so a re-attach does not replay an old one), heartbeat()
 sends {"hb": t} at most once a second, key(k) sends {"key": K}. SpdSay speaks through spd-say (-w: wait until spoken;
-the caller runs it off the render thread); Silent is the no-voice speaker."""
+the caller runs it off the render thread); Silent is the no-voice speaker; TextPrompts (--voice text) speaks nothing and
+keeps the last prompts for a PROMPT panel at the top of the screen (the newest highlighted, the previous ones with
+their age), for rooms where a voice is not wanted."""
 import collections
 import json
 import os
 import subprocess
 import tempfile
+import textwrap
 from pathlib import Path
 import threading
 import time
@@ -60,8 +63,27 @@ def _motors(state):
     return "motors ?"
 
 
-def render(state, width=100, notes=()) -> str:
-    """notes: the laptop's own NOT NORMAL lines (e.g. calibd not stepping), shown before calibd's banner"""
+PANEL_N = 4                 # text mode: the newest prompt and the 3 before it
+HILITE, PLAIN = "\033[1;7m", "\033[0m"
+
+
+def _panel(prompts, width=100, ansi=False) -> list:
+    """text mode's PROMPT panel: prompts = [(age_s, text)], newest first"""
+    L = []
+    for k, (age, text) in enumerate(prompts[:PANEL_N]):
+        if k == 0:
+            for j, w in enumerate(textwrap.wrap(text, width - 8) or [""]):
+                w = f"{w:<{width - 8}}"
+                L.append(("PROMPT  " if j == 0 else "        ") + (f"{HILITE}{w}{PLAIN}" if ansi else w.rstrip()))
+        else:
+            L.append("        " + textwrap.shorten(f"{max(0, round(age)):.0f} s ago: {text}", width - 8,
+                                                   placeholder=" ..."))
+    return L
+
+
+def render(state, width=100, notes=(), prompts=None, ansi=False) -> str:
+    """notes: the laptop's own NOT NORMAL lines (e.g. calibd not stepping), shown before calibd's banner; prompts (text
+    mode): [(age_s, text)] newest first, shown as the PROMPT panel under the banner, above everything else"""
     s = state or {}
     L = []
     L.append(f"calib  {s.get('robot', '?')}  session {s.get('session', '?')}  phase {s.get('phase', '?')}  "
@@ -71,6 +93,9 @@ def render(state, width=100, notes=()) -> str:
     for b in banner:
         L.append(f"NOT NORMAL: {b}")
     if banner:
+        L.append("-" * width)
+    if prompts:
+        L += _panel(prompts, width, ansi)
         L.append("-" * width)
     checks = s.get("checks") or []
     if checks:
@@ -109,7 +134,7 @@ def render(state, width=100, notes=()) -> str:
     if s.get("mode") == "full":
         L += _full_lines(s, width)
     say = s.get("say")
-    if say:
+    if say and not prompts:
         L.append(f'>> "{say.get("text")}"')
     for e in (s.get("health") or [])[-5:]:
         L.append(f"health {e.get('level', '').upper()}: {e.get('message')}")
@@ -246,7 +271,10 @@ class PiperSay:
 
 
 def make_speaker(voice="espeak", piper_dir=None):
-    """espeak (spd-say, the default) or piper when asked and installed; anything else falls back to spd-say"""
+    """espeak (spd-say, the default), piper when asked and installed, text = the screen's PROMPT panel instead of a
+    voice; anything else falls back to spd-say"""
+    if voice == "text":
+        return TextPrompts()
     if voice == "piper":
         d = Path(piper_dir) if piper_dir is not None else PIPER_DIR
         sp = PiperSay(binary=d / "piper" / "piper", model=d / "en_US-lessac-medium.onnx")
@@ -258,6 +286,24 @@ def make_speaker(voice="espeak", piper_dir=None):
 class Silent:
     def say(self, text):
         pass
+
+
+class TextPrompts:
+    """--voice text: nothing is spoken; the TUI shows the last PANEL_N prompts at the top of the screen. Instant, so it
+    needs no Background thread; it also shows the prompt current when the TUI attaches (voice skips it: a replay)"""
+    shows_stale = True
+
+    def __init__(self, n=PANEL_N):
+        self.history = collections.deque(maxlen=n)      # (calibd time, text), oldest first
+
+    def show(self, x):
+        self.history.append((float(x.get("t") or 0), str(x.get("text", ""))))
+
+    def say(self, text):
+        self.history.append((0.0, str(text)))
+
+    def prompts(self, now) -> list:
+        return [(now - t, text) for t, text in reversed(self.history)]
 
 
 SUPERSEDED = frozenset({"correction", "lost", "status", "still"})   # a newer one of these makes the queued ones stale
@@ -312,8 +358,9 @@ def _trial_line(tr) -> str:
 
 
 class Tui:
-    def __init__(self, send, speaker, clock=time.monotonic, out=print, speak_max_age_s=SPEAK_MAX_AGE_S):
+    def __init__(self, send, speaker, clock=time.monotonic, out=print, speak_max_age_s=SPEAK_MAX_AGE_S, ansi=False):
         self.send_line, self.speaker, self.clock, self.out = send, speaker or Silent(), clock, out
+        self.ansi = ansi
         self.max_age = speak_max_age_s
         self.spoken = None
         self._fresh = True              # nothing seen yet: old prompts (attaching late) are not spoken
@@ -338,14 +385,19 @@ class Tui:
                 if self.spoken is not None and x["id"] <= self.spoken:
                     continue
                 age = float(st.get("updated") or x.get("t") or 0) - float(x.get("t") or 0)
-                if not self._fresh or age <= self.max_age:
+                if not self._fresh or age <= self.max_age or getattr(self.speaker, "shows_stale", False):
                     self._speak(x)
                 self.spoken = x["id"]
             self._fresh = False
-        self.out(render(st, notes=self.notes(st)))
+        pf = getattr(self.speaker, "prompts", None)
+        self.out(render(st, notes=self.notes(st), ansi=self.ansi,
+                        prompts=pf(float(st.get("updated") or 0)) if pf else None))
         return st
 
     def _speak(self, x):
+        show = getattr(self.speaker, "show", None)
+        if show is not None:
+            return show(x)                      # text mode: the prompt with calibd's time (for its age on screen)
         f = getattr(self.speaker, "say_prompt", None)
         if f is not None:
             f(x["text"], x.get("kind"))         # the kind lets a queued, stale correction be dropped

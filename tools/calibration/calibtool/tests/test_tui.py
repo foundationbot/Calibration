@@ -323,3 +323,72 @@ def test_make_speaker_prefers_the_asked_voice_and_falls_back(tmp_path):
     assert isinstance(tui.make_speaker("espeak"), tui.SpdSay)
     sp = tui.make_speaker("piper", piper_dir=tmp_path)             # nothing installed there
     assert isinstance(sp, tui.SpdSay)
+
+
+# ---------------------------------------------------------------- text mode (10 Nov: an alternative to the voice)
+
+
+def make_text(**kw):
+    sent, out, c = [], [], Clock()
+    sp = tui.make_speaker("text")
+    t = tui.Tui(sent.append, sp, clock=c, out=out.append, **kw)
+    return t, out, sp
+
+
+def test_text_voice_is_a_screen_panel_and_runs_nothing(tmp_path):
+    sp = tui.make_speaker("text", piper_dir=tmp_path)
+    assert isinstance(sp, tui.TextPrompts)
+    assert not hasattr(sp, "run")                   # nothing to launch: no spd-say, no piper
+
+
+def test_text_mode_shows_the_newest_prompt_first_and_the_previous_ones_with_their_age():
+    t, out, sp = make_text()
+    says = [{"id": 1, "t": 80.0, "kind": "intro", "text": "Placement 2 of 6."},
+            {"id": 2, "t": 92.0, "kind": "good", "text": "Good."},
+            {"id": 3, "t": 99.0, "kind": "correction", "text": "Not yet. 30 more centimetres closer."}]
+    for i in range(3):
+        t.step(json.dumps(state(say=says[i], says=says[:i + 1], updated=100.0)))
+    lines = out[-1].splitlines()
+    i = next(k for k, x in enumerate(lines) if x.startswith("PROMPT"))
+    assert "Not yet. 30 more centimetres closer." in lines[i]
+    assert "8 s ago: Good." in lines[i + 1] and "20 s ago: Placement 2 of 6." in lines[i + 2]
+    assert i < next(k for k, x in enumerate(lines) if x.startswith("preflight"))   # above the details
+
+
+def test_text_mode_keeps_the_last_four_and_wraps_long_prompts():
+    t, out, sp = make_text()
+    says = [{"id": k, "t": 90.0 + k, "kind": "status", "text": f"Prompt {k}."} for k in range(1, 7)]
+    t.step(json.dumps(state(say=says[-1], says=says, updated=100.0)))
+    txt = out[-1]
+    assert "Prompt 6." in txt and "Prompt 3." in txt and "Prompt 2." not in txt
+    long = {"id": 7, "t": 100.0, "kind": "correction", "text": "Move the board " + "much " * 30 + "closer."}
+    t.step(json.dumps(state(say=long, says=[long], updated=100.0)))
+    lines = out[-1].splitlines()
+    i = next(k for k, x in enumerate(lines) if x.startswith("PROMPT"))
+    panel = lines[i:lines.index("-" * 100, i)]
+    assert len(panel) > 2 and all(len(x) <= 100 for x in panel)
+    assert "closer." in " ".join(panel)
+    assert not any(x.startswith('>> "') for x in lines)            # the panel replaces the one-line prompt
+
+
+def test_text_mode_shows_the_current_prompt_even_when_attaching_late():
+    """voice skips an old prompt on re-attach (it would be replayed); on screen it is just what is being asked now"""
+    t, out, sp = make_text()
+    t.step(json.dumps(state(say={"id": 9, "t": 10.0, "kind": "correction", "text": "Lower the board."}, updated=100.0)))
+    assert any(x.startswith("PROMPT") and "Lower the board." in x for x in out[-1].splitlines())
+
+
+def test_text_mode_highlights_the_newest_prompt_only_on_a_terminal():
+    t, out, sp = make_text()
+    s = state(say={"id": 1, "t": 99.0, "kind": "good", "text": "Good."})
+    t.step(json.dumps(s))
+    assert "\033[" not in out[-1]
+    t2, out2, _ = make_text(ansi=True)
+    t2.step(json.dumps(s))
+    assert "\033[1;7m" in out2[-1] and "Good." in out2[-1]
+
+
+def test_voice_modes_show_no_panel():
+    t, sent, out, sp, c = make()
+    t.step(json.dumps(state(say={"id": 1, "t": 99.0, "kind": "good", "text": "Good."})))
+    assert not any(x.startswith("PROMPT") for x in out[-1].splitlines())

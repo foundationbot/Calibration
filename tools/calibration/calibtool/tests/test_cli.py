@@ -157,3 +157,8 @@ def test_a_full_session_starts_calibd_in_full_mode():
 def test_full_and_trial_do_not_mix():
     with pytest.raises(SystemExit):
         cli.main(["P10", "--full", "--trial", "--no-sync", "--headless", "1"])
+
+
+def test_text_voice_is_offered_and_say_prints_instead_of_speaking(capsys):
+    assert cli.main(["P10", "--voice", "text", "--say", "Placement 2 of 6."]) == 0
+    assert "Placement 2 of 6." in capsys.readouterr().out

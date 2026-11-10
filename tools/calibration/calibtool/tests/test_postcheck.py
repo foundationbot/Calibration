@@ -44,6 +44,15 @@ def test_small_differences_are_not_worse():
     assert d.status == "ok"
 
 
+@pytest.mark.parametrize("dd,dr,status", [(0.12, 0.0, "ok"), (0.20, 0.0, "worse"), (0.0, 0.12, "ok"),
+                                          (0.0, 0.20, "worse")])
+def test_worse_means_more_than_0p15_on_depth_or_rows(dd, dr, status):
+    """the thresholds agreed with the user on 10 Nov: roll back when new is worse than old by more than 0.15 % depth or
+    0.15 px rows (same frames, same method); the same noise on both sides, so the differences are exact"""
+    d = pc.depth_check(0.02, scores(0.2 + dd, 0.2 + dr), scores(0.2, 0.2))
+    assert d.status == status, d.reasons
+
+
 def test_depth_compares_the_same_pairs_only():
     new, old = scores(0.2, 0.2), scores(0.2, 0.2)
     keep = old.src < 10
@@ -79,6 +88,15 @@ def test_okvis_rect_rows_worse_rolls_back():
     assert pc.decide(d, ok).rollback
     same = pc.okvis_check(["KB4T pinhole camera 0", "(abcdef123456)"], "abcdef123456", rect_new=old, rect_old=old)
     assert not same.rect_worse and not pc.decide(d, same).rollback
+
+
+@pytest.mark.parametrize("new_dy,worse", [(2.18, False), (2.38, True)])
+def test_okvis_rect_rows_worse_means_more_than_0p5(new_dy, worse):
+    """agreed 10 Nov: OKVIS's rectified-pair rows count as worse when new exceeds old by more than 0.5 px"""
+    old = pc.RowHealth("rowfeat-orb", 400, 1.78, {}, {})
+    new = pc.RowHealth("rowfeat-orb", 400, new_dy, {}, {})
+    ok = pc.okvis_check(["KB4T pinhole camera 0", "(abcdef123456)"], "abcdef123456", rect_new=new, rect_old=old)
+    assert bool(ok.rect_worse) is worse
 
 
 def test_different_methods_are_not_compared():

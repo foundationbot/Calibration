@@ -469,9 +469,13 @@ def test_check_verdict_deploy_and_keep():
     new, live = _scores(0.2, 0.9)
     v = dp.check_verdict(new, live)
     assert v.decision == "DEPLOY", v.reasons
+    # agreed 10 Nov: at the deploy size "not worse than live" is enough (the 1280 verdict already showed it better)
     new, live = _scores(0.3, 0.3)
     v = dp.check_verdict(new, live)
-    assert v.decision == "KEEP_LIVE" and any("not shown better" in r for r in v.reasons)
+    assert v.decision == "DEPLOY" and any("not shown worse" in r for r in v.reasons), v.reasons
+    new, live = _scores(0.9, 0.2)
+    v = dp.check_verdict(new, live)
+    assert v.decision == "KEEP_LIVE" and any("new worse" in r for r in v.reasons), v.reasons
 
 
 def test_dry_run_text_is_shell():

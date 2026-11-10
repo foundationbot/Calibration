@@ -17,7 +17,7 @@ State and open issues: `HANDOFF.md` (this folder).
 python3 -m calibtool.cli phantom10 --trial            # placement trial: guidance only, nothing moves
 python3 -m calibtool.cli phantom10 --full --dry-run    # the whole session against the robot, recording commands only
 python3 -m calibtool.cli phantom10 --full              # the real session (motors, neck, producer, deploy on Y)
-    [--voice piper] [--session ID] [--replace] [--status] [--stop] [--no-speech]
+    [--voice piper|text] [--session ID] [--replace] [--status] [--stop] [--no-speech]
 ```
 
 **The laptop side is standard library only.**
@@ -25,6 +25,8 @@ python3 -m calibtool.cli phantom10 --full              # the real session (motor
 - It starts or attaches `calibd` over ssh, renders the state, and speaks prompts:
   - `spd-say` by default;
   - `--voice piper` uses the local neural voice in `~/.local/share/calib-voice` (Piper binary + `en_US-lessac-medium`).
+  - `--voice text` speaks nothing: a PROMPT panel at the top of the screen shows the newest prompt (highlighted) and
+    the 3 before it with their age, including the prompt that is current when the TUI attaches.
 
 **On the robot, calibd runs with the kit venv** (`/root/p11-cal/venv` + `pydeps` on P10). The CI-built image `foundationbot/okvis2x:calib-<arch>-<sha>` is the fleet runtime; see `RUNTIME.md`.
 

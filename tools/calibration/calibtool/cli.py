@@ -1,6 +1,6 @@
 """`calib <robot>`: the laptop entry point (design plan sections 3, 10.3).
 
-calib phantom10 [--trial | --full [--dry-run]] [--session ID] [--replace] [--headless N] [--no-speech] [--stop] [--status] [--say TEXT]
+calib phantom10 [--trial | --full [--dry-run]] [--session ID] [--replace] [--headless N] [--voice espeak|piper|text] [--no-speech] [--stop] [--status] [--say TEXT]
 [--no-sync]
   - asks calibd's status first (live = its socket answers, with the kit hash it runs): a live session running this
     kit is attached as it is; one running other code, or another session, is refused unless --replace stops it;
@@ -159,9 +159,10 @@ def _keys(t: tui.Tui, quit_ev):
 
 def run_tui(link, speaker, headless=0, out=None, interactive=False) -> int:
     """the TUI loop over a link; headless N: render N states then leave. -> states rendered"""
+    term = not headless and out is None and sys.stdout.isatty()
     clear = "" if headless or out is not None else "\033[2J\033[H"
     out = out or (lambda s: (sys.stdout.write(clear + s + "\n"), sys.stdout.flush()))
-    t = tui.Tui(link.send, speaker, out=out)
+    t = tui.Tui(link.send, speaker, out=out, ansi=term)
     quit_ev = threading.Event()
 
     def beat():
@@ -196,8 +197,9 @@ def main(argv=None):
                     help="with --full: every robot change recorded in the session's commands.txt, none sent")
     ap.add_argument("--headless", type=int, default=0, help="render N states and leave (no keys)")
     ap.add_argument("--no-speech", action="store_true")
-    ap.add_argument("--voice", choices=["espeak", "piper"], default="espeak",
-                    help="piper = local neural voice in ~/.local/share/calib-voice (falls back to espeak if missing)")
+    ap.add_argument("--voice", choices=["espeak", "piper", "text"], default="espeak",
+                    help="piper = local neural voice in ~/.local/share/calib-voice (falls back to espeak if missing); "
+                         "text = no voice: the prompts in a panel at the top of the screen")
     ap.add_argument("--no-sync", action="store_true", help="do not copy the kit to the robot")
     ap.add_argument("--replace", action="store_true",
                     help="stop a calibd already running (other code, or another session) and start this one")
@@ -211,7 +213,10 @@ def main(argv=None):
         ap.error("--dry-run is for a --full session")
     speaker = tui.Silent() if a.no_speech else tui.make_speaker(a.voice)
     if a.say:
-        speaker.say(a.say)
+        if isinstance(speaker, tui.TextPrompts):
+            print(a.say)
+        else:
+            speaker.say(a.say)
         return 0
     p = prof_mod.load(a.robot) if a.robot.upper().startswith("P") and a.robot[1:].isdigit() else \
         prof_mod.for_host(a.robot)
@@ -227,7 +232,7 @@ def main(argv=None):
     except RuntimeError as e:
         print(f"calib: {e}", file=sys.stderr)
         return 2
-    sp = speaker if isinstance(speaker, tui.Silent) else tui.Background(speaker)
+    sp = speaker if isinstance(speaker, (tui.Silent, tui.TextPrompts)) else tui.Background(speaker)
     n = run_tui(Link(p, sid), sp, headless=a.headless, interactive=not a.headless and sys.stdin.isatty())
     print(f"left the TUI after {n} states; calibd keeps running (session {sid}): calib {a.robot} --session {sid} "
           f"re-attaches, --stop stops it", file=sys.stderr)

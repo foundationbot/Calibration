@@ -761,8 +761,9 @@ def _f(s, unit):
 
 def check_verdict(new: decide.Scores, live: decide.Scores, gates=None) -> CheckVerdict:
     """the check grid at the deploy size (design 6.3): new vs live on the same pairs with 6.1's paired statistics, the
-    bootstrap clustered by HOLD (the check grid is one placement). DEPLOY only when new is shown better on median
-    |depth error| and on rows and no judged band shows it worse; otherwise keep live"""
+    bootstrap clustered by HOLD (the check grid is one placement). The 1280 verdict already showed new better, so here
+    "not worse than live" is enough (agreed with the user, 10 Nov 2026): DEPLOY unless the interval shows new worse
+    on median |depth error|, on rows or in a judged band; otherwise keep live"""
     g = gates or decide.Gates(min_placements=CHECK_MIN_HOLDS)
     nc = replace(new, placement=new.hold.astype(str))
     lc = replace(live, placement=live.hold.astype(str))
@@ -773,11 +774,11 @@ def check_verdict(new: decide.Scores, live: decide.Scores, gates=None) -> CheckV
     reasons, keep = [], False
     for s, unit, name, margin in ((depth, "%", "median |depth error|", g.depth_margin_pct),
                                   (rows, "px", "row error", g.rows_margin_px)):
-        if s.ci[1] < -margin:
-            reasons.append(f"at the deploy size, new better on {name}: " + _f(s, unit))
-        else:
+        if s.ci[0] > margin:
             keep = True
-            reasons.append(f"at the deploy size, new not shown better on {name}: " + _f(s, unit))
+            reasons.append(f"at the deploy size, new worse on {name}: " + _f(s, unit))
+        else:
+            reasons.append(f"at the deploy size, new not shown worse on {name}: " + _f(s, unit))
     for s in pr.stats:
         if s.name.startswith("band ") and s.judged and s.ci[0] > g.band_worse_margin_pct:
             keep = True
