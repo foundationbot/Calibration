@@ -54,9 +54,38 @@ def green(checks, gate="collect") -> bool:
 
 # ---------------------------------------------------------------- pure helpers
 
-def disparity_sign(yl, yr, max_d=None, min_ncc=0.3):
+def disparity_sign(yl, yr, max_d=None, min_ncc=0.3, min_matches=30, min_frac=0.75):
     """(+1, d) when the right image is the left one shifted left by d px (a correct left/right pair), (-1, d) when
-    shifted right (swapped queues), (0, d) when it cannot be told (flat or ambiguous image, |d| < 1)"""
+    shifted right (swapped queues), (0, d) when it cannot be told (flat or ambiguous image, |d| < 1).
+
+    Feature matches (SIFT, ratio test) give per-match dx = x_left - x_right; d = median dx, decided only when at least
+    `min_frac` of the matches agree in sign. Raw (unrectified) head pairs carry a vertical offset (~15 px on
+    phantom10) that a horizontal-only correlation cannot absorb: on 9 Nov it called a correct pair with a board at
+    0.76 m swapped. Without enough matches it falls back to that correlation (fine on synthetic, texture-only pairs)."""
+    try:
+        import cv2
+        a8 = np.clip(np.asarray(yl, np.float32), 0, 255).astype(np.uint8)
+        b8 = np.clip(np.asarray(yr, np.float32), 0, 255).astype(np.uint8)
+        sift = cv2.SIFT_create(3000)
+        k1, d1 = sift.detectAndCompute(a8, None)
+        k2, d2 = sift.detectAndCompute(b8, None)
+        if d1 is not None and d2 is not None and len(k1) >= 2 and len(k2) >= 2:
+            good = [m for m, n in cv2.BFMatcher().knnMatch(d1, d2, k=2) if m.distance < 0.7 * n.distance]
+            if len(good) >= min_matches:
+                dx = np.array([k1[m.queryIdx].pt[0] - k2[m.trainIdx].pt[0] for m in good])
+                med, pos = float(np.median(dx)), float(np.mean(dx > 0))
+                if abs(med) >= 1 and pos >= min_frac:
+                    return 1, med
+                if abs(med) >= 1 and pos <= 1 - min_frac:
+                    return -1, med
+                return 0, med
+    except ImportError:
+        pass
+    return _disparity_sign_ncc(yl, yr, max_d, min_ncc)
+
+
+def _disparity_sign_ncc(yl, yr, max_d=None, min_ncc=0.3):
+    """horizontal-only whole-image correlation (the original check; fallback for feature-poor images)"""
     L = np.asarray(yl, np.float32)
     R = np.asarray(yr, np.float32)
     W = L.shape[1]
@@ -237,14 +266,14 @@ def run(probes, prof) -> Result:
             add("sync", "ok" if sm <= SYNC_MS else "fail", f"left/right capture stamps {sm:.3f} ms apart (limit "
                 f"{SYNC_MS} ms)")
         if f.get("left") is not None and f.get("right") is not None:
-            yl, yr = f["left"][::4, ::4], f["right"][::4, ::4]
+            yl, yr = f["left"][::2, ::2], f["right"][::2, ::2]
             s, d = disparity_sign(yl, yr)
             if s > 0:
-                add("left_right", "ok", f"queue {prof.left} is the left camera (scene shifted {abs(d) * 4} px left in "
-                    f"queue {prof.right})")
+                add("left_right", "ok", f"queue {prof.left} is the left camera (scene shifted {abs(d) * 2:.0f} px left "
+                    f"in queue {prof.right})")
             elif s < 0:
-                add("left_right", "fail", f"queues swapped: queue {prof.left} sees the scene {abs(d) * 4} px left of "
-                    f"queue {prof.right}; fix the queue mapping")
+                add("left_right", "fail", f"queues swapped: queue {prof.left} sees the scene {abs(d) * 2:.0f} px left "
+                    f"of queue {prof.right}; fix the queue mapping")
             else:
                 add("left_right", "warn", "could not tell left from right on this scene (too flat or too far); "
                     "the board check at the first placement decides")

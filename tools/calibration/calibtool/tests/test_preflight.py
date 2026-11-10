@@ -182,6 +182,33 @@ def test_disparity_sign():
     assert s == -1 and d == -9
 
 
+def test_disparity_sign_survives_a_vertical_offset():
+    """raw (unrectified) head pairs carry a vertical offset (~15 px measured on phantom10, 9 Nov) and a near board: a
+    horizontal-only whole-image correlation locked onto a wrong peak and called a correct pair swapped"""
+    f = frames(d=9)
+    L, R = f["left"][:400, :640], f["right"][:400, :640]
+    R = np.roll(R, 15, axis=0)
+    s, d = pf.disparity_sign(L, R)
+    assert s == 1 and abs(d - 9) <= 1.5
+    s, d = pf.disparity_sign(R, L)
+    assert s == -1
+
+
+def test_disparity_sign_on_a_stored_phantom10_pair_with_a_board():
+    """real data: phantom10 6 Nov take n6_075, pose 0 (queue 3 = left, verified by disparity sign on the robot)"""
+    from calibtool import paths
+    if not paths.have_data():
+        pytest.skip("CALIBTOOL_DATA not set")
+    pose = paths.data_root() / "p10" / "kit" / "takes" / "n6_075" / "pose_000.npz"
+    if not pose.is_file():
+        pytest.skip(f"{pose} missing")
+    z = np.load(pose)
+    s, d = pf.disparity_sign(z["L"][0], z["R"][0])
+    assert s == 1 and d > 10
+    s, d = pf.disparity_sign(z["R"][0], z["L"][0])
+    assert s == -1
+
+
 def test_head_boards_from_head_camera_json():
     assert pf.head_serials(HEAD_JSON, (3, 0)) == ["19443010A1F94D2E00"]
 
