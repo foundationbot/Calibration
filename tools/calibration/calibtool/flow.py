@@ -47,6 +47,11 @@ failed producer/OKVIS step): nothing more is sent; only G leaves it, and before 
 runs again. A calibd restart resumes in HOLD (daemon.Machine.resume); after G a motion stage asks for Y again (motors
 off: the full enable; still on: Y confirms going on), and an interrupted placement is guided and counted down again.
 
+Spoken in the motion phases (10 Nov, phantom10: "radio silence is weird"): after each grid's / the IMU sweep's
+countdown "Moving the head now. About N minutes." (POSE_S per pose left), "Halfway through.", and before the next
+placement "Head sweep done. You can move the board now."; a HOLD there "The head stopped. <plain_reason>. Waiting for
+the operator." (once; G counts down again). Grid poses snake row by row (snake): no 68 deg yaw swing between rows.
+
 Every robot action goes into the session's command log (sessionctl.Recorder -> <session>/commands.txt): in a dry run
 (Robot.dry_run, every backend recording instead of sending) that file is the dry-run command list of the session."""
 import json
@@ -74,7 +79,30 @@ FLAT_STILL_PX = 8.0
 POST_FRAMES = 6
 CHECK_TARGET = place.target("1.1 m")
 POST_TARGET = place.target("1.1 m")
-CHECK_POSES = [(p, y) for p in (-12.0, 0.0, 12.0) for y in (-24.0, -12.0, 0.0, 12.0, 24.0)]
+def snake(poses) -> list:
+    """the poses row by row (rows = pitch, in the order they first appear), the yaw direction reversed on every other
+    row. 10 Nov (phantom10): the raster order swung the yaw 68 deg from (+16, +34) to (+24, -34) in one ramp and
+    tripped the neck's 3 deg tracking limit every grid"""
+    rows = {}
+    for p, y in poses:
+        rows.setdefault(p, []).append((p, y))
+    out = []
+    for k, row in enumerate(rows.values()):
+        row = sorted(row, key=lambda q: q[1])
+        out += row if k % 2 == 0 else row[::-1]
+    return out
+
+
+CHECK_POSES = snake([(p, y) for p in (-12.0, 0.0, 12.0) for y in (-24.0, -12.0, 0.0, 12.0, 24.0)])
+POSE_S = 2.5                    # measured seconds per grid pose (move + capture), for the spoken estimate
+GRID_DONE_TEXT = "Head sweep done. You can move the board now."
+HALFWAY_TEXT = "Halfway through."
+MOTION_PHASES = frozenset({"GRID", "CHECK_GRID", "IMU_SWEEP"})
+# a HOLD's reason in plain words: (substrings of the raw reason, the words), the first match wins
+_PLAIN = ((("not reached", "no result for both neck joints", "off by"), "the neck did not reach a pose"),
+          (("another program", "/dev/shm/desired", "commanding the motors"), "another program moved the motors"),
+          (("not armed", "has no 'targets' signal", "joint names"), "the neck could not be started"),
+          (("heartbeat",), "the operator's screen stopped answering"))
 NATIVE = dp.NATIVE
 MOTORS_TEXT = ("Motor check. If the robot hangs on the gantry and nobody is at its head, press Y to enable the motors.")
 FLAT_TEXT = "Put the board flat on the floor in front of the robot. Then step back."
@@ -136,7 +164,26 @@ class Robot:
 
 def default_poses(t) -> list:
     g = planner.grid()
-    return [g[i] for i in protocol.poses_for(t.distance_m, t.tilted)]
+    return snake([g[i] for i in protocol.poses_for(t.distance_m, t.tilted)])
+
+
+def plain_reason(why) -> str:
+    """a HOLD's reason as the operator hears it ("the neck did not reach a pose")"""
+    w = str(why)
+    for keys, words in _PLAIN:
+        if any(k in w for k in keys):
+            return words
+    return "a safety check stopped it"
+
+
+def minutes_text(n_poses) -> str:
+    m = max(1, math.ceil(n_poses * POSE_S / 60.0))
+    return f"Moving the head now. About {m} minute{'' if m == 1 else 's'}."
+
+
+def hold_text(why) -> str:
+    r = plain_reason(why)
+    return f"The head stopped. {r[0].upper() + r[1:]}. Waiting for the operator."
 
 
 def _tdict(t) -> dict:
@@ -209,6 +256,8 @@ class FullFlow:
         self.countdown_s, self.step_s, self.max_extras = int(countdown_s), float(step_s), int(max_extras)
         self.place_timeout_s = place.time_limit(place_timeout_s)     # None: no limit, only the operator's C skips
         self.near_z = None              # the distance the last close-enough placement used (m)
+        self._hold_said = False         # the current HOLD has been said
+        self._sweep = None              # the spoken progress of the running grid / sweep: [poses, done, halfway said]
         self.rec = robot.recorder
         self.remote = dp.Remote(robot.run, dry_run=robot.dry_run, log=self.rec.hook("deploy"))
         self.spec = Spec.from_yaml(robot.producer_yaml)
@@ -275,8 +324,18 @@ class FullFlow:
 
     def _hold(self, why):
         self._event("flow_hold", why=str(why))
+        if self.m.phase in MOTION_PHASES:
+            self._say("hold", hold_text(why))
+            self._hold_said = True
         self.m.hold(why)
         self._check()
+        self._hold_said = False
+
+    def _say_held(self):
+        """a HOLD the flow did not make (the deadman), seen in a motion phase: said once"""
+        if not self._hold_said and self.m.state.get("held_from") in MOTION_PHASES | {None}:
+            self._hold_said = True
+            self._say("hold", hold_text(self.m.state.get("hold_reason") or "no TUI heartbeat"))
 
     def _wait_keys(self, allowed):
         while True:
@@ -329,7 +388,9 @@ class FullFlow:
             if ph != "HOLD":
                 break
             held = True
+            self._say_held()
             self._idle()
+        self._hold_said = False
         if held:
             try:
                 self._countdown(self.m.phase)
@@ -498,9 +559,30 @@ class FullFlow:
                 continue
             return
 
+    def _moving(self, n_poses):
+        """after the countdown: say how long the head moves (the poses left)"""
+        if self._sweep is None:
+            self._sweep = [int(n_poses), 0, False]
+        self._say("grid", minutes_text(n_poses))
+
+    def _progress(self):
+        """one pose done: "Halfway through." once"""
+        sw = self._sweep
+        if sw is None:
+            return
+        sw[1] += 1
+        if not sw[2] and sw[0] >= 2 and sw[1] >= math.ceil(sw[0] / 2):
+            sw[2] = True
+            self._say("grid", HALFWAY_TEXT)
+
+    def _moved(self):
+        self._sweep = None
+        self._say("grid", GRID_DONE_TEXT)
+
     def _grid_event(self, kind, **kw):
         self._event(kind, **kw)
         if kind == "pose":
+            self._progress()
             self._pose_done += 1
             cur = self.fl.get("current")
             if cur is not None and self._grid_kind == "collect":
@@ -514,9 +596,11 @@ class FullFlow:
         remaining = [tuple(map(float, p)) for p in poses]
         predict = self.robot.predict(target) if self.robot.predict else None
         res = None
+        self._sweep = None
         while remaining:
             n = self._arm()
             self._countdown(phase)
+            self._moving(len(remaining))
             self._grid_poses, self._pose_done, self._grid_kind = remaining, 0, kind
             g = grids.GridRun(lambda ps, on_pose, ss, n=n: nk.run_grid(n, ps, on_pose, ss), self.robot.grab,
                               self.robot.detect, col, target.name, remaining, predict=predict,
@@ -532,6 +616,7 @@ class FullFlow:
                 continue
             break
         self._home(self._neck())
+        self._moved()
         return res
 
     # ------------------------------------------------------------ the guidance
@@ -750,18 +835,27 @@ class FullFlow:
             return
         n = self._arm()
         self._countdown("IMU_SWEEP")
+        poses = imusweep.serpentine()
+        self._sweep = None
+        self._moving(len(poses))
+
+        def log(line):
+            self._event("sweep_pose", line=line)
+            self._progress()
         while True:
             rig = _GatedRig(n, self.robot.imu_accel, self.robot.frames0, self)
             try:
-                results = imusweep.capture_sweep(rig, imusweep.serpentine(), self.robot.sweep_detect,
-                                                 self.robot.R_live, sleep=self.sleep,
-                                                 log=lambda s: self._event("sweep_pose", line=s))
+                results = imusweep.capture_sweep(rig, poses, self.robot.sweep_detect, self.robot.R_live,
+                                                 sleep=self.sleep, log=log)
                 break
             except (imusweep.SweepAborted, nk.NeckRefused, nk.NeckMissed) as e:
                 self._hold(f"IMU sweep stopped: {e}")
                 n = self._arm()
                 self._countdown("IMU_SWEEP")
+                self._sweep = None
+                self._moving(len(poses))
         self._home(n)
+        self._moved()
         try:
             out = dict(self.robot.imu_fit(results, self.robot.R_live))
         except Exception as e:  # noqa: BLE001  (a failed IMU fit keeps the live rotation, said why)

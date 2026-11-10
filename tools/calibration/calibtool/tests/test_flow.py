@@ -15,6 +15,7 @@ DEPLOY verdict; the rollback on a crash-looping post-check; the session's comman
 import importlib.util
 import itertools
 import json
+import math
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -689,3 +690,106 @@ def test_the_full_sessions_guide_hears_why_the_board_is_not_seen(tmp_path):
     s.op.hooks.append(lambda: s.clock.t - t0 > 10 and s.m.phase == "PLACE" and s.m.key("C"))
     assert s.flow._guide(place.target("1.1 m"), "PLACE", "default") == "unreachable"
     assert "I can see only part of the board. Raise the board." in [x.text for x in s.says]
+
+
+
+# ---------------------------------------------------------------- spoken grid / sweep / HOLD (10 Nov, phantom10)
+# "radio silence is weird": the grid was silent between the countdown and the next placement, and so was a HOLD.
+
+def _minutes(n):
+    m = math.ceil(n * fl.POSE_S / 60.0)
+    return f"Moving the head now. About {m} minute{'' if m == 1 else 's'}."
+
+
+def test_every_grid_and_the_imu_sweep_say_start_halfway_and_done(tmp_path):
+    s = Session(tmp_path, keys=FULL_KEYS).run()
+    assert s.m.phase == "DONE"
+    texts = [x.text for x in s.says]
+    starts = [i for i, x in enumerate(texts) if x.startswith("Moving the head now.")]
+    assert len(starts) == 4                                    # two placements, the IMU sweep, the check grid
+    assert texts[starts[0]] == _minutes(len(POSES)) and texts[starts[0] - 1] == "1."
+    assert texts[starts[2]] == _minutes(len(imusweep.serpentine()))
+    assert texts[starts[3]] == _minutes(len(fl.CHECK_POSES))
+    for a in starts:
+        rest = texts[a + 1:]
+        done = rest.index(fl.GRID_DONE_TEXT)
+        assert "Halfway through." in rest[:done]
+    nxt = texts.index("Placement 2 of 2. Board 1.6 metres in front of the robot.")
+    assert starts[0] < texts.index(fl.GRID_DONE_TEXT) < nxt
+
+
+def test_a_hold_in_the_grid_says_why_in_plain_words(tmp_path):
+    def hook(sess):
+        if len(sess.neck_cmds()) == 2:
+            sess.neck_backend.robot.head += 1          # another program wrote /dev/shm/desired
+    keys = dict(FULL_KEYS)
+    keys["HOLD"] = ["A"]
+    s = Session(tmp_path, keys=keys)
+    s.grab_hook = hook
+    s.run()
+    texts = [x.text for x in s.says]
+    assert "The head stopped. Another program moved the motors. Waiting for the operator." in texts
+    for x in [fl.hold_text(w) for w in ("no TUI heartbeat", "x not reached", "odd")] + [fl.GRID_DONE_TEXT,
+                                                                                       fl.HALFWAY_TEXT]:
+        assert "hold" not in x.lower(), x                # the tool's word for a still neck pose
+
+
+def test_a_heartbeat_hold_in_the_grid_is_said_once(tmp_path):
+    s = Session(tmp_path, keys=FULL_KEYS)
+    state = {"lost": None}
+
+    def hook(sess):
+        if len(sess.neck_cmds()) == 2 and state["lost"] is None:
+            sess.op.hb = False
+            sess.clock.t += 6.0
+            state["lost"] = sess.clock.t
+
+    def back():
+        if s.m.phase == "HOLD" and not s.op.hb and s.clock.t - state["lost"] > 60:
+            s.op.hb = True
+            s.m.heartbeat()
+            s.op.keys["HOLD"] = ["G"]
+    s.grab_hook = hook
+    s.op.hooks.append(back)
+    s.run()
+    texts = [x.text for x in s.says]
+    said = "The head stopped. The operator's screen stopped answering. Waiting for the operator."
+    assert texts.count(said) == 1
+    i = texts.index(said)
+    assert texts[i + 1] == "Step back. Starting in 5."            # after G: the countdown again
+
+
+@pytest.mark.parametrize("why,plain", [
+    ("pose +8.0/+11.0 not reached: joint NeckYaw off by +3.4 deg (limit 3 deg)", "the neck did not reach a pose"),
+    ("pose +8.0/+11.0: the tool reported no result for both neck joints (rc 1): x", "the neck did not reach a pose"),
+    ("/dev/shm/desired moved (3 -> 4) while no own command ran: another program is commanding",
+     "another program moved the motors"),
+    ("neck not armed: the neck is not armed", "the neck could not be started"),
+    ("going home: error: pose +0.0/+0.0 not reached: x", "the neck did not reach a pose"),
+    ("IMU sweep stopped: pose +8.0/+11.0 not reached: x", "the neck did not reach a pose"),
+    ("no TUI heartbeat for 5 s", "the operator's screen stopped answering"),
+    ("something odd", "a safety check stopped it"),
+])
+def test_hold_reasons_in_plain_words(why, plain):
+    assert fl.plain_reason(why) == plain
+
+
+def _max_yaw_step(poses):
+    return max(abs(b[1] - a[1]) for a, b in zip(poses, poses[1:]))
+
+
+@pytest.mark.parametrize("name", ["0.5 m", "0.75 m", "1.1 m", "1.6 m", "far", "tilted"])
+def test_grid_poses_snake_row_by_row(name):
+    """10 Nov (phantom10): the raster order swung the yaw 68 deg from (+16, +34) to (+24, -34) in one ramp and
+    tripped the 3 deg tracking limit every grid; each row now reverses the yaw direction"""
+    poses = fl.default_poses(place.target(name))
+    step = 68.0 / 6
+    assert _max_yaw_step(poses) <= (1 if len(poses) == 49 else 2) * step + 1e-6     # a subset: some poses left out
+    from calibtool import planner, protocol
+    t = place.target(name)
+    assert sorted(poses) == sorted(planner.grid()[i] for i in protocol.poses_for(t.distance_m, t.tilted))
+
+
+def test_the_check_grid_snakes_too():
+    assert _max_yaw_step(fl.CHECK_POSES) <= 12.0 + 1e-9
+    assert len(set(fl.CHECK_POSES)) == 15
