@@ -2,8 +2,8 @@
 
 master(run): the EtherCAT master service (`systemctl is-active dma-ethercat`), its version (`dma_cmd_client -V`),
 `dma_cmd_client ping` (uptime, motor_state: 0 = motors off) and `estop-status`. desired_still: /dev/shm/desired's head
-counter unchanged over a second (nothing is commanding the motors). motor_tool: md5 and whether `--help` names the
-'targets' signal (step 08's refusal: a tool without it leaves the spine and legs at zero stiffness during a neck move).
+counter unchanged over a second (nothing is commanding the motors). motor_tool: md5 and whether the binary's strings
+name the 'targets' signal (read, never executed) (step 08's refusal: a tool without it leaves the spine and legs at zero stiffness during a neck move).
 `dma_cmd_client state` prints zeros on the 2.1.x master, so it is not used. run(argv, timeout) -> (rc, text) is
 injected; run_cmd() is the subprocess one."""
 import hashlib
@@ -95,10 +95,11 @@ def desired_still(read_head, sleep=time.sleep, seconds=1.0) -> bool:
     return read_head() == h0
 
 
-def motor_tool(path, run=run_cmd) -> dict:
+def motor_tool(path, run=None) -> dict:
+    """md5 and whether the tool's strings name the 'targets' signal; the tool is only read, never run (review 7: a
+    `--help` run is still running a motion tool). run is unused (kept for the callers' signature)"""
     p = Path(path)
     if not p.is_file():
         return {"path": str(p), "md5": None, "has_targets": False, "error": f"{p} not found"}
-    md5 = hashlib.md5(p.read_bytes()).hexdigest()
-    rc, out = _try(run, [str(p), "--help"])
-    return {"path": str(p), "md5": md5, "has_targets": "targets" in (out or ""), "error": None}
+    data = p.read_bytes()
+    return {"path": str(p), "md5": hashlib.md5(data).hexdigest(), "has_targets": b"targets" in data, "error": None}

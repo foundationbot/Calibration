@@ -89,14 +89,20 @@ def test_desired_still_and_advancing():
     assert mo.desired_still(lambda: next(heads), sleep=lambda s: None, seconds=1.0) is False
 
 
-def test_motor_tool_md5_and_targets(tmp_path):
+def test_motor_tool_md5_and_targets_from_its_strings_never_run(tmp_path):
+    """review 7: the check ran `dma_motor_motion --help`, i.e. executed a motion tool; it reads the file's strings"""
+    marker = tmp_path / "ran"
     tool = tmp_path / "dma_motor_motion"
-    tool.write_bytes(b"binary")
-    r = Run({(str(tool), "--help"): (0, "usage ... signals: targets position\n")})
+    body = f"#!/bin/sh\ntouch {marker}\n# \x00usage: signals: targets position\x00\n".encode()
+    tool.write_bytes(body)
+    tool.chmod(0o755)
+    r = Run({})
     t = mo.motor_tool(tool, r)
-    assert t == {"path": str(tool), "md5": hashlib.md5(b"binary").hexdigest(), "has_targets": True, "error": None}
-    r = Run({(str(tool), "--help"): (0, "usage ... position\n")})
+    assert t == {"path": str(tool), "md5": hashlib.md5(body).hexdigest(), "has_targets": True, "error": None}
+    assert r.calls == [] and not marker.exists()
+    tool.write_bytes(b"\x7fELF usage ... position\x00")
     assert mo.motor_tool(tool, r)["has_targets"] is False
+    assert r.calls == []
 
 
 def test_motor_tool_missing(tmp_path):
