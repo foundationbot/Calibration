@@ -16,12 +16,12 @@ not independent. A statistic is judged only with enough pairs and placements (Ga
 Verdict (verdict()):
   NOT_ENOUGH_DATA           step 66 on the new fit gave no result; or fewer than Gates.min_judged judged (validated)
                             entries; or, with require_all_edges, an image edge (left/right/top/bottom; a corner cell
-                            counts for both its edges) without a judged entry; or too few placements to compare
+                            counts for both its edges: coverage.edges_of_cell) without a judged entry; or too few
+                            placements to compare; or no live scores (the live config could not be scored, the error
+                            in the reasons) without Gates.allow_deploy_without_live
   KEEP_LIVE                 step 66 FAILs the new fit; or the paired interval does not show new better on depth and
                             on rows; or a judged band where the interval shows new worse; or the new fit could not
                             score more than Gates.max_new_unscored_frac of the pairs the live config scored
-                            ; or no live scores (the live config could not be scored, the error in the reasons)
-                            without Gates.allow_deploy_without_live
   LIVE_NOT_SCORABLE_DEPLOY  no live scores and Gates.allow_deploy_without_live=True: step 66 PASS alone decides
   DEPLOY                    otherwise
 Every threshold is a field of Gates; the defaults are PLACEHOLDERS, to be fixed from the stored sessions (M1 C3)."""
