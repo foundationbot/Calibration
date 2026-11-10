@@ -333,3 +333,40 @@ def test_propose_keeps_rare_poses_that_fill_an_edge_strip():
     adds = np.zeros(49, bool)
     adds[[48, 10]] = True                                # 10: never detected, never kept
     assert pr.propose(det, min_rate=0.5, adds_edge=adds) == [24, 48]
+
+
+# ---------------------------------------------------------------- the collection protocol's defaults (C3, for M2)
+
+
+def test_protocol_defaults():
+    """the measured protocol (results/2026-11-calibtool-M1-protocol.md), decided with the user 9 Nov: 2 pairs a pose
+    from 3 captured frames; the far placement asked at 1.8 m, accepted 1.7-2.0 m, refused beyond 2.1 m; the neck hold
+    ends once the frames are in"""
+    assert pr.PER_HOLD == 2 and pr.CAPTURE_FRAMES == 3 and pr.CAPTURE_FRAMES > pr.PER_HOLD
+    assert pr.FAR_ASK_M == 1.8 and pr.FAR_ACCEPT_M == (1.7, 2.0) and pr.FAR_REFUSE_BEYOND_M == 2.1
+    assert pr.FAR_ACCEPT_M[0] <= pr.FAR_ASK_M <= pr.FAR_ACCEPT_M[1] < pr.FAR_REFUSE_BEYOND_M
+    assert pr.HOLD_ENDS_AT_CAPTURE is True
+    assert pr.POSE_PERIOD_S == 3.13
+
+
+def test_pose_lists_49_41_44():
+    """49 poses up to 1.6 m, 41 at the far placement, 44 on the tilted one: the grid poses (pitch-major, the planner's
+    grid order) minus the ones protocol.propose dropped there (never or rarely detected, no edge-strip corner)"""
+    from calibtool import planner
+    grid = planner.grid()
+    assert len(pr.POSES_UPRIGHT) == 49 and list(pr.POSES_UPRIGHT) == list(range(49))
+    assert len(pr.POSES_FAR) == 41 and len(pr.POSES_TILTED) == 44
+    dropped = {"far": [(-24, -34), (-24, -23), (-24, -11), (-24, 11), (-16, -34), (0, 34), (8, 23), (8, 34)],
+               "tilted": [(-24, -34), (-24, -23), (-24, -11), (-24, 23), (-24, 34)]}
+    for name, poses in (("far", pr.POSES_FAR), ("tilted", pr.POSES_TILTED)):
+        gone = [grid[i] for i in range(49) if i not in poses]
+        assert [(p, round(y)) for p, y in gone] == dropped[name], name
+        assert list(poses) == sorted(poses)
+    assert pr.poses_for(1.1, tilted=False) == pr.POSES_UPRIGHT
+    assert pr.poses_for(pr.FAR_ASK_M, tilted=False) == pr.POSES_FAR
+    assert pr.poses_for(0.75, tilted=True) == pr.POSES_TILTED
+
+
+def test_planner_asks_for_the_far_board_at_the_protocols_distance():
+    from calibtool import planner
+    assert max(planner.DISTANCES) == pr.FAR_ASK_M

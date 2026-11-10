@@ -1,6 +1,6 @@
 """The placement planner: which board placement to ask for next, and which neck poses of it to sweep.
 
-Candidates: the board standing at distance {0.5, 0.75, 1.1, 1.6, 2.0} m (along the floor from camera 0) x bearing
+Candidates: the board standing at distance {0.5, 0.75, 1.1, 1.6, 1.8} m (along the floor from camera 0) x bearing
 {-40, -20, 0, 20, 40} deg (+: toward the robot's LEFT = the operator's right), plus the tilted-low placement (on the
 chair seat leaning back against the backrest, facing up toward the head) at 0.75 m on each bearing; every board faces
 the head. Heights: an upright board's centre UPRIGHT_DZ below camera 0, the tilted one's TILT_DZ below (measured on
@@ -19,9 +19,9 @@ from dataclasses import dataclass, field, replace
 import numpy as np
 
 from calibtool import coverage as cv, placement as pl
-from calibtool.protocol import PER_HOLD
+from calibtool.protocol import FAR_ASK_M, PER_HOLD
 
-DISTANCES = (0.5, 0.75, 1.1, 1.6, 2.0)
+DISTANCES = (0.5, 0.75, 1.1, 1.6, FAR_ASK_M)      # the far board where the protocol asks for it (1.8 m)
 BEARINGS = (-40, -20, 0, 20, 40)
 TILT_DISTANCE = 0.75
 UPRIGHT_DZ = -0.35

@@ -41,7 +41,7 @@ def planner():
 def test_candidates_distance_by_bearing_plus_tilted():
     cs = pn.candidates()
     upright = [c for c in cs if not c.tilted]
-    assert sorted({c.distance_m for c in upright}) == [0.5, 0.75, 1.1, 1.6, 2.0]
+    assert sorted({c.distance_m for c in upright}) == [0.5, 0.75, 1.1, 1.6, 1.8]
     assert sorted({c.bearing_deg for c in upright}) == [-40, -20, 0, 20, 40]
     assert len(upright) == 25
     tilted = [c for c in cs if c.tilted]

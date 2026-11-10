@@ -32,9 +32,38 @@ from calibtool import paths
 
 MIN_TAGS = 6
 STILL_PX = 1.0
-# stereo pairs kept per still pose (15b --per-hold): 2 is the smallest with no measurable loss (protocol results
-# section 2: per_hold 1/2/3/5 on p10 6 Nov); the stored sessions have 3 (coverage.STORED_PER_HOLD)
+
+# ---------------------------------------------------------------- the collection protocol's defaults (for M2)
+# Measured in M1 C2 (results/2026-11-calibtool-M1-protocol.md) and decided with the user on 9 Nov 2026 (M1 C3).
+# stereo pairs kept per still pose (15b --per-hold): 2 is the smallest with no measurable loss (results section 2:
+# per_hold 1/2/3/5 on p10 6 Nov: 9 of 9 entries, median -0.05 %, rows 0.280 px); the stored sessions have 3
+# (coverage.STORED_PER_HOLD). Captured from CAPTURE_FRAMES frames: 15b's still check compares later frames with the
+# first detected one, so a single frame is never checked, and 15b keeps the middle PER_HOLD
 PER_HOLD = 2
+CAPTURE_FRAMES = 3
+# the far placement (results section 3): the detector loses tags past ~1.6 m (8-14 of 35 at 1.90-1.95 m, none at
+# ~2.5 m); ask for 1.8 m measured, accept 1.7-2.0 m (the FIT far band starts at 1.7 m), refuse beyond 2.1 m
+FAR_ASK_M = 1.8
+FAR_ACCEPT_M = (1.7, 2.0)
+FAR_REFUSE_BEYOND_M = 2.1
+# the neck hold ends once the frames are captured (M2 implements it): today's step 08 waits out a fixed 2.0 s hold,
+# pose period POSE_PERIOD_S measured in all 24 raw takes; ending the hold at capture gives about 2.07 s at 3 frames
+# (computed from the script's waits and the frame spacing, not measured)
+HOLD_ENDS_AT_CAPTURE = True
+POSE_PERIOD_S = 3.13
+# pose lists, as indices of the 49-pose grid (pitch-major: planner.grid(), grid_index): all 49 up to 1.6 m; the far
+# placement drops 8 and the tilted one 5 (results section 1, protocol.propose: detected in < half the takes and no
+# edge-strip corner), which loses no edge-strip corner
+POSES_UPRIGHT = tuple(range(49))
+POSES_FAR = tuple(i for i in range(49) if i not in (0, 1, 2, 4, 7, 27, 33, 34))
+POSES_TILTED = tuple(i for i in range(49) if i not in (0, 1, 2, 5, 6))
+
+
+def poses_for(distance_m, tilted=False) -> tuple:
+    """the pose list of a placement: the tilted one's, the far one's (from FAR_ACCEPT_M's lower end), else all 49"""
+    if tilted:
+        return POSES_TILTED
+    return POSES_FAR if distance_m >= FAR_ACCEPT_M[0] else POSES_UPRIGHT
 SEC_PER_POSE = 3.1                       # measured: neckgrid logs "(3.1 s)" per pose, ramp 1.0 + hold 2.0 s
 NOMINAL = (0.5, 0.75, 1.1, 1.6, 2.0, 3.0)
 GRID_PITCH = tuple(float(v) for v in np.arange(-24, 25, 8))          # = planner.GRID_PITCH
