@@ -29,7 +29,7 @@ def build(prof, *, session, dirs, capture, detect_pair, producer_yaml, probes, b
     kube_runner = kube_runner or pr.kubectl_runner()
     rec = sc.Recorder(dry_run=dry_run)
     enabler = me.Enabler(motor_run, me.EnableProbe(motor_run, probes["autonomy"], probes["pods"]), baseline=baseline,
-                         dry_run=dry_run)
+                         dry_run=dry_run, adopt_on=True)
     if dry_run:
         live = pr.Kube(kube_runner, prof.producer_ns, prof.producer_deploy, read_only=True).get_yaml()
         kube = pr.Kube(sc.DryKubectl(live, rec), prof.producer_ns, prof.producer_deploy, read_only=False)

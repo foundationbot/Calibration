@@ -201,3 +201,23 @@ def test_only_motors_enable_names_enable_motors():
         if "enable-motors" in code or "disable-motors" in code:
             hits.append(f.name)
     assert hits == ["motors_enable.py"]
+
+
+def test_motors_already_on_are_taken_over_on_y_only_when_allowed_and_all_else_passes():
+    """10 Nov live session: the operator had enabled the motors (to hold the head level) and the tool refused with
+    'someone else enabled them'. With adopt_on the operator's Y takes them over: no enable command is sent, the
+    state is verified (ping motor_state + 'N of N motors enabled' in the journal); every other check still blocks."""
+    r = Run(); r.motor_state = 1
+    en, _ = make(state=good_state(master=master(motor_state=2)), run=r, adopt_on=True)
+    res = en.enable("Y", gantry=True)
+    assert res.ok and not mutating(r.calls) and "taken over" in res.detail and (res.n, res.of) == (50, 50)
+    r2 = Run(); r2.motor_state = 1
+    en2, _ = make(state=good_state(master=master(motor_state=2)), run=r2)             # default: refuse as before
+    assert en2.enable("Y", gantry=True).refused
+    r3 = Run(); r3.motor_state = 1
+    en3, _ = make(state=good_state(master=master(motor_state=2), desired_still=False), run=r3, adopt_on=True)
+    assert en3.enable("Y", gantry=True).refused and not mutating(r3.calls)
+    r4 = Run(enabled_line="dma-ethercat: 48 of 50 motors enabled"); r4.motor_state = 1
+    en4, _ = make(state=good_state(master=master(motor_state=2)), run=r4, adopt_on=True)
+    res4 = en4.enable("Y", gantry=True)
+    assert not res4.ok and not mutating(r4.calls)

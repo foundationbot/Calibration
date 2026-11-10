@@ -137,7 +137,10 @@ class Enabler:
     (slaves_op); wall: the wall clock for the journal's --since"""
 
     def __init__(self, run, probe, baseline=None, clock=time.monotonic, sleep=time.sleep, wall=time.time,
-                 dry_run=False, verify_s=VERIFY_S):
+                 dry_run=False, verify_s=VERIFY_S, adopt_on=False):
+        # adopt_on (10 Nov live session): motors the operator already enabled are taken over on their Y, with no
+        # enable command, when every other check passes and all motors are verified on; off = refuse as before
+        self.adopt_on = adopt_on
         self.run, self.probe, self.baseline = run, probe, dict(baseline or {})
         self.clock, self.sleep, self.wall, self.dry_run, self.verify_s = clock, sleep, wall, dry_run, verify_s
         self.commands = []
@@ -161,6 +164,9 @@ class Enabler:
         if key != "Y":
             return EnableResult(False, True, f"enable needs the operator's Y (got {key!r}); nothing sent")
         cs = self.checks(gantry)
+        failed = [c for c in cs if c.status == "fail"]
+        if self.adopt_on and failed and all(c.name == "motors_off" for c in failed) and "already on" in failed[0].detail:
+            return self._adopt(cs)
         if not passed(cs):
             bad = "; ".join(f"{c.name}: {c.detail}" for c in cs if c.status == "fail")
             return EnableResult(False, True, f"not enabling: {bad}", cs)
@@ -194,6 +200,25 @@ class Enabler:
             why.append(f"no 'N of N motors enabled' line in the {motors.SERVICE} journal")
         return EnableResult(False, False, f"enable not verified within {self.verify_s:g} s: " + "; ".join(why), cs,
                             *(cnt or (None, None)))
+
+    def _adopt(self, cs) -> EnableResult:
+        """motors already on: verify (ping + the journal's last 'N of N motors enabled') and take them over; nothing
+        is sent. A partial or unverified state is not taken over"""
+        state = self._ping_state()
+        try:
+            jrc, jout = self.run(["journalctl", "-u", motors.SERVICE, "--since", "-2h", "-o", "cat", "--no-pager"],
+                                 timeout=10)
+        except Exception:  # noqa: BLE001
+            jrc, jout = 1, ""
+        cnt = parse_enabled(jout) if jrc == 0 else None
+        if not state or cnt is None:
+            return EnableResult(False, True, f"motors on, but not verified (motor_state {state}, journal "
+                                f"{'no N of N line' if cnt is None else cnt}): not taking them over", cs)
+        if cnt[0] != cnt[1]:
+            return EnableResult(False, True, f"motors on, but only {cnt[0]} of {cnt[1]} enabled: not taking them "
+                                "over; the operator decides", cs, *cnt)
+        return EnableResult(True, False, f"motors already on ({cnt[0]} of {cnt[1]}, motor_state {state}): taken over "
+                            "on the operator's Y, no enable sent", cs, *cnt)
 
     def disable(self, confirmed) -> DisableResult:
         if confirmed is not True:
