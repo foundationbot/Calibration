@@ -966,6 +966,57 @@ def test_obs_box_hands_each_detection_out_once():
     assert b.take() == (True, None)
 
 
+def test_obs_box_keeps_why_the_newest_detection_found_no_board():
+    b = dm.ObsBox()
+    assert b.last_miss() is None
+    m = detect.Miss("dark", 0, 0.0, 20.0, ())
+    b.put(None, m)
+    assert b.take() == (True, None) and b.last_miss() is m
+    b.put("o2")
+    assert b.last_miss() is None
+
+
+def test_the_trial_hears_why_the_board_is_not_seen(tmp_path):
+    """10 Nov (phantom10): the detection's reason reaches the guide (and the state) through calibd"""
+    c = Clock()
+    m = machine(tmp_path, c)
+    got = []
+
+    def to_miss(dl, info):
+        got.append(info)
+        return detect.board_miss(dl or {}, (1280, 800), brightness=(info or {}).get("brightness"))
+    cap = cp.Capture(FakeSource(), 3, 0, clock=c)
+    cap.step()
+    cap.step()
+    tr = place.Trial([place.target("1.1 m")], tmp_path / "trial.jsonl", timeout_s=None)
+    d = dm.Daemon(m, cap, detector=lambda pair: _done(({}, {"brightness": 15.0})), to_obs=lambda det: None,
+                  sampler=lambda: {}, trial=tr, clock=c, to_miss=to_miss)
+    d.preflight_done(pf.Result([], {}, {}))
+    m.heartbeat()
+    m.key("T")
+    _run(d, cap, c, 4.0)
+    assert got and got[0] == {"brightness": 15.0}
+    assert "It is too dark for me to see the board." in [x["text"] for x in m.state["says"]]
+    assert m.state["board"] is None and m.state["board_miss"]["reason"] == "dark"
+
+
+def test_full_mode_hands_the_reason_to_the_obs_box(tmp_path):
+    c = Clock()
+    m, cap, d, box, flow, calls = full_daemon(tmp_path, c)
+    d.to_obs = lambda det: None
+    d.to_miss = lambda dl, info: detect.Miss("far", 3, 9.0, 120.0, ())
+    m.to("READY", "x")
+    m.heartbeat()
+    m.to("PLACE", "flow")
+    for _ in range(3):
+        c.t += 0.2
+        m.heartbeat()
+        cap.step()
+        cap.step()
+        d.step()
+    assert box.take() == (True, None) and box.last_miss().reason == "far"
+
+
 def test_full_mode_detects_for_the_guidance_only(tmp_path):
     c = Clock()
     m, cap, d, box, flow, calls = full_daemon(tmp_path, c)

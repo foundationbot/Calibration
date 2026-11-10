@@ -9,8 +9,8 @@ DetectPool: a process pool sized to the robot's free CPU (pool_size: cpus - load
 load ~9 on 9 cpus, so 1 worker there) that detects both frames of a pair per job; resize() rebuilds it when the load
 changes. board_obs: the board's centroid, depth and 3-D centre (PnP with the nominal equidistant camera, as step 06),
 tag count and whether it touches the image edge, for placement guidance; board_miss: why a frame shows no board
-(too dark, too far, partly in view, few tags, nothing), so the guidance can say it. hold_dict: detected pairs -> the step-15b
-corner dict a replay.Collection / assign.CaptureHold takes."""
+(too dark, too far, partly in view, few tags, nothing), so the guidance can say it. hold_dict: detected pairs -> the
+step-15b corner dict a replay.Collection / assign.CaptureHold takes."""
 import math
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass

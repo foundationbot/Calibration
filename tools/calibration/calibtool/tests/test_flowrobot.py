@@ -61,6 +61,21 @@ def test_a_dry_run_records_every_change_and_keeps_the_reads(tmp_path):
     assert not any(c[0] == "scale" for c in calls)                 # nothing mutating reached the robot's kubectl
 
 
+def test_the_guide_gets_the_obs_boxs_reason_for_no_board(tmp_path):
+    r, _ = build(tmp_path, True)
+    assert r.board_miss is None                                     # an obs box without reasons
+    box = SimpleNamespace(take=lambda: (False, None), last_miss=lambda: "why")
+    r2 = fr.build(Prof(), session="S1", dirs=SimpleNamespace(root=tmp_path, deploy=tmp_path / "deploy"),
+                  capture=SimpleNamespace(grab=lambda n: []), detect_pair=lambda yl, yr: None,
+                  producer_yaml=TS.PRODUCER_YAML, probes={"autonomy": lambda: None, "pods": lambda: []},
+                  baseline={}, obs_box=box, guide_kw={}, make_collection=lambda: None, fit_decide=None,
+                  dry_run=True, run=lambda argv, input=None, timeout=None: (0, ""),
+                  motor_run=lambda argv, timeout=5: (0, ""),
+                  kube_runner=lambda argv, input=None: (0, TS.PRODUCER_YAML), shm_robot=Shm(),
+                  tool_info={"path": Prof.motor_tool, "has_targets": True, "md5": "x"})
+    assert r2.board_miss() == "why"
+
+
 def test_a_real_run_uses_the_robot(tmp_path):
     r, calls = build(tmp_path, False)
     assert not r.dry_run and not r.enabler.dry_run

@@ -751,7 +751,8 @@ def test_a_board_carried_steadily_is_not_asked_to_keep_still():
 def test_a_status_after_status_s_of_silence_while_the_board_is_carried():
     g = guide(place.target("0.5 m"))
     says = feed(g, [obs(z=1.1, u=300 + 30 * (i % 20)) for i in range(40)])          # 20 s, always moving
-    assert [(x.kind, x.text) for x in says] == [("status", "Still waiting. Board 110 centimetres away; I need about 50.")]
+    assert [(x.kind, x.text) for x in says] == [
+        ("status", "Still waiting. Board 110 centimetres away; I need about 50.")]
     assert says[0].t == pytest.approx(place.STATUS_S)
 
 

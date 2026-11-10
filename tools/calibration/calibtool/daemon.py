@@ -489,10 +489,18 @@ class ObsBox:
     def __init__(self):
         self._lock = threading.Lock()
         self._v = (False, None)
+        self._miss = None
 
-    def put(self, obs):
+    def put(self, obs, miss=None):
+        """obs: detect.BoardObs or None; miss: why it is None (detect.Miss), if known"""
         with self._lock:
             self._v = (True, obs)
+            self._miss = None if obs is not None else miss
+
+    def last_miss(self):
+        """why the newest detection found no board (detect.Miss), or None"""
+        with self._lock:
+            return self._miss
 
     def take(self):
         with self._lock:
@@ -501,13 +509,17 @@ class ObsBox:
 
 
 class Daemon:
-    """detector(pair) -> Future of (left corners, right corners); to_obs(left corners) -> detect.BoardObs | None;
+    """detector(pair) -> Future of (left corners, right corners) (the guidance detection: (left corners, {"brightness"}));
+    to_obs(left corners) -> detect.BoardObs | None; to_miss(left corners, the second item) -> detect.Miss: why no
+    board was seen, said by the guide;
     sampler() -> system facts for the health watch (boot_id, clock_s, load, imu_head, usb, dmesg, producer_log,
     producer, k0s_ok)"""
 
     def __init__(self, machine: Machine, capture, detector, to_obs, sampler, trial=None, clock=time.time,
-                 sample_every_s=SAMPLE_S, rebuild_detector=None, flow=None, obs_box=None):
+                 sample_every_s=SAMPLE_S, rebuild_detector=None, flow=None, obs_box=None, to_miss=None):
         self.m, self.capture, self.detector, self.to_obs = machine, capture, detector, to_obs
+        self.to_miss = to_miss
+        self.miss = None                # why the newest detection found no board (detect.Miss), or None
         self.flow, self.obs_box = flow, obs_box     # the full session (flow.FullFlow runs in its own thread)
         self.rebuild_detector = rebuild_detector    # () -> a new detector when the process pool broke
         self._rebuilt_at = None
@@ -585,14 +597,18 @@ class Daemon:
         fresh = False
         if self._pending is not None and self._pending.done():
             f, self._pending = self._pending, None
+            self.miss = None
             try:
-                dl, _ = f.result()
+                dl, extra = f.result()
                 obs = self.to_obs(dl)
+                if obs is None and self.to_miss is not None:
+                    self.miss = self.to_miss(dl, extra)
             except Exception as e:  # noqa: BLE001
                 self.m.store.event("detect_error", t=self.clock(), error=f"{type(e).__name__}: {e}")
                 obs = None
                 if _broken_pool(e):
                     self._rebuild(e)
+            self.m.state["board_miss"] = None if self.miss is None else self.miss.as_dict()
             self.m.state["board"] = None if obs is None else {
                 "z_m": round(float(obs.z), 3), "u": round(float(obs.centroid[0]), 1),
                 "v": round(float(obs.centroid[1]), 1), "tags": int(obs.n_tags), "corners": int(obs.n_corners),
@@ -692,7 +708,7 @@ class Daemon:
         # a full session detects live only for the guidance: in a grid the flow owns the detection pool
         fresh = self._detect() if not full or self.m.phase in GUIDE_PHASES else False
         if full and fresh is not False and self.obs_box is not None:
-            self.obs_box.put(fresh)
+            self.obs_box.put(fresh, self.miss)
         stalled = self._stall(t)
         self._health(t)
         if full and self.flow is not None and self.m.phase in TERMINAL:
@@ -722,7 +738,7 @@ class Daemon:
                     for s in self.trial.key(t, k):
                         self._say(s)
                 # a fresh detection feeds the guide; without one the placement's clock still runs (review 2)
-                for s in (self.trial.update(t, fresh) if fresh is not False else self.trial.tick(t)):
+                for s in (self.trial.update(t, fresh, self.miss) if fresh is not False else self.trial.tick(t)):
                     self._say(s)
             else:
                 for k in keys:
@@ -940,6 +956,10 @@ def cmd_run(a):
 
     def to_obs(dl):
         return detect.board_obs(dl, board, focal=rig.nominal_focal_px, size=(W, H))
+
+    def to_miss(dl, extra):
+        b = extra.get("brightness") if isinstance(extra, dict) else None
+        return detect.board_miss(dl or {}, (W, H), brightness=b)
     trial = None
     if a.trial or m.state.get("mode") == "trial":
         # 'up' in camera 0 (head IMU + the live OKVIS R_SC, read-only; None -> guidance by camera distance only)
@@ -968,7 +988,7 @@ def cmd_run(a):
         pools["pool"] = detect.DetectPool(board, workers)
         return submitter()
     d = Daemon(m, cap, submitter(), to_obs, sampler, trial=trial, rebuild_detector=rebuild,
-               obs_box=ObsBox() if full else None)
+               obs_box=ObsBox() if full else None, to_miss=to_miss)
     d.preflight_done(res)
     if full:
         d.flow = _full_flow(prof, m, d, dirs, cap, pools, rig, (W, H), res, probes, dry_run, a.session)

@@ -26,8 +26,8 @@ gets its reason said once (until the reason changes; detect.board_miss): "It is 
 read only a few tags. Turn the board to face the robot." (after MISS_S), or "I cannot see the board. Turn it to face
 the robot." (nothing found, after lost_s). A board found and lost in turn for UNSETTLED_S -> "Keep the board still.";
 nothing said for STATUS_S -> "Still waiting. Board N centimetres away; I need about M." (or "Still waiting. " + why it
-is not seen). None of these interrupt: each waits for the last prompt's speaking time plus GAP_S. Directions name the operator's side ("to your left"); the word "hold"
-is not used in speech (inside the tool it is a still neck pose).
+is not seen). None of these interrupt: each waits for the last prompt's speaking time plus GAP_S. Directions name the
+operator's side ("to your left"); the word "hold" is not used in speech (inside the tool it is a still neck pose).
 
 The distance model (9 Nov trial, phantom10): the head camera is ~1.5 m up and looks steeply down, so a board standing
 at the robot's feet is already ~1.1 m from the camera, and the near placements need the board high near the head. The
@@ -49,8 +49,8 @@ the target's nominal band is accepted.
 
 Trial(targets, log_path) runs the timed trials (an existing log is read back: a restarted calibd continues with the
 next placement): an intro per placement, the guide until "Good" (placed) or "out of reach" (unreachable), key C =
-"can't put it there" (unreachable), and after timeout_s "Skipping this one." (timeout; None = no limit, only C skips); trial.jsonl gets one line per
-placement (seconds from the intro to the board coming to rest, result, prompts spoken); summary() = success rate and
+"can't put it there" (unreachable), and after timeout_s "Skipping this one." (timeout; None = no limit, only C
+skips); trial.jsonl gets one line per placement (seconds from the intro to the board coming to rest, result, prompts spoken); summary() = success rate and
 seconds against the 60 s budget (design 10.4); state() names the CURRENT placement (9 Nov: a stale "placement 2 of 6"
 misled everyone)."""
 import itertools

@@ -128,6 +128,7 @@ class Robot:
     sweep_detect: object = None     # (frame) -> imusweep.BoardView | None
     R_live: object = None
     imu_fit: object = None          # (results, R_live) -> {"deploy", "reasons", "correction"}
+    board_miss: object = None       # () -> detect.Miss | None: why the newest detection found no board
     okvis_probe: object = None      # (sha12) -> postcheck.okvis_check's keyword arguments
     collect_size: tuple = (1280, 800, 15)
     live_fit: object = None         # refit.LiveFit: placement_done / collection_done / close (fit_decide reads it)
@@ -568,7 +569,8 @@ class FullFlow:
                     return "unreachable"
             fresh, obs = self.robot.board_obs()
             if fresh is not False:
-                s = g.update(self.clock(), obs)
+                miss = None if obs is not None or self.robot.board_miss is None else self.robot.board_miss()
+                s = g.update(self.clock(), obs, miss)
                 if s is not None:
                     self.emit(s)
             if g.done:

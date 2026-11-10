@@ -158,7 +158,7 @@ class Guide:
         self.target, self.ids, self.done, self.result, self.says = target, ids, False, None, []
         self.views = 0
 
-    def update(self, t, obs):
+    def update(self, t, obs, miss=None):
         if obs is None or self.done:
             return None
         self.views += 1
@@ -674,3 +674,18 @@ def test_a_close_enough_placement_runs_its_grid_and_the_report_says_where(tmp_pa
     assert rep["collection"]["done"][:2] == ["0.75 m", "1.6 m"] and rep["collection"]["unreachable"] == []
     assert rep["collection"]["near"] == {"0.75 m": 0.88}
     assert "0.75 m at 88 centimetres" in (s.dirs.report / "session.md").read_text()
+
+
+def test_the_full_sessions_guide_hears_why_the_board_is_not_seen(tmp_path):
+    """10 Nov (phantom10): PLACE says the reason, not only 'I cannot see the board' after 6 s"""
+    from calibtool import detect
+    s = Session(tmp_path)
+    s.robot_side.board_obs = lambda: (True, None)
+    s.robot_side.board_miss = lambda: detect.Miss("partial", 3, 30.0, 120.0, ("bottom",))
+    s.robot_side.make_guide = place.PlacementGuide
+    s.robot_side.guide_kw = {"focal": 568.0, "size": (1280, 800)}
+    s.m.heartbeat()
+    t0 = s.clock.t
+    s.op.hooks.append(lambda: s.clock.t - t0 > 10 and s.m.phase == "PLACE" and s.m.key("C"))
+    assert s.flow._guide(place.target("1.1 m"), "PLACE", "default") == "unreachable"
+    assert "I can see only part of the board. Raise the board." in [x.text for x in s.says]

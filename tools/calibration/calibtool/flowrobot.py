@@ -58,7 +58,7 @@ def build(prof, *, session, dirs, capture, detect_pair, producer_yaml, probes, b
         deploy_dir=str(dirs.deploy), session=session, guide_kw=dict(guide_kw), predict=predict, plan_next=plan_next,
         imu_accel=None if imu is None else imu.accel, frames0=lambda k: [p.left.y for p in capture.grab(k)],
         sweep_detect=sweep_detect, R_live=R_live, imu_fit=imu_fit or imu_fit_default, okvis_probe=okvis_probe,
-        live_fit=live_fit)
+        live_fit=live_fit, board_miss=getattr(obs_box, "last_miss", None))
 
 
 def imu_fit_default(results, R_live) -> dict:

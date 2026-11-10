@@ -1,7 +1,7 @@
 """The per-robot runtime calibd needs, from config/profiles.yaml (keyed by the bot names of config/robots.yaml): ssh
 host, robot-side python and dma_ipc folder, the session root on the robot, the head camera queues, the producer
-deployment, the motor tool, and the placement trial's board stand and time limit (null / 0: none). load(bot) / for_host(host name or
-user@host)."""
+deployment, the motor tool, and the placement trial's board stand and time limit (null / 0: none). load(bot) /
+for_host(host name or user@host)."""
 from dataclasses import dataclass
 from pathlib import Path
 
