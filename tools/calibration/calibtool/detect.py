@@ -7,9 +7,9 @@ detect().
 
 DetectPool: a process pool sized to the robot's free CPU (pool_size: cpus - load - a reserve, capped; phantom10 runs
 load ~9 on 9 cpus, so 1 worker there) that detects both frames of a pair per job; resize() rebuilds it when the load
-changes. board_obs: the board's centroid, depth (PnP with the nominal equidistant camera, as step 06), tag count and
-whether it touches the image edge, for placement guidance. hold_dict: detected pairs -> the step-15b corner dict a
-replay.Collection / assign.CaptureHold takes."""
+changes. board_obs: the board's centroid, depth and 3-D centre (PnP with the nominal equidistant camera, as step 06),
+tag count and whether it touches the image edge, for placement guidance. hold_dict: detected pairs -> the step-15b
+corner dict a replay.Collection / assign.CaptureHold takes."""
 import math
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
@@ -164,6 +164,7 @@ class BoardObs:
                                 # seen corners come within 1.5 tag widths (+ BORDER_PX) of that side
     lo: np.ndarray              # (2,) min u, v
     hi: np.ndarray              # (2,) max u, v
+    p: object = None            # (3,) the seen corners' centre in camera coordinates (m; z = .z), None when unknown
 
 
 def board_obs(det, board, focal=None, pp=None, intr=None, size=(1280, 800), min_tags=MIN_TAGS,
@@ -189,13 +190,14 @@ def board_obs(det, board, focal=None, pp=None, intr=None, size=(1280, 800), min_
     ok, rv, tv = cv2.solvePnP(np.ascontiguousarray(obj[front]).reshape(-1, 1, 3), und, np.eye(3), None)
     if not ok:
         return None
-    z = float((cv2.Rodrigues(rv)[0] @ obj.mean(0) + tv.ravel())[2])
+    p = cv2.Rodrigues(rv)[0] @ obj.mean(0) + tv.ravel()
+    z = float(p[2])
     lo, hi = uv.min(0), uv.max(0)
     n_tags = len({t for t, _ in det})
     margin = border_px + (1.5 * tag_px(det) if n_tags < board.n_tags else 0.0)
     gaps = {"left": lo[0], "top": lo[1], "right": W - 1 - hi[0], "bottom": H - 1 - hi[1]}
     cut = tuple(side for side, g in gaps.items() if g < margin)
-    return BoardObs(uv.mean(0), z, n_tags, len(keys), bool(cut), cut, lo, hi)
+    return BoardObs(uv.mean(0), z, n_tags, len(keys), bool(cut), cut, lo, hi, p)
 
 
 def tag_px(det) -> float:

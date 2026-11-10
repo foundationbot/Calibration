@@ -143,6 +143,18 @@ def test_board_obs_depth_and_centroid():
     assert o.n_tags == 35 and not o.border and o.cut == ()
 
 
+def test_board_obs_gives_the_seen_centre_in_camera_coordinates():
+    """the placement guidance splits the board's position into height and floor distance with 'up' (place.py)"""
+    b = board()
+    img, _ = render(b, z_m=1.2, centre=(700.0, 380.0))
+    det = detect.find_refine(b, img)
+    o = detect.board_obs(det, b, intr=[F, F, 640.0, 400.0] + PINHOLE_KB4, size=SIZE)
+    assert o.p.shape == (3,)
+    assert o.p[2] == pytest.approx(o.z)
+    assert o.p[0] / o.p[2] == pytest.approx(60.0 / F, abs=0.005)
+    assert o.p[1] / o.p[2] == pytest.approx(-20.0 / F, abs=0.005)
+
+
 def test_board_obs_needs_enough_tags():
     b = board()
     img, _ = render(b)
