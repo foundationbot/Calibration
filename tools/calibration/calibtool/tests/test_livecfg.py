@@ -258,7 +258,8 @@ def _reference():
 @pytest.mark.replay
 def test_p21_live_radtan_scored_in_scope_reproduces_reference(data_root, tmp_path):
     """the live radtan config read by livecfg.load, scored in this process inside radtan_scope (summary) and by step 66
-    through livecfg's runner: phase A's reference numbers (made with the kit's shim), per entry within 0.02 %"""
+    through livecfg's runner: phase A's reference numbers (made with the kit's shim, scipy: so scored with scipy
+    here), per entry within 0.02 %"""
     ref = _reference()
     st = sessions.get("p21_1105")
     test_npz = data_root / st.recorded.files["test_npz"]         # = split16(p21_1105)'s TEST file, array for array
@@ -268,8 +269,8 @@ def test_p21_live_radtan_scored_in_scope_reproduces_reference(data_root, tmp_pat
     assert np.allclose(np.array(live.intr), rec["intr"], atol=1e-9) and np.allclose(live.C, rec["C"], atol=1e-9)
     before = dict(lensmodel.MODELS)
     with ThreadPoolExecutor(1) as ex:
-        fut = ex.submit(livecfg.validate66, live, test_npz, tmp_path / "validate-live", st.rig_path)
-        sm = livecfg.summary(live, test_npz, st.rig_path, tmp_path)
+        fut = ex.submit(livecfg.validate66, live, test_npz, tmp_path / "validate-live", st.rig_path, solver="scipy")
+        sm = livecfg.summary(live, test_npz, st.rig_path, tmp_path, solver="scipy")
         v = fut.result()
     assert lensmodel.MODELS == before
     print("P21 LIVE via livecfg: " + json.dumps({"validate": v.as_dict(), "summary": sm.as_dict()}, default=str))
@@ -301,12 +302,14 @@ def test_summary_and_validate_wrap_pipeline(tmp_path, monkeypatch):
     through livecfg itself (the runner that registers the model), others through step 66 directly"""
     calls = {}
 
-    def fake_summary(calib_json, test_npz, rig):
+    def fake_summary(calib_json, test_npz, rig, solver):
         calls["summary"] = (json.loads(Path(calib_json).read_text())["model"], "RADTAN" in lensmodel.MODELS)
+        calls.setdefault("solver", []).append(solver)
         return "S"
 
-    def fake_validate(calib_json, test_npz, out_dir, rig, fit_report=None, script=None):
+    def fake_validate(calib_json, test_npz, out_dir, rig, fit_report=None, script=None, solver=None, jobs=1):
         calls.setdefault("validate", []).append((json.loads(Path(calib_json).read_text())["model"], script))
+        calls.setdefault("solver", []).append(solver)
         return "V"
 
     monkeypatch.setattr(pipeline, "summary", fake_summary)
@@ -320,6 +323,10 @@ def test_summary_and_validate_wrap_pipeline(tmp_path, monkeypatch):
     (m1, s1), (m2, s2) = calls["validate"]
     assert m1 == "RADTAN" and Path(s1) == Path(livecfg.__file__)
     assert m2 == "KB4" and s2 is None
+    assert calls["solver"] == ["fast"] * 3                  # calibtool's default solver, passed on
+    livecfg.validate66(kb, "t.npz", tmp_path / "x", "rig.yaml", solver="scipy")
+    livecfg.summary(rt, "t.npz", "rig.yaml", tmp_path, solver="scipy")
+    assert calls["solver"][3:] == ["scipy", "scipy"]
 
 
 def test_runner_registers_radtan_for_step66(tmp_path):

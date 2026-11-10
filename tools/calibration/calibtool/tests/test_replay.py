@@ -28,7 +28,7 @@ P21_BOTTOM_LEFT = "Left camera, bottom-left corner: 50 corners vs 588 in the bot
 DEFAULT, ALL4 = "required_edges=left,right,bottom", "required_edges=all"     # the report's two verdicts
 REPORT_KEYS = {"session", "robot", "assignment", "exclude_takes", "take_order", "capture_order", "placements",
                "final", "suggestions", "split", "fit", "validate_new", "validate_live", "live", "stats", "paired",
-               "verdicts", "timings", "stop", "targets", "per_hold"}
+               "verdicts", "timings", "stop", "targets", "per_hold", "solver"}
 
 
 def _load_test_module(name):
@@ -492,3 +492,88 @@ def test_replay_cut_at_the_stop_rule_still_passes(name, data_root, tmp_path):
     worse = [s["name"] for s in js["paired"]["stats"] if s["judged"] and not s["diff"] < 0]
     assert not worse, f"new not better on {worse}"
     assert js["verdicts"][DEFAULT]["decision"] == "DEPLOY", js["verdicts"][DEFAULT]["reasons"]
+
+
+# ---------------------------------------------------------------- replay: the fast solver's acceptance (verdict level)
+
+# The scipy replay of each stored session (replay.run(assignment="split16", solver="scipy"), Moonstone, 9 Nov 2026):
+# step 45's pairs, step 66's validated entries (median %) on the new fit and on the live config, and the paired
+# statistics (new, live, 95 % interval; None: not judged). The live config of p10 is the one place the fast solver
+# validates another entry than scipy at its default tolerance: top-left 0.9-1.3 m reaches 8 holds (scipy default: 7),
+# as the tight-tolerance scipy reference does (M3 plan, Results); it fails its limit like the 7 others.
+SCIPY_SPLIT16 = {
+    "p21_1105": {
+        "fit_pairs": 503,
+        "new": {"left 0.9-1.3": 0.1053, "centre 0.4-0.6": 0.0294, "centre 0.6-0.9": -0.0336, "right 0.4-0.6": 0.1373,
+                "right 0.6-0.9": 0.0969, "bottom 0.6-0.9": -0.3195, "bottom 0.9-1.3": -0.1661},
+        "live": {"centre 0.4-0.6": -0.0566, "centre 0.6-0.9": -0.0006, "right 0.6-0.9": 0.5375,
+                 "bottom 0.6-0.9": 0.4034, "bottom 0.9-1.3": 3.9857, "bottom-right 0.6-0.9": 0.4744},
+        "live_failing": ["bottom 0.9-1.3", "right 0.6-0.9"],
+        "paired": {"depth": (0.2312, 0.8661, (-1.2265, -0.309)), "spread": (0.471, 1.702, (-2.8503, -0.7936)),
+                   "rows": (0.2065, 0.8203, (-0.6693, -0.5533)), "band 0.4-0.6": (0.1143, 0.4785, (-2.7446, -0.2065)),
+                   "band 0.6-0.9": (0.1994, 0.4472, (-0.6051, -0.1161)), "band 0.9-1.3": (0.2886, 1.7128, None),
+                   "band 1.3-1.7": (0.5123, 1.9053, None), "band 1.7-2.3": (1.0306, 2.3345, None)},
+        "all4": "NOT_ENOUGH_DATA"},
+    "p10_1106": {
+        "fit_pairs": 578,
+        "new": {"top 0.9-1.3": 0.4459, "left 0.6-0.9": -0.1846, "left 0.9-1.3": -0.2508, "centre 0.9-1.3": 0.2866,
+                "right 0.6-0.9": 0.1495, "right 0.9-1.3": -0.3034, "bottom-left 0.9-1.3": -0.7595,
+                "bottom 0.4-0.6": -0.2639, "bottom 0.9-1.3": 0.0428},
+        "live": {"top 0.9-1.3": 0.9078, "left 0.6-0.9": -2.1221, "left 0.9-1.3": -6.5572, "centre 0.9-1.3": 0.513,
+                 "right 0.6-0.9": 2.6935, "right 0.9-1.3": 2.137, "bottom 0.9-1.3": -1.1562},
+        "live_failing": ["bottom 0.9-1.3", "centre 0.9-1.3", "left 0.6-0.9", "left 0.9-1.3", "right 0.6-0.9",
+                         "right 0.9-1.3", "top 0.9-1.3"],
+        "live_extra": ["top-left 0.9-1.3"],          # validated (and failing) with the fast solver, see above
+        "paired": {"depth": (0.403, 1.9753, (-2.1807, -1.2605)), "spread": (0.7826, 4.0774, (-6.7246, -2.1854)),
+                   "rows": (0.2793, 3.9674, (-4.0289, -3.3531)), "band 0.4-0.6": (0.2574, 1.6743, None),
+                   "band 0.6-0.9": (0.2131, 2.1149, (-3.9416, -1.51)),
+                   "band 0.9-1.3": (0.4343, 1.8284, (-5.7552, -0.8139)),
+                   "band 1.3-1.7": (0.4561, 2.0388, (-3.4366, -0.9839)), "band 1.7-2.3": (0.7559, 1.7168, None)},
+        "all4": "DEPLOY"},
+}
+# tolerances, fast vs scipy (measured 9 Nov 2026 on both sessions, in brackets the largest difference seen):
+FAST_ENTRY_TOL = 0.02         # step-66 entry medians, % points, new fit and live config [0.0134 p10 new; live 0.0016]
+FAST_NEW_TOL = 0.01           # a paired statistic of the new fit (% or px) [0.0051 p21 spread]
+FAST_LIVE_TOL = 0.05          # a paired statistic of the live config, which fits poorly [0.0302 p10 spread]
+FAST_CI_TOL = 0.01            # the depth and rows intervals the decision reads [0.0014 p10 depth upper end]
+
+
+@pytest.mark.replay
+@pytest.mark.parametrize("name", ["p21_1105", "p10_1106"])
+def test_fast_solver_replay_decides_as_scipy(name, data_root, tmp_path):
+    """the whole replay (step 16's split) with the fast solver and 4 processes: step 45 fits the same pairs, step 66
+    PASSes the new fit on the same entries and FAILs the live config on the same ones (p10: + top-left, as the tight
+    scipy reference), DEPLOY with the default edges and the same verdict with all four, the paired statistics within
+    the FAST_* tolerances of scipy's"""
+    ref = SCIPY_SPLIT16[name]
+    js = replay().run(sessions.get(name), assignment="split16", out_dir=tmp_path, solver="fast", jobs=4)
+    print(f"FAST {name} timings {json.dumps(js['timings'])}")
+    off = []
+    assert js["solver"] == "fast"
+    assert js["fit"]["converged"], js["fit"]["verdict"]
+    if js["fit"]["fit_pairs"] != ref["fit_pairs"]:
+        off.append(f"fit pairs {js['fit']['fit_pairs']} vs {ref['fit_pairs']}")
+    vn, vl = js["validate_new"], js["validate_live"]
+    if vn["verdict"] != "PASS" or set(vn["entries"]) != set(ref["new"]):
+        off.append(f"66 new {vn['verdict']} on {sorted(vn['entries'])} vs PASS on {sorted(ref['new'])}")
+    live_want = set(ref["live"]) | set(ref.get("live_extra", ()))
+    fail_want = set(ref["live_failing"]) | set(ref.get("live_extra", ()))
+    if vl["verdict"] != "FAIL" or set(vl["entries"]) != live_want or set(vl["failing"]) != fail_want:
+        off.append(f"66 live {vl['verdict']} on {sorted(vl['entries'])} failing {sorted(vl['failing'])}")
+    for got, want, tag in ((vn["entries"], ref["new"], "new"), (vl["entries"], ref["live"], "live")):
+        off += [f"66 {tag} {k}: {got[k]:+.4f} vs scipy {w:+.4f}" for k, w in want.items()
+                if k in got and abs(got[k] - w) > FAST_ENTRY_TOL]
+    if js["verdicts"][DEFAULT]["decision"] != "DEPLOY" or js["verdicts"][ALL4]["decision"] != ref["all4"]:
+        off.append(f"verdicts {js['verdicts'][DEFAULT]['decision']} / {js['verdicts'][ALL4]['decision']}")
+    for s in js["paired"]["stats"]:
+        n, l, ci = ref["paired"][s["name"]]
+        if abs(s["new"] - n) > FAST_NEW_TOL or abs(s["live"] - l) > FAST_LIVE_TOL:
+            off.append(f"{s['name']}: new {s['new']:.4f} live {s['live']:.4f} vs scipy {n:.4f} {l:.4f}")
+        if s["judged"] != (ci is not None):
+            off.append(f"{s['name']}: judged {s['judged']} vs scipy {ci is not None}")
+        if s["name"] in ("depth", "rows") and (s["ci"] is None or max(abs(a - b) for a, b in zip(s["ci"], ci))
+                                                > FAST_CI_TOL):
+            off.append(f"{s['name']}: interval {s['ci']} vs scipy {ci}")
+        if s["judged"] and not s["diff"] < 0:
+            off.append(f"new not better on {s['name']}")
+    assert not off, "\n".join(off)

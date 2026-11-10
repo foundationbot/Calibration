@@ -22,9 +22,11 @@ The calibration can be any JSON entry with model, intr, C (step 45's output, or 
 verdict is not "converged" (stopped at its cap, rejected, wrong sides) is not judged: NO RESULT. --fit-report and
 --uncertainty add step 45's dropped holds and step 46's sigmas and repeatability map to the report.
 Exit 0 PASS, 1 FAIL, 2 NO RESULT (an unconverged fit, a scoring solve that did not converge, the self-check failed,
-or no entry reached lens_min_holds holds). Real data: scoring took 4-17 min per calibration and set on Thor (19-20 Oct).
+or no entry reached lens_min_holds holds). The per-pair scores go to <out-dir>/scores.json; --jobs 2 rescores the
+self-check in a second (forked) process while the calibration is scored. Real data: scoring took 4-17 min per
+calibration and set on Thor (19-20 Oct).
 Usage: python 66_validate_lens.py <calibration.json[:key]> <test-corners.npz> <out-dir>
-           [--fit-report fit.json] [--uncertainty uncertainty.json] [--rig PATH]"""
+           [--fit-report fit.json] [--uncertainty uncertainty.json] [--rig PATH] [--jobs 2]"""
 import argparse
 import json
 import sys
@@ -164,6 +166,8 @@ def main(argv=None):
     ap.add_argument("out_dir", type=Path)
     ap.add_argument("--fit-report", type=Path, help="step 45's JSON (its dropped holds go in the report)")
     ap.add_argument("--uncertainty", type=Path, help="step 46's JSON (sigmas and repeatability map)")
+    ap.add_argument("--jobs", type=int, default=1, help="2: the self-check's rescoring runs in a second (forked) "
+                                                        "process while the calibration is scored (same numbers)")
     rigcfg.add_arg(ap)
     a = ap.parse_args(argv)
     rig = rigcfg.load(a.rig)
@@ -182,6 +186,8 @@ def main(argv=None):
         rep["fit_dropped"] = fit.get("dropped_holds", [])
         rep["fit_dropped_far"] = fit.get("dropped_far_holds", [])          # step 45 since 22 Oct; older: none
         rep["fit_hold_rms"] = {str(h): v for h, v in fit.get("hold_rms_px", [])}
+    if a.jobs > 1:
+        rep["jobs"] = a.jobs
     if a.uncertainty:
         rep["uncertainty"] = json.loads(a.uncertainty.read_text())
         rep["uncertainty"].pop("repeat_map", None)                       # the points stay in step 46's file
@@ -196,7 +202,60 @@ def main(argv=None):
     refused = sf.converged_fit(entry)
     if refused:
         return finish("NO RESULT", f"{a.calibration}: {refused}", 2)
+    check = _Forked(model, intr, C, data) if a.jobs > 1 else None
+    try:
+        return _judge(a, rep, gates, model, intr, C, data, check, finish)
+    finally:
+        if check is not None:
+            check.stop()
+
+
+class _Forked:
+    """lensscore.score of the self-check's calibration (the stereo baseline x 1.01, as lensscore.self_check makes it)
+    in a forked process started at once, with this process's whole state (lens models registered, the solver in
+    force); scorer() hands its result to lensscore.self_check in place of rescoring here. Fork is safe: step 66 is
+    single-threaded. stop() ends it whether or not its result was used"""
+
+    def __init__(self, model, intr, C, data):
+        import multiprocessing as mp
+        self.Cb = np.array(C, float, copy=True)
+        self.Cb[:3, 3] *= 1.01
+        ctx = mp.get_context("fork")
+        self.q = ctx.SimpleQueue()
+        self.p = ctx.Process(target=_score_forked, args=(self.q, model, intr, self.Cb, data, sf.solver_name()),
+                             daemon=True)
+        self.p.start()
+
+    def scorer(self, model, intr, C, data):
+        if not np.array_equal(C, self.Cb):
+            raise RuntimeError("the forked self-check scored another calibration")
+        ok, out = self.q.get()
+        if not ok:
+            raise RuntimeError(f"the forked self-check scoring failed:\n{out}")
+        return out
+
+    def stop(self):
+        if self.p.is_alive():
+            self.p.terminate()
+        self.p.join()
+
+
+def _score_forked(q, model, intr, C, data, solver):
+    try:
+        with sf.solver_scope(solver):
+            q.put((True, ls.score(model, intr, C, data)))
+    except BaseException:                       # noqa: BLE001  (sent to the parent, raised there)
+        import traceback
+        q.put((False, traceback.format_exc()))
+
+
+def _judge(a, rep, gates, model, intr, C, data, check, finish):
+    """scoring, flags, self-check, table and verdict (main's second half)"""
     rec, hrms, solves = ls.score(model, intr, C, data)
+    # the per-pair scores judged here, for a caller that needs them too (calibtool's summary row): no second scoring
+    sf.write_json(a.out_dir / "scores.json", {"calibration_sha256": rep["calibration"]["sha256"],
+                                              "test_sha256": rep["test"]["sha256"], "solver": sf.solver_name(),
+                                              "records": rec, "solves": solves})
     rep["scoring"] = solves
     rep["test"]["pnp_failed_pairs"] = solves["pnp_failed_pairs"]
     if not ls.solved(solves):
@@ -210,7 +269,7 @@ def main(argv=None):
                             "dist_m": sorted(list(lenscells.DIST_BINS[i]) for _, i in places[h] if i >= 0)}
                            for h in flagged]
     rep["test_flagged"].sort(key=lambda f: (lenscells.CELLS.index(f["cells"][0]), f["hold"]))
-    rep["self_check"] = ls.self_check(model, intr, C, data, rec)
+    rep["self_check"] = ls.self_check(model, intr, C, data, rec, **({"scorer": check.scorer} if check else {}))
     if not rep["self_check"]["solved"]:
         return finish("NO RESULT", "the scorer self-check's rescoring did not converge (scipy success false): no depth "
                       "number of this run is trusted", 2)

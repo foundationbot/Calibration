@@ -426,11 +426,12 @@ def decision(new, live, step66_new, gates: decide.Gates, live_error=None) -> dic
     new fit"""
     out = {"verdicts": {}, "paired": None, "stats": {"new": decide.stats(new) if new is not None else None,
                                                      "live": decide.stats(live) if live is not None else None}}
+    pr = decide.paired(new, live, gates) if new is not None and live is not None else None   # one bootstrap for all
     for key, edges in VERDICT_KEYS.items():
         out["verdicts"][key] = decide.verdict(new, live, step66_new, replace(gates, required_edges=edges),
-                                              live_error=live_error).as_dict()
-    if new is not None and live is not None:
-        out["paired"] = decide.paired(new, live, gates).as_dict()
+                                              live_error=live_error, paired_=pr).as_dict()
+    if pr is not None:
+        out["paired"] = pr.as_dict()
     return _js(out)
 
 
@@ -494,21 +495,54 @@ class _Now:
         return False
 
 
+def live_jobs(jobs):
+    """processes for step 66 of the live config, which runs beside step 45 (it needs only the TEST split): none apart
+    with jobs=1 (it runs after the others), else min(2, jobs - 1) (2: its self-check forked, step 66 --jobs 2)"""
+    return 0 if jobs <= 1 else min(2, jobs - 1)
+
+
+def new_jobs(jobs, live_running):
+    """step 66 --jobs for the new fit once step 45 is done: 2 (self-check forked) when the processes left allow it,
+    the live config's step 66 counted while it still runs"""
+    return max(1, min(2, jobs - (live_jobs(jobs) if live_running else 0)))
+
+
 def evaluate(session, rig_path, split: pipeline.Split, live_config, out_dir, gates: decide.Gates, jobs=2,
-             max_fit_z=3.0) -> dict:
-    """step 45 on the split, step 66 (new and live), decide.score of both, decision(). jobs: processes at a time
-    (2: the step-66 runs in a second process while this one scores)"""
+             max_fit_z=3.0, solver=pipeline.DEFAULT_SOLVER) -> dict:
+    """step 45 on the split, step 66 (new and live), decide.score of both (from step 66's own scores: no second
+    scoring), decision(). jobs: processes at a time; from 2, step 66 of the live config runs beside step 45
+    (live_jobs) and step 66 of the new fit forks its self-check when processes are free (new_jobs); 1: one step
+    after the other. solver: pipeline.SOLVERS, for every step"""
+    pipeline.check_solver(solver)
     out_dir = Path(out_dir)
     rig = pipeline.load_rig(rig_path)
     tm = {}
-    t = time.time()
-    fit = pipeline.fit45(split.fit_npz, rig_path, out_dir / "fit", max_z=max_fit_z)
-    tm["fit45_s"] = time.time() - t
     live, live_err = None, None
     try:
         live = livecfg.load(live_config, at_size=rig.resolution)
     except NOT_SCORABLE as e:   # a config the package cannot score; anything else is a bug and stops the run
         live_err = f"live config not loaded: {type(e).__name__}: {e}"
+    d_new, d_live = out_dir / "validate-new", out_dir / "validate-live"
+    t = time.time()
+    with (_Now() if jobs <= 1 else ThreadPoolExecutor(1)) as ex:
+        f_live = None
+        if live and jobs > 1:
+            f_live = ex.submit(livecfg.validate66, live, split.test_npz, d_live, rig_path, solver=solver,
+                               jobs=live_jobs(jobs))
+        fit = pipeline.fit45(split.fit_npz, rig_path, out_dir / "fit", max_z=max_fit_z, solver=solver)
+        tm["fit45_s"] = time.time() - t
+        v_new = v_live = None
+        if fit.converged:
+            v_new = pipeline.validate66(fit.json_path, split.test_npz, d_new, rig_path, fit_report=fit.json_path,
+                                        solver=solver, jobs=new_jobs(jobs, f_live is not None and not f_live.done()))
+        if live and f_live is None and fit.converged:
+            f_live = ex.submit(livecfg.validate66, live, split.test_npz, d_live, rig_path, solver=solver)
+        if f_live is not None:
+            try:
+                v_live = f_live.result()
+            except NOT_SCORABLE as e:
+                live_err = f"step 66 on the live config: {type(e).__name__}: {e}"
+    tm["step66_s"] = time.time() - t - tm["fit45_s"]
     res = {"fit": fit.as_dict(), "validate_new": None, "validate_live": None,
            "live": {"config": str(live_config), "model": live.model if live else None,
                     "size": list(live.size) if live else None,
@@ -519,33 +553,25 @@ def evaluate(session, rig_path, split: pipeline.Split, live_config, out_dir, gat
         v_new = SimpleNamespace(verdict="NO RESULT", text=f"step 45 did not converge: {fit.verdict}", entries={})
         dec = decision(None, None, v_new, gates)
         res["validate_new"] = {"verdict": "NO RESULT", "text": v_new.text}
+        res["validate_live"] = v_live.as_dict() if v_live else None
     else:
         place = decide.placements(split.test_npz, session)
-        new_sc = live_sc = None
-        with (_Now() if jobs <= 1 else ThreadPoolExecutor(max(1, jobs - 1))) as ex:
-            f_new = ex.submit(pipeline.validate66, fit.json_path, split.test_npz, out_dir / "validate-new", rig_path,
-                              fit_report=fit.json_path)
-            f_live = ex.submit(livecfg.validate66, live, split.test_npz, out_dir / "validate-live", rig_path) \
-                if live else None
-            new_sc = decide.score(fit.json_path, split.test_npz, rig_path, place)
-            if live:
-                try:
-                    js = live.write_json(out_dir / f"live-{live.model.lower()}.json")
-                    live_sc = decide.score(js, split.test_npz, rig_path, place)
-                except NOT_SCORABLE as e:
-                    live_err = f"live config not scored: {type(e).__name__}: {e}"
-            v_new = f_new.result()
-            v_live = None
-            if f_live is not None:
-                try:
-                    v_live = f_live.result()
-                except NOT_SCORABLE as e:
-                    live_err = live_err or f"step 66 on the live config: {type(e).__name__}: {e}"
+        live_sc = None
+        new_sc = decide.score(fit.json_path, split.test_npz, rig_path, place, solver=solver, step66=d_new)
+        if live:
+            try:
+                js = live.write_json(out_dir / f"live-{live.model.lower()}.json")
+                live_sc = decide.score(js, split.test_npz, rig_path, place, solver=solver, step66=d_live)
+            except NOT_SCORABLE as e:
+                live_err = live_err or f"live config not scored: {type(e).__name__}: {e}"
+        tm["scores_s"] = time.time() - t
         res["validate_new"] = v_new.as_dict()
         res["validate_live"] = v_live.as_dict() if v_live else None
         res["live"].update(scorable=live_sc is not None, error=live_err)
+        t1 = time.time()
         dec = decision(new_sc, live_sc, v_new, gates, live_error=live_err)
-    tm["validate_score_s"] = time.time() - t
+        tm["decision_s"] = time.time() - t1
+    tm["validate_score_s"] = tm["step66_s"] + time.time() - t
     res.update(dec)
     res["timings"] = tm
     return _js(res)
@@ -566,14 +592,17 @@ def load_session(stored, exclude_takes=()) -> Session:
 
 
 def run(stored, assignment="capture", out_dir=None, gates=None, exclude_takes=(), *, fit=True, targets=None, k=3,
-        jobs=2, head=None, log=None, stop_at_rule=False, per_hold=cv.STORED_PER_HOLD) -> dict:
+        jobs=2, head=None, log=None, stop_at_rule=False, per_hold=cv.STORED_PER_HOLD,
+        solver=pipeline.DEFAULT_SOLVER) -> dict:
     """replay a stored session (sessions.StoredSession or its name; anything with name, robot, rig_path, take_order,
     corner_files, live_config, live_model) -> the report (dict, as written to out_dir/report.json; report.md beside
     it). assignment: "capture" (assign.Assigner) | "split16" (step 16's split, the recorded runs'). fit=False stops
     after the planner (no split written, no fit). head: placement.Head for the planner (default: from the live
     config). jobs: processes at a time in the fit/validate part. per_hold: pairs per pose of the session's corner
     files (targets default to coverage.Targets.for_per_hold(per_hold); the planner simulates that many pairs a pose).
-    stop_at_rule: cut the session at the stop rule's point (Collection.stop; the whole session when never met)"""
+    stop_at_rule: cut the session at the stop rule's point (Collection.stop; the whole session when never met).
+    solver: pipeline.SOLVERS ("fast", calibtool's default; "scipy": the recorded runs' least squares)"""
+    pipeline.check_solver(solver)
     t_all = time.time()
     if isinstance(stored, str):
         stored = sessions.get(stored)
@@ -614,7 +643,7 @@ def run(stored, assignment="capture", out_dir=None, gates=None, exclude_takes=()
            "live": {"config": str(stored.live_config), "model": getattr(stored, "live_model", None), "scorable": None,
                     "error": None},
            "stats": None, "paired": None, "verdicts": None, "timings": tm, "stop": stop, "per_hold": per_hold,
-           "targets": asdict(targets)}
+           "targets": asdict(targets), "solver": solver}
     if fit:
         t = time.time()
         sd = out_dir / "split"
@@ -625,7 +654,7 @@ def run(stored, assignment="capture", out_dir=None, gates=None, exclude_takes=()
                         "near_test_pairs": split.near_test_pairs, "far_test_pairs": split.far_test_pairs,
                         "fit_npz": str(split.fit_npz), "test_npz": str(split.test_npz)}
         ev = evaluate(session, stored.rig_path, split, stored.live_config, out_dir, gates, jobs=jobs,
-                      max_fit_z=col.max_fit_z)
+                      max_fit_z=col.max_fit_z, solver=solver)
         tm.update(ev.pop("timings"))
         rep.update(ev)
     tm["total_s"] = time.time() - t_all
@@ -667,7 +696,7 @@ def render_md(rep: dict) -> str:
         L += [f"{i}. {s['say']}" for i, s in enumerate(rep["suggestions"], 1)]
     else:
         L.append("None: no candidate placement reduces a deficit.")
-    L += ["", "## Fit and validation", ""]
+    L += ["", "## Fit and validation", "", f"Least squares: {rep.get('solver', 'fast')} solver.", ""]
     if rep["fit"] is None:
         L += ["Fit not run (collection-only replay).", ""]
     else:

@@ -27,7 +27,7 @@ Verdict (verdict()):
 An edge that is not required (default: the top) and has no judged entry does not block; the reasons say so.
 Every threshold is a field of Gates; the defaults were set in M1 C3 (9 Nov 2026, with the user) from the stored
 sessions: p21 5 Nov judged left, right and bottom but no top entry, p10 6 Nov all four; both deploy."""
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 
 import numpy as np
 
@@ -126,42 +126,25 @@ def placements(test_npz, session):
 
 
 def row_errors(model, intr, C, test_npz, rig):
-    """(pair index per corner, dy per corner): pipeline.summary's row error, per corner: the corners both cameras saw,
-    rectified with the calibration's stereo pose, dy at the rig's nominal focal. The lens model must be known to
-    lensmodel (livecfg.model_scope)"""
-    import cv2
-    import lensmodel
+    """(pair index per corner, dy per corner): pipeline.row_errors, the row error pipeline.summary's rows are the median
+    of (corners both cameras saw, rectified with the calibration's stereo pose, dy at the rig's nominal focal). The lens
+    model must be known to lensmodel (livecfg.model_scope)"""
     from calibtool import pipeline
-    rig = pipeline.load_rig(rig)
-    T10 = np.linalg.inv(np.asarray(C, float))
-    R0, R1, *_ = cv2.stereoRectify(np.eye(3), np.zeros(5), np.eye(3), np.zeros(5), tuple(rig.resolution),
-                                   np.ascontiguousarray(T10[:3, :3]), np.ascontiguousarray(T10[:3, 3].reshape(3, 1)),
-                                   flags=cv2.CALIB_ZERO_DISPARITY, alpha=0)
-    z = np.load(test_npz)
-    srcs, dys = [], []
-    for j in range(len(z["img_t0"])):
-        m = z["det_img"] == j
-        d = [{(t, k): (u, v) for t, k, u, v, c in zip(z["det_tag"][m], z["det_k"][m], z["det_u"][m], z["det_v"][m],
-                                                       z["det_cam"][m]) if c == cam} for cam in (0, 1)]
-        keys = sorted(set(d[0]) & set(d[1]))
-        if keys:
-            b0 = (R0 @ lensmodel.unproject(model, intr[0], [d[0][k] for k in keys]).T).T
-            b1 = (R1 @ lensmodel.unproject(model, intr[1], [d[1][k] for k in keys]).T).T
-            dys.append(rig.nominal_focal_px * (b0[:, 1] / b0[:, 2] - b1[:, 1] / b1[:, 2]))
-            srcs.append(np.full(len(keys), j))
-    return (np.concatenate(srcs) if srcs else np.zeros(0, int)), (np.concatenate(dys) if dys else np.zeros(0))
+    return pipeline.row_errors(model, intr, C, test_npz, rig)
 
 
-def score(calib_json, test_npz, rig, placement) -> Scores:
+def score(calib_json, test_npz, rig, placement, solver="fast", step66=None) -> Scores:
     """a calibration (any step-66 JSON: step 45's fit, livecfg's live config) scored on the TEST file: pipeline.summary
-    (lensscore) and row_errors, the model registered while it runs (a RADTAN live config)"""
+    (lensscore) and row_errors, the model registered while it runs (a RADTAN live config). solver: pipeline.SOLVERS.
+    step66: the report folder of step 66 on this calibration and file: its scores are used when they match
+    (pipeline.step66_scores), instead of scoring again"""
     import stereofit as sf
     from calibtool import livecfg, pipeline
     model, intr, C = sf.load_calibration(str(calib_json))
+    done = pipeline.step66_scores(step66, calib_json, test_npz, solver) if step66 is not None else None
     with livecfg.model_scope(model):
-        sm = pipeline.summary(calib_json, test_npz, rig)
-        cs, dy = row_errors(model, intr, C, test_npz, rig)
-    return Scores.from_records(sm.records, placement, cs, dy, sm)
+        sm = pipeline.summary(calib_json, test_npz, rig, solver=solver, scores=done)
+    return Scores.from_records(sm.records, placement, sm.corner_src, sm.corner_dy, sm)
 
 
 # ---------------------------------------------------------------- paired comparison
@@ -308,10 +291,13 @@ def _fmt(s: Stat, unit, level_pct=95.0):
     return f"{s.new:.3f} vs live {s.live:.3f} {unit}, difference {s.diff:+.3f} ({level_pct:g} % {ci})"
 
 
-def verdict(new: Scores, live, step66_new, gates: Gates = Gates(), live_error=None) -> Verdict:
+def verdict(new: Scores, live, step66_new, gates: Gates = Gates(), live_error=None, paired_: Paired = None) -> Verdict:
     """the decision (DECISIONS) with its reasons. new / live: Scores on the same TEST file (live None: the live
     config could not be scored, live_error saying why); step66_new: step 66 of the new fit (pipeline.ValidateResult:
-    .verdict, .entries)"""
+    .verdict, .entries). paired_: paired(new, live, g) already made with gates that differ from these at most in
+    required_edges (the bootstrap does not read them), used instead of a second bootstrap"""
+    if paired_ is not None and replace(paired_.gates, required_edges=gates.required_edges) != gates:
+        raise ValueError("paired_ was made with other gates than required_edges: bootstrap again")
     v66 = getattr(step66_new, "verdict", None)
     judged = sorted(getattr(step66_new, "entries", {}) or {})
     edges = edges_judged(judged)
@@ -341,7 +327,7 @@ def verdict(new: Scores, live, step66_new, gates: Gates = Gates(), live_error=No
         return Verdict("LIVE_NOT_SCORABLE_DEPLOY",
                        [f"{no_live}: deploy rests on the new fit's step-66 PASS alone ({len(judged)} judged entries; "
                         f"allow_deploy_without_live=True)"] + note, **base)
-    pr = paired(new, live, gates)
+    pr = paired_ if paired_ is not None else paired(new, live, gates)
     depth, rows = pr.stat("depth"), pr.stat("rows")
     if not (depth.judged and rows.judged):
         return Verdict("NOT_ENOUGH_DATA", [f"new vs live not comparable: {depth.why or rows.why}"], paired=pr, **base)

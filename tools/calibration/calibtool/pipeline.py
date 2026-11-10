@@ -4,7 +4,12 @@ run_lens_kb4t's summary row (TEST depth error and row error of one calibration).
 16 and the summary run in this process (fast); 45 and 66 run as their own processes, exactly as the recorded runs
 called them, and are read from the JSON they write: step 45's fit JSON and step 66's report.json. Exit codes are never
 the verdict (the p21 kit's step-66 runner exited 0 on a FAIL). A step that leaves no JSON raises PipelineError with
-the tail of its log."""
+the tail of its log.
+
+Least squares: solver="fast" (calibtool.solver, M3; calibtool's default) or "scipy" (the standalone scripts' default
+and the recorded runs'), per call: CALIB_SOLVER in the step's own environment, stereofit.solver_scope in this
+process; the caller's environment is never changed. Step 66 leaves its per-pair scores (scores.json) and summary()
+takes them (step66_scores) instead of scoring the same calibration again."""
 import contextlib
 import io
 import json
@@ -22,6 +27,18 @@ from calibtool import paths
 # run_lens_kb4t.BANDS: the summary row's distance bands, (lo, hi] m; step 66 bins are [lo, hi)
 BANDS = ((0.0, 1.0), (1.0, 1.3), (1.3, 1.7), (1.7, 9.9))
 VERDICTS = ("PASS", "FAIL", "NO RESULT")
+# the least squares behind 45 / 66 / the summary: "fast" (calibtool.solver, M3) is calibtool's default; "scipy" is
+# the standalone scripts' default (and the recorded runs'). Steps 45 and 66 get it as CALIB_SOLVER in their own
+# environment, the in-process scoring through stereofit.solver_scope: the caller's environment is never changed
+SOLVERS = ("fast", "scipy")
+DEFAULT_SOLVER = "fast"
+SOLVER_ENV = "CALIB_SOLVER"
+
+
+def check_solver(solver):
+    if solver not in SOLVERS:
+        raise ValueError(f"solver {solver!r}: one of {SOLVERS}")
+    return solver
 
 
 class PipelineError(RuntimeError):
@@ -41,9 +58,11 @@ def _rig_path(rig) -> Path:
     return Path(rig) if isinstance(rig, (str, Path)) else Path(rig.path)
 
 
-def _run(script, args, log):
-    """script (a path) with args as its own process, stdout+stderr to log -> (exit code, seconds)"""
+def _run(script, args, log, solver=DEFAULT_SOLVER):
+    """script (a path) with args as its own process, stdout+stderr to log, CALIB_SOLVER=solver in its environment
+    -> (exit code, seconds)"""
     env = dict(os.environ)
+    env[SOLVER_ENV] = check_solver(solver)
     env["PYTHONPATH"] = os.pathsep.join([str(paths.SCRIPTS)] + [p for p in [env.get("PYTHONPATH")] if p])
     t = time.time()
     with open(log, "w") as fh:
@@ -119,14 +138,15 @@ class FitResult:
         return d
 
 
-def fit45(fit_npz, rig, out_dir, max_z=3.0, model="KB4T", script=None, extra=()) -> FitResult:
+def fit45(fit_npz, rig, out_dir, max_z=3.0, model="KB4T", script=None, extra=(), solver=DEFAULT_SOLVER) -> FitResult:
     """step 45 (--model, --max-z, --rig) on fit_npz -> out_dir/fit-<model>.json, log out_dir/45.log. script: run this
-    instead of 45_fit_lens.py with the same arguments (tests); extra: more arguments"""
+    instead of 45_fit_lens.py with the same arguments (tests); extra: more arguments; solver: SOLVERS"""
+    check_solver(solver)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     out, log = out_dir / f"fit-{model.lower()}.json", out_dir / "45.log"
     args = [fit_npz, out, "--model", model, "--max-z", max_z, "--rig", _rig_path(rig)] + list(extra)
-    rc, sec = _run(script or paths.script("45_fit_lens"), args, log)
+    rc, sec = _run(script or paths.script("45_fit_lens"), args, log, solver)
     if not out.is_file():
         raise PipelineError(f"step 45 (exit {rc}) wrote no {out}:\n{_tail(log)}")
     e = json.loads(out.read_text())
@@ -167,16 +187,19 @@ class ValidateResult:
         return d
 
 
-def validate66(calib_json, test_npz, out_dir, rig, fit_report=None, script=None) -> ValidateResult:
+def validate66(calib_json, test_npz, out_dir, rig, fit_report=None, script=None,
+               solver=DEFAULT_SOLVER, jobs=1) -> ValidateResult:
     """step 66 of calib_json on test_npz -> out_dir/report.json (+ report.md), log out_dir.log. The verdict is read
     from report.json and checked against the printed verdict line. script: run this instead of 66_validate_lens.py
-    with the same arguments (a runner that registers a lens model first, or a test's fake)"""
+    with the same arguments (a runner that registers a lens model first, or a test's fake); solver: SOLVERS; jobs:
+    step 66's --jobs (2: its self-check rescored in a second process)"""
+    check_solver(solver)
     out_dir = Path(out_dir)
     out_dir.parent.mkdir(parents=True, exist_ok=True)
     log = out_dir.parent / f"{out_dir.name}.log"
     args = [calib_json, test_npz, out_dir] + (["--fit-report", fit_report] if fit_report else [])
-    args += ["--rig", _rig_path(rig)]
-    rc, sec = _run(script or paths.script("66_validate_lens"), args, log)
+    args += ["--rig", _rig_path(rig)] + (["--jobs", int(jobs)] if jobs > 1 else [])
+    rc, sec = _run(script or paths.script("66_validate_lens"), args, log, solver)
     rp = out_dir / "report.json"
     if not rp.is_file():
         raise PipelineError(f"step 66 (exit {rc}) wrote no {rp}:\n{_tail(log)}")
@@ -208,44 +231,55 @@ class SummaryResult:
     bands: list                 # [{"lo", "hi", "n", "median_pct" (None below 5 pairs)}], (lo, hi] m
     solves: dict
     records: dict = field(repr=False)     # lensscore.score's per-pair records: src, hold, scale, z, u, v
+    corner_src: np.ndarray = field(default=None, repr=False)     # row_errors: pair per corner
+    corner_dy: np.ndarray = field(default=None, repr=False)      # row_errors: dy per corner (px)
 
     def as_dict(self, records=False):
         d = asdict(self)
+        d.pop("corner_src")
+        d.pop("corner_dy")
         if not records:
             d.pop("records")
         return d
 
 
-def summary(calib_json, test_npz, rig, bands=BANDS) -> SummaryResult:
+def step66_scores(report_dir, calib_json, test_npz, solver=DEFAULT_SOLVER):
+    """step 66's per-pair scores (its scores.json in report_dir) -> (records, solves), when they are of this
+    calibration (its numbers' digest) on this TEST file (its sha256) with this solver; else None (score afresh)"""
+    import stereofit as sf
+    p = Path(report_dir) / "scores.json"
+    try:
+        js = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return None
+    rec, solves = js.get("records"), js.get("solves")
+    if (js.get("solver") != solver or js.get("test_sha256") != sf.file_sha256(test_npz)
+            or js.get("calibration_sha256") != sf.calibration_digest(*sf.load_calibration(str(calib_json)))
+            or not isinstance(rec, dict) or not isinstance(solves, dict)
+            or any(v is None for vals in rec.values() for v in vals)):          # a non-finite number written as null
+        return None
+    return rec, solves
+
+
+def summary(calib_json, test_npz, rig, bands=BANDS, solver=DEFAULT_SOLVER, scores=None) -> SummaryResult:
     """run_lens_kb4t.summary_row's numbers (same math), as data: the TEST depth error of the calibration (lensscore
     board scale - 1: median, IQR, per distance band) and its row error. The lens model must be known to lensmodel
-    (a radtan config needs its model registered first)"""
-    import cv2
-    import lensmodel
+    (a radtan config needs its model registered first). solver: SOLVERS, for this call (stereofit.solver_scope).
+    scores: (records, solves) of this calibration on this file already made (step66_scores), used instead of
+    scoring again"""
     import lensscore
     import stereofit as sf
     rig = load_rig(rig)
     model, intr, C = sf.load_calibration(str(calib_json))
-    data = sf.Data(str(test_npz), rig.board)
-    rec, _, solves = lensscore.score(model, intr, C, data)
+    if scores is not None:
+        rec, solves = scores
+    else:
+        data = sf.Data(str(test_npz), rig.board)
+        with sf.solver_scope(check_solver(solver)):
+            rec, _, solves = lensscore.score(model, intr, C, data)
     sc = np.array(rec["scale"]) - 1
     zz = np.array(rec["z"])
-    T10 = np.linalg.inv(C)
-    R0, R1, *_ = cv2.stereoRectify(np.eye(3), np.zeros(5), np.eye(3), np.zeros(5), tuple(rig.resolution),
-                                   np.ascontiguousarray(T10[:3, :3]), np.ascontiguousarray(T10[:3, 3].reshape(3, 1)),
-                                   flags=cv2.CALIB_ZERO_DISPARITY, alpha=0)
-    z = np.load(test_npz)
-    dys = []
-    for j in range(len(z["img_t0"])):
-        m = z["det_img"] == j
-        d = [{(t, k): (u, v) for t, k, u, v, c in zip(z["det_tag"][m], z["det_k"][m], z["det_u"][m], z["det_v"][m],
-                                                       z["det_cam"][m]) if c == cam} for cam in (0, 1)]
-        keys = sorted(set(d[0]) & set(d[1]))
-        if keys:
-            b0 = (R0 @ lensmodel.unproject(model, intr[0], [d[0][k] for k in keys]).T).T
-            b1 = (R1 @ lensmodel.unproject(model, intr[1], [d[1][k] for k in keys]).T).T
-            dys.append(rig.nominal_focal_px * (b0[:, 1] / b0[:, 2] - b1[:, 1] / b1[:, 2]))
-    dy = np.concatenate(dys) if dys else np.zeros(1)
+    csrc, dy = row_errors(model, intr, C, test_npz, rig)
     out_bands = []
     for lo, hi in bands:
         m = (zz > lo) & (zz <= hi)
@@ -253,4 +287,36 @@ def summary(calib_json, test_npz, rig, bands=BANDS) -> SummaryResult:
                           "median_pct": float(100 * np.median(sc[m])) if m.sum() >= 5 else None})
     return SummaryResult(model, float(1e3 * np.linalg.norm(C[:3, 3])), int(len(sc)), float(100 * np.median(sc)),
                          (float(100 * np.percentile(sc, 25)), float(100 * np.percentile(sc, 75))),
-                         float(np.median(np.abs(dy))), out_bands, solves, rec)
+                         float(np.median(np.abs(dy if len(dy) else np.zeros(1)))), out_bands, solves, rec, csrc, dy)
+
+
+def row_errors(model, intr, C, test_npz, rig):
+    """the row error per corner seen by both cameras: rectified with the calibration's own stereo pose, dy (px) at
+    the rig's nominal focal -> (pair index in the TEST file per corner, dy per corner), pairs in file order and a
+    pair's corners by (tag, corner). Each array of the file read once, every corner unprojected in one call per
+    camera. The lens model must be known to lensmodel (livecfg.model_scope)"""
+    import cv2
+    import lensmodel
+    rig = load_rig(rig)
+    T10 = np.linalg.inv(np.asarray(C, float))
+    R0, R1, *_ = cv2.stereoRectify(np.eye(3), np.zeros(5), np.eye(3), np.zeros(5), tuple(rig.resolution),
+                                   np.ascontiguousarray(T10[:3, :3]), np.ascontiguousarray(T10[:3, 3].reshape(3, 1)),
+                                   flags=cv2.CALIB_ZERO_DISPARITY, alpha=0)
+    with np.load(test_npz) as z:
+        img, cam, tag, k = (np.asarray(z[n], np.int64) for n in ("det_img", "det_cam", "det_tag", "det_k"))
+        uv = np.c_[z["det_u"], z["det_v"]].astype(float)
+    if not len(img):
+        return np.zeros(0, int), np.zeros(0)
+    nk = int(k.max()) + 1
+    key = (img * (int(tag.max()) + 1) + tag) * nk + k               # (pair, tag, corner), sorts as the old loop did
+    i0, i1 = np.flatnonzero(cam == 0), np.flatnonzero(cam == 1)
+    # a corner listed twice in one camera: the last one counts (the old loop's dict)
+    u0 = len(i0) - 1 - np.unique(key[i0][::-1], return_index=True)[1]
+    u1 = len(i1) - 1 - np.unique(key[i1][::-1], return_index=True)[1]
+    i0, i1 = i0[u0], i1[u1]
+    common, a, b = np.intersect1d(key[i0], key[i1], assume_unique=True, return_indices=True)
+    if not len(common):
+        return np.zeros(0, int), np.zeros(0)
+    b0 = lensmodel.unproject(model, intr[0], uv[i0[a]]) @ R0.T
+    b1 = lensmodel.unproject(model, intr[1], uv[i1[b]]) @ R1.T
+    return img[i0[a]], rig.nominal_focal_px * (b0[:, 1] / b0[:, 2] - b1[:, 1] / b1[:, 2])

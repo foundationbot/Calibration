@@ -9,11 +9,13 @@ the rig file's nominal camera, never a deployed calibration; every pair carries 
 no max_radius cut (Fit A used every corner). numpy + scipy; cv2 only for the PnP start."""
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -34,10 +36,38 @@ GROSS_PX = 20.0                      # residuals beyond this are detection failu
 SOLVER_ENV = "CALIB_SOLVER"          # "fast": solve() and lensscore.score() by calibtool.solver / calibtool.score (M3)
 
 
+SOLVERS = ("fast", "scipy")
+_scope = threading.local()           # solver_scope's choice in this thread (a stack: scopes nest)
+
+
+@contextlib.contextmanager
+def solver_scope(name):
+    """inside the block, in this thread only, solve() and lensscore.score() use `name` ("fast" | "scipy") whatever
+    CALIB_SOLVER says; the environment is never changed (other threads and child processes are not affected)"""
+    if name not in SOLVERS:
+        raise ValueError(f"solver {name!r}: one of {SOLVERS}")
+    stack = _scope.__dict__.setdefault("stack", [])
+    stack.append(name)
+    try:
+        yield
+    finally:
+        stack.pop()
+
+
+def solver_name():
+    """the solver in force here: the innermost solver_scope of this thread, else CALIB_SOLVER ("fast" -> fast; unset
+    or anything else -> scipy)"""
+    stack = getattr(_scope, "stack", None)
+    if stack:
+        return stack[-1]
+    return "fast" if os.environ.get(SOLVER_ENV, "").strip().lower() == "fast" else "scipy"
+
+
 def fast_solver(model, free_intr=False):
-    """calibtool.solver when CALIB_SOLVER=fast and it takes this solve (free intrinsics: KB4/KB4T only), else None
-    (unset or "scipy": the scipy least squares below, unchanged)"""
-    if os.environ.get(SOLVER_ENV, "").strip().lower() != "fast":
+    """calibtool.solver when the solver in force (solver_name: a solver_scope, else CALIB_SOLVER) is "fast" and it
+    takes this solve (free intrinsics: KB4/KB4T only), else None (unset or "scipy": the scipy least squares below,
+    unchanged)"""
+    if solver_name() != "fast":
         return None
     cal = str(Path(__file__).resolve().parents[1])
     if cal not in sys.path:
@@ -252,10 +282,17 @@ def pnp_poses(data: Data, model, intr, C, min_corners=12):
     included (sweep.init_poses did this with phantom12's deployed calibration). -> (poses (n, 6), ok (n,))"""
     import cv2
     poses, ok = np.zeros((data.n, 6)), np.zeros(data.n, bool)
+    rays = np.zeros((len(data.uv), 3))
+    for c in (0, 1):                                  # every corner of a camera unprojected at once
+        m = data.cam == c
+        if m.any():
+            rays[m] = lensmodel.unproject(model, intr[c], data.uv[m])
+    order = np.lexsort((data.cam, data.pair))         # by pair, then camera; stable: a group keeps the data's order
+    bounds = np.searchsorted(data.pair[order] * 2 + data.cam[order], np.arange(2 * data.n + 1))
     for p in range(data.n):
         for c in (0, 1):
-            m = (data.pair == p) & (data.cam == c)
-            ray = lensmodel.unproject(model, intr[c], data.uv[m])
+            m = order[bounds[2 * p + c]:bounds[2 * p + c + 1]]
+            ray = rays[m]
             front = ray[:, 2] > 0.1                   # within ~84 deg of the axis, where a pinhole direction exists
             if front.sum() < min_corners:
                 continue
