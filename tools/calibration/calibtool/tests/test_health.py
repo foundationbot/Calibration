@@ -210,3 +210,24 @@ def test_desync_comes_first_even_when_the_reader_already_reattached():
     w.observe(2.0, good())
     e = w.observe(3.0, good(cams={"3": cam(none_run=25, reattaches=3), "0": cam()}))
     assert codes(e) == ["desync"]               # a new episode starts over
+
+
+def test_the_tools_own_producer_restart_raises_nothing_and_relearns_the_fps():
+    """10 Nov, phantom10/phantom11: every own restart gave "someone else changed the camera producer", "head camera
+    not on the USB bus", "USB disconnect on the head camera's port" and then "15 fps against 25" for the whole session"""
+    w = watch()
+    line = "[Tue Nov 10 14:35:15 2026] usb 2-3.1: USB disconnect, device number 4"
+    new = {"generation": 1285, "pod_uid": "u9", "args": ["--width", "1280", "--fps", "15"]}
+    during = good(usb={}, dmesg=[line], producer=new, cams={"3": cam(fps=0.0), "0": cam(fps=0.0)}, own_until=60.0)
+    assert w.observe(10.0, during) == []
+    after = good(producer=new, dmesg=[line], cams={"3": cam(fps=15.0), "0": cam(fps=15.0)}, own_until=60.0)
+    assert w.observe(61.0, after) == []                    # same producer, same line, 15 fps is the new normal
+    assert w.observe(62.0, good(producer=new, cams={"3": cam(fps=8.0), "0": cam(fps=8.0)}))[0].code == "fps_drop"
+
+
+def test_a_change_after_the_own_window_is_someone_else_again():
+    w = watch()
+    w.observe(10.0, good(own_until=60.0))
+    e = w.observe(100.0, good(producer={"generation": 1290, "pod_uid": "u3", "args": ["--width", "640"]},
+                              own_until=60.0))
+    assert "producer_changed" in codes(e)

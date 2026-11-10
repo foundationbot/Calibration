@@ -234,8 +234,18 @@ def test_planner_next_serves_blocking_deficits_first_and_never_asks_the_same_spo
                           coverage=lambda t: SimpleNamespace(deficits=lambda targets: [nice, must]))
     nxt = fr.planner_next(P())
     t1, t2, t3 = nxt(col), nxt(col), nxt(col)
-    assert seen[0][0] == [must, nice]                    # blocking first, the rest after
+    assert seen[0][0] == [must]                          # only what blocks the stop rule asks for an extra
     assert seen[1][1] == [b] and t3 is None              # a spot already asked for is not asked again
+
+
+def test_planner_next_asks_nothing_for_balance_alone():
+    """10 Nov: the comparative balance is shown, never chased with extra placements"""
+    nice = SimpleNamespace(kind="edge", blocks=False, short=500)
+    col = SimpleNamespace(targets=None, tallies=lambda: None,
+                          coverage=lambda t: SimpleNamespace(deficits=lambda targets: [nice]))
+    P = SimpleNamespace(suggest=lambda d, k=1: [SimpleNamespace(candidate=None)] if d else [], model=None,
+                        candidates=[])
+    assert fr.planner_next(P)(col) is None
 
 
 def test_planner_next_says_nothing_is_short():

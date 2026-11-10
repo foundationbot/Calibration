@@ -534,3 +534,18 @@ def test_a_deploy_while_okvis_is_stopped_starts_it_instead_of_restarting(tmp_pat
     assert starts == [start] and r.restarts == 0
     d.rollback("on purpose")
     assert r.restarts == 1 and len(starts) == 1
+
+
+def test_okvis_log_reads_the_start_where_the_entrypoint_names_the_config():
+    """10 Nov, phantom11: 1,000+ lines a minute after the restart; --tail=600 never showed the config line"""
+    calls = []
+    head = ["[entrypoint] config: x.yaml explicit path /etc/okvis/x.yaml (abcdef123456)", "KB4T pinhole camera 0"]
+    tail = [f"I line {i}" for i in range(600)]
+
+    class R:
+        def call(self, argv, **kw):
+            calls.append(argv)
+            return 0, "\n".join(head if any(a.startswith("--limit-bytes") for a in argv) else tail)
+    lines = dp.okvis_log(R(), pods=[{"ns": "okvis", "name": "okvis2x"}])
+    assert dp.log_has(lines, "abcdef123456", True)["log_sha"]
+    assert any(a.startswith("--limit-bytes") for a in calls[0]) and any(a.startswith("--tail") for a in calls[1])

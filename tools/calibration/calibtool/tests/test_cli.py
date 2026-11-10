@@ -145,8 +145,18 @@ def test_headless_renders_n_states_heartbeats_and_closes():
     link = FakeLink([json.dumps(st)] * 5)
     out = []
     n = cli.run_tui(link, speaker=None, headless=3, out=out.append)
-    assert n == 3 and len(out) == 3 and link.closed
+    assert n == 3 and link.closed
+    assert len(out) == 1                    # 10 Nov: an unchanged state is not drawn again
     assert any('"hb"' in s for s in link.sent)
+
+
+def test_headless_draws_every_changed_state_and_stops_at_n():
+    sts = [{"session": "S1", "robot": "P10", "phase": ph, "banner": [], "checks": [], "capture": {}, "say": None,
+            "updated": 1.0} for ph in ("READY", "MOTORS", "MOTORS", "PLACE", "GRID")]
+    link = FakeLink([json.dumps(st) for st in sts])
+    out = []
+    n = cli.run_tui(link, speaker=None, headless=4, out=out.append)
+    assert n == 4 and [x.splitlines()[0].split("phase ")[1].split()[0] for x in out] == ["READY", "MOTORS", "PLACE"]
 
 
 def test_a_full_session_starts_calibd_in_full_mode():

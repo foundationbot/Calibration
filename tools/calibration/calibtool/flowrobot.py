@@ -99,9 +99,10 @@ def planner_next(planner_, accept_m=0.15, tol_deg=10.0):
 
     def plan_next(col):
         defs = col.coverage(col.tallies()).deficits(col.targets)
-        # 10 Nov, phantom11: what blocks the stop rule first (stable: the coverage order within each group), and a
-        # spot already asked for in this session never again (the same side placement came twice)
-        defs = sorted(defs, key=lambda d: not getattr(d, "blocks", True))
+        # 10 Nov, phantom11: only what blocks the stop rule asks for an extra placement (the comparative balance,
+        # e.g. "left edge 4x fewer than the right", is shown, never chased), and a spot already asked for in this
+        # session never again (the same side placement came twice)
+        defs = [d for d in defs if getattr(d, "blocks", True)]
         if every:
             planner_.candidates = [c for c in every if c not in asked]
         s = planner_.suggest(defs, k=1) if defs else []
@@ -109,12 +110,21 @@ def planner_next(planner_, accept_m=0.15, tol_deg=10.0):
             return None
         c = s[0].candidate
         asked.append(c)
+        try:
+            from calibtool import coverage as cv
+            what = cv.sentence(s[0].target).split(":")[0].strip()
+        except Exception:  # noqa: BLE001  (the reason is a courtesy for the operator)
+            what = None
         m = planner_.model(c)
         T = m.T_CW(0.0, 0.0, 0)
         z = float((T[:3, :3] @ np.asarray(m.obj, float).mean(0) + T[:3, 3])[2])
         b = float(c.bearing_deg) if c.bearing_deg else None
-        return place.Target(f"extra {stamp}-{next(n)}", round(z, 2), (max(0.3, z - accept_m), z + accept_m),
-                            tilted=bool(c.tilted), bearing_deg=b, tol_deg=tol_deg if b is not None else None)
+        t = place.Target(f"extra {stamp}-{next(n)}", round(z, 2), (max(0.3, z - accept_m), z + accept_m),
+                         tilted=bool(c.tilted), bearing_deg=b, tol_deg=tol_deg if b is not None else None)
+        if what:
+            plan_next.why[t.name] = what[0].lower() + what[1:]
+        return t
+    plan_next.why = {}
     return plan_next
 
 

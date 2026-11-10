@@ -165,11 +165,13 @@ def _keys(t: tui.Tui, quit_ev):
 
 
 def run_tui(link, speaker, headless=0, out=None, interactive=False) -> int:
-    """the TUI loop over a link; headless N: render N states then leave. -> states rendered"""
+    """the TUI loop over a link; headless N: take N states then leave, drawing each changed one (no 2-a-second limit).
+    A screen is drawn only when its text changed (10 Nov: the whole screen was re-printed for every state line), at
+    most tui.MIN_DRAW_S apart; the last one is drawn when leaving. -> states taken"""
     term = not headless and out is None and sys.stdout.isatty()
     clear = "" if headless or out is not None else "\033[2J\033[H"
     out = out or (lambda s: (sys.stdout.write(clear + s + "\n"), sys.stdout.flush()))
-    t = tui.Tui(link.send, speaker, out=out, ansi=term)
+    t = tui.Tui(link.send, speaker, out=out, ansi=term, min_draw_s=0.0 if headless else tui.MIN_DRAW_S)
     quit_ev = threading.Event()
 
     def beat():
@@ -189,6 +191,7 @@ def run_tui(link, speaker, headless=0, out=None, interactive=False) -> int:
                 break
     finally:
         quit_ev.set()
+        t.flush()
         link.close()
     return n
 

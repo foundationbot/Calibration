@@ -48,6 +48,24 @@ TERMINAL = frozenset({"DONE", "ABORTED", "STOPPED_LOUD"})
 PHASE_KEYS = {"MOTORS": "Y", "PLACE": "C", "IMU_PLACE": "C", "CHECK_PLACE": "C", "POST_PLACE": "C",
               "DEPLOY_SIZE": "12?", "DEPLOY": "YR", "POSTCHECK": "R", "REPORT": "R", "FINISH": "DKREX", "DONE": "D",
               "ABORTED": "D", "STOPPED_LOUD": "D"}
+# what an accepted key does, said back to the operator (state["last_key"]; 10 Nov: "i press Y and nothing is shown")
+KEY_MEANING = {("MOTORS", "Y"): "enabling the motors (or taking them over when already on)",
+               ("PLACE", "C"): "skipping this placement", ("IMU_PLACE", "C"): "skipping the IMU sweep",
+               ("CHECK_PLACE", "C"): "skipping the check grid", ("POST_PLACE", "C"): "skipping the depth check",
+               ("DEPLOY_SIZE", "1"): "deploy size 1 chosen", ("DEPLOY_SIZE", "2"): "deploy size 2 chosen",
+               ("DEPLOY_SIZE", "?"): "this robot's facts on the screen", ("DEPLOY", "Y"): "deploying",
+               ("DEPLOY", "R"): "rolling back", ("POSTCHECK", "R"): "rolling back", ("REPORT", "R"): "rolling back",
+               ("FINISH", "R"): "rolling back", ("FINISH", "K"): "the motors stay on",
+               ("FINISH", "D"): "disable the motors (the warning first; D again disables)",
+               ("FINISH", "E"): "more placements, then fit and decide again",
+               ("FINISH", "X"): "deciding again with the regions judged (one-off)", ("DONE", "D"): "disable the motors",
+               ("ABORTED", "D"): "disable the motors", ("STOPPED_LOUD", "D"): "disable the motors"}
+
+
+def key_meaning(phase, k) -> str:
+    return KEY_MEANING.get((phase, k), f"{k} accepted in {phase}")
+
+
 STEP_S = 0.15            # 9 Nov trial: guidance felt laggy at 0.5 s, then 0.25 s; guide_corners on a 1280x800 frame
                          # takes ~30 ms single-threaded (Moonstone; phantom10 measured in the report)
 SAYS_KEEP = 8            # the recent prompts kept in the state: a step can make two (an end and the next intro)
@@ -272,50 +290,78 @@ class Machine:
             self.to("HOLD", str(why))
 
     def key(self, k):
+        """one operator key; every key gets an answer in state["last_key"] (10 Nov, phantom11: "i press Y and nothing
+        is shown"): accepted or not, and what it does / why not"""
         k = str(k).upper()
         with self._lock:
-            self.store.event("key", t=self.clock(), key=k, phase=self.phase)
-            full = self.state.get("mode") == "full"
-            if self.phase in TERMINAL:
-                if full and k in PHASE_KEYS.get(self.phase, ""):
-                    self.pending_keys.append(k)
-                return
-            if k == "A":
-                self.to("ABORTED", "abort key")
-            elif k == "G":
-                if self.phase == "HOLD" and self.state.get("preflight_green") is False:
-                    self.store.event("g_refused", t=self.clock(), why="the preflight after the restart failed")
-                elif self.phase == "HOLD" and self.live() and self.state.get("held_from"):
-                    back = self.state["held_from"]
-                    self.store.event("resumed_by_operator", t=self.clock(), to=back)
-                    self.state["held_from"], self.state["hold_reason"] = None, None
-                    self.to(back, "G with the TUI attached")
-            elif k == "T" and not full:
-                if self.phase == "READY":
-                    self.to("TRIAL", "T: placement trial")
-            elif k == "M" and full and self.phase == "READY":
-                if self.state.get("motion_gate_green") is True:
-                    self.to("MOTORS", "M: motor screen")
-                else:
-                    self.store.event("motors_refused", t=self.clock(), why="the preflight motion gate is not green",
-                                     failed=[c["name"] for c in self.state.get("checks") or ()
-                                             if c.get("gate") == "motion" and c.get("status") == "fail"])
-            elif k == "O" and full:
-                self.state["okvis_check"] = False
-                self.store.event("okvis_check_skipped", t=self.clock(), phase=self.phase)
-                self.save()
-            elif full:
-                if k in PHASE_KEYS.get(self.phase, ""):
-                    self.pending_keys.append(k)
-                else:
-                    self.store.event("key_dropped", t=self.clock(), key=k, phase=self.phase,
-                                     why=f"{k} does nothing in {self.phase}")
-            elif self.phase in ACTIVE:
+            phase = self.phase
+            accepted, why = self._key(k)
+            self.state["last_key"] = {"key": k, "phase": phase, "accepted": bool(accepted), "why": why,
+                                      "t": self.clock()}
+
+    def _key(self, k):
+        self.store.event("key", t=self.clock(), key=k, phase=self.phase)
+        full = self.state.get("mode") == "full"
+        if self.phase in TERMINAL:
+            if full and k in PHASE_KEYS.get(self.phase, ""):
                 self.pending_keys.append(k)
-            else:
-                # review 4: two C pressed in HOLD were replayed after G and skipped two placements
-                self.store.event("key_dropped", t=self.clock(), key=k, phase=self.phase,
-                                 why="trial keys count only during the trial")
+                return True, key_meaning(self.phase, k)
+            return False, f"the session has ended ({self.phase}): {k} does nothing"
+        if k == "A":
+            self.to("ABORTED", "abort key")
+            return True, "aborting: what moves finishes its pose, then the robot goes back as it was"
+        if k == "G":
+            if self.phase != "HOLD":
+                return False, f"G only continues after a HOLD (now {self.phase})"
+            if self.state.get("preflight_green") is False:
+                self.store.event("g_refused", t=self.clock(), why="the preflight after the restart failed")
+                return False, "the preflight after the restart failed: see the checks"
+            if not (self.live() and self.state.get("held_from")):
+                return False, "G needs this screen attached (no heartbeat yet)"
+            back = self.state["held_from"]
+            self.store.event("resumed_by_operator", t=self.clock(), to=back)
+            self.state["held_from"], self.state["hold_reason"] = None, None
+            self.to(back, "G with the TUI attached")
+            return True, f"continuing ({back}); any motion starts after a spoken countdown"
+        if k == "T" and not full:
+            if self.phase == "READY":
+                self.to("TRIAL", "T: placement trial")
+                return True, "placement trial started"
+            return False, f"T starts the trial only from READY (now {self.phase})"
+        if k == "M" and full:
+            if self.phase != "READY":
+                return False, f"M opens the motor screen only from READY (now {self.phase})"
+            if self.state.get("motion_gate_green") is True:
+                self.to("MOTORS", "M: motor screen")
+                return True, "motor screen: check it, then Y"
+            failed = [c["name"] for c in self.state.get("checks") or ()
+                      if c.get("gate") == "motion" and c.get("status") == "fail"]
+            self.store.event("motors_refused", t=self.clock(), why="the preflight motion gate is not green",
+                             failed=failed)
+            return False, "the motion checks are not green: " + (", ".join(failed) or "see the checks")
+        if k == "O" and full:
+            self.state["okvis_check"] = False
+            self.store.event("okvis_check_skipped", t=self.clock(), phase=self.phase)
+            self.save()
+            return True, "the OKVIS check after the deploy will be skipped"
+        if full:
+            if k in PHASE_KEYS.get(self.phase, ""):
+                self.pending_keys.append(k)
+                busy = self.state.get("busy")
+                return True, key_meaning(self.phase, k) + (f" (after: {busy['what']})" if busy else "")
+            why = f"{k} does nothing in {self.phase}"
+            busy = self.state.get("busy")
+            if busy:
+                why += f": the tool is busy ({busy['what']}), no key needed"
+            self.store.event("key_dropped", t=self.clock(), key=k, phase=self.phase, why=why)
+            return False, why
+        if self.phase in ACTIVE:
+            self.pending_keys.append(k)
+            return True, f"{k} passed to the trial"
+        # review 4: two C pressed in HOLD were replayed after G and skipped two placements
+        self.store.event("key_dropped", t=self.clock(), key=k, phase=self.phase,
+                         why="trial keys count only during the trial")
+        return False, "trial keys count only during the trial"
 
     def take_keys(self) -> list:
         with self._lock:
@@ -656,6 +702,8 @@ class Daemon:
         s = dict(self.sampler() or {})
         s["cams"] = snap.get("cams") or {}
         s["sync_median_ms"] = snap.get("sync_median_ms")
+        own = self.m.state.get("producer_own_t")
+        s["own_until"] = None if own is None else float(own) + health.OWN_WINDOW_S
         evs = self.watch.observe(t, s)
         for e in evs:
             self.m.store.event("health", **{k: v for k, v in e.as_dict().items() if k != "t"}, t=e.t)

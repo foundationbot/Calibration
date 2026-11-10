@@ -38,6 +38,8 @@ SUPERSPEED = 5000
 SUSPECT_WINDOW_S = 600.0        # a second freeze within this of a restart -> hardware suspicion
 SENTENCE_WINDOW_S = 1200.0      # restarts counted in suspicion_sentence
 USB_BEFORE_S = 60.0             # a USB reset this long before a restart counts as its cause
+OWN_WINDOW_S = 60.0             # after the tool's own producer restart: the camera re-enumerates (13 s on phantom11)
+                                # and the generation changes; not a fault, not "someone else"
 CLOCK_MIN_S = 1.577e9           # 2020-01-01
 _USB_LINE = re.compile(r"usb (\d+-[\d.]+):.*(reset|disconnect)", re.I)
 
@@ -110,6 +112,21 @@ class Watch:
     # -------------------------------------------------------------- the rules
 
     def observe(self, t, s) -> list:
+        # the tool's own producer restart (s["own_until"]: OWN_WINDOW_S after it): the camera drops off the USB bus and
+        # comes back, frames stop for a while, the generation changes and the frame rate is the tool's new one: no
+        # rule fires; afterwards the new producer is the reference and the fps baseline is learnt again
+        if s.get("own_until") is not None and t <= float(s["own_until"]):
+            for ln in s.get("dmesg") or ():
+                self._seen.add(ln)
+            if s.get("producer") is not None:
+                self._producer = dict(s["producer"])
+            self._relearn_fps = True
+            return []
+        if getattr(self, "_relearn_fps", False):
+            fps = sorted(float(c["fps"]) for c in (s.get("cams") or {}).values() if c.get("fps"))
+            if fps:
+                self.baseline = {**self.baseline, "fps": fps[len(fps) // 2]}
+                self._relearn_fps = False
         out = []
         b = self.baseline
         for q, c in sorted((s.get("cams") or {}).items()):

@@ -1,11 +1,15 @@
 """The laptop side's screen and voice (design plan sections 3, 4, 4.1): renders calibd's state, sends the operator's
 keys and a heartbeat, speaks each new prompt once. Stdlib only (the laptop needs nothing installed).
 
-render(state) -> text: a header that is always there (robot, session, phase, motor state, "A = abort"), the NOT NORMAL
-banner (calibd's banner lines), the preflight checks, capture counters, the board as detected, the placement prompt,
-recent health events and the key help. Tui(send, speaker): step(line) handles one state line from calibd (speaks a
-prompt whose id is new and whose age is under SPEAK_MAX_AGE_S, so a re-attach does not replay an old one), heartbeat()
-sends {"hb": t} at most once a second, key(k) sends {"key": K}. SpdSay speaks through spd-say (-w: wait until spoken;
+render(state) -> text, most important first (10 Nov: the operator glances at it from the robot): a header that is
+always there (robot, session, phase, motor state, "A = abort"), the key acknowledgement and calibd's WORKING line, the
+NOT NORMAL banner (calibd's banner lines), the current prompt, the progress (countdown, placement, grid pose, trial),
+this phase's details (the whole preflight list only in PREFLIGHT/READY/BLOCKED, else one summary line and its problems;
+the motor checks whole only in MOTORS), the health events once each (newest first, at most 3) and the key help.
+Tui(send, speaker): step(line) handles one state line from calibd (speaks a prompt whose id is new and whose age is
+under SPEAK_MAX_AGE_S, so a re-attach does not replay an old one) and draws the screen only when its text changed, at
+most twice a second; heartbeat() sends {"hb": t} at most once a second, key(k) sends {"key": K} and shows it at once,
+then calibd's answer (state["last_key"]). SpdSay speaks through spd-say (-w: wait until spoken;
 the caller runs it off the render thread); Silent is the no-voice speaker; TextPrompts (--voice text) speaks nothing and
 keeps the last prompts for a PROMPT panel at the top of the screen (the newest highlighted, the previous ones with
 their age), for rooms where a voice is not wanted."""
@@ -22,6 +26,10 @@ import time
 SPEAK_MAX_AGE_S = 5.0
 HB_S = 1.0
 NOT_STEPPING_S = 3.0     # calibd's step counter unchanged this long (laptop clock) = its loop stopped
+MIN_DRAW_S = 0.5         # at most 2 screens a second (10 Nov: the whole screen was re-printed for every state line)
+KEY_NO_ANSWER_S = 3.0    # a key calibd has not answered this long: said so on screen
+KEY_SHOW_S = 10.0        # calibd's answer to a key stays on screen this long
+KEY_GIVE_UP_S = 30.0     # an unanswered key's line goes after this long
 KEYS = "A = abort | G = continue after HOLD | T = start the placement trial | C = can't put it there | " \
        "Q = leave (calibd keeps running)"
 MARK = {"ok": "ok  ", "warn": "WARN", "fail": "FAIL", "info": "info"}
@@ -83,49 +91,113 @@ def _panel(prompts, width=100, ansi=False) -> list:
     return L
 
 
-def render(state, width=100, notes=(), prompts=None, ansi=False) -> str:
+PREFLIGHT_PHASES = ("PREFLIGHT", "READY", "BLOCKED")      # the whole preflight list; elsewhere one summary line
+BOARD_PHASES = ("PLACE", "GRID", "IMU_PLACE", "IMU_SWEEP", "CHECK_PLACE", "CHECK_GRID", "POST_PLACE", "HOLD")
+HEALTH_N = 3
+
+
+def render(state, width=100, notes=(), prompts=None, ansi=False, ack=()) -> str:
     """notes: the laptop's own NOT NORMAL lines (e.g. calibd not stepping), shown before calibd's banner; prompts (text
-    mode): [(age_s, text)] newest first, shown as the PROMPT panel under the banner, above everything else"""
+    mode): [(age_s, text)] newest first, shown as the PROMPT panel under the banner, above everything else; ack: the
+    key acknowledgement lines (under the header). 10 Nov: most important first -- header, NOT NORMAL, the current
+    prompt, progress, then the details of this phase only (the operator glances at it from the robot)."""
     s = state or {}
-    L = []
-    L.append(f"calib  {s.get('robot', '?')}  session {s.get('session', '?')}  phase {s.get('phase', '?')}  "
-             f"{_motors(s)}  link {'up' if s.get('attached') else 'down'}   [A = abort]")
-    L.append("-" * width)
+    sep = "-" * width
+    L = [f"calib  {s.get('robot', '?')}  session {s.get('session', '?')}  phase {s.get('phase', '?')}  "
+         f"{_motors(s)}  link {'up' if s.get('attached') else 'down'}   [A = abort]"]
+    L += [str(a)[:width * 2] for a in ack or ()]
+    w = _working(s)
+    if w:
+        L.append(w[:width * 2])
+    L.append(sep)
     banner = list(notes) + list(s.get("banner") or ())
     for b in banner:
         L.append(f"NOT NORMAL: {b}")
     if banner:
-        L.append("-" * width)
+        L.append(sep)
+    say = s.get("say")
     if prompts:
         L += _panel(prompts, width, ansi)
-        L.append("-" * width)
+        L.append(sep)
+    elif say and say.get("text"):
+        for x in textwrap.wrap(f'>> "{say.get("text")}"', width, subsequent_indent="   ") or [""]:
+            L.append(f"\033[1m{x}{PLAIN}" if ansi else x)
+        L.append(sep)
+    L += _progress_lines(s, width)
+    L += _detail_lines(s, width)
+    L += _health_lines(s.get("health"), width)
+    L.append(sep)
+    L.append(keys_for(s))
+    return "\n".join(L)
+
+
+def _working(s):
+    """calibd's busy (a long step under way, e.g. the deploy): what, and for how long (calibd's clock)"""
+    b = s.get("busy")
+    if not b or not b.get("what"):
+        return None
+    try:
+        el = f" ({max(0.0, float(s.get('updated')) - float(b.get('since'))):.0f} s)"
+    except (TypeError, ValueError):
+        el = ""
+    return f"WORKING: {b['what']}{el}"
+
+
+def _check_line(c, width, gate=True):
+    g = f"{c.get('gate', ''):7s} " if gate else ""
+    return f"  {MARK.get(c.get('status'), '?   ')} {g}{c.get('name', ''):16s} {str(c.get('detail', ''))[:width - 34]}"
+
+
+def _preflight_lines(s, width):
     checks = s.get("checks") or []
-    if checks:
-        L.append("preflight (collect gate / motion gate, M5):")
-        for c in checks:
-            L.append(f"  {MARK.get(c.get('status'), '?   ')} {c.get('gate', ''):7s} {c.get('name', ''):16s} "
-                     f"{str(c.get('detail', ''))[:width - 34]}")
-    cap = s.get("capture") or {}
-    if cap:
-        cams = cap.get("cams") or {}
-        per = ", ".join(f"queue {q}: {c.get('fps', 0):.1f} fps, {c.get('none_reads', 0)} empty reads"
-                        for q, c in sorted(cams.items()))
-        sync = cap.get("sync_median_ms")
-        L.append(f"cameras: {cap.get('pairs', 0)} pairs; {per}; L/R sync "
-                 f"{'?' if sync is None else f'{sync:.3f}'} ms")
-    b = s.get("board")
-    if b:
-        cut = f", cut by the {'/'.join(b['cut'])} edge" if b.get("cut") else ""
-        L.append(f"board: {b.get('z_m', 0):.2f} m, {b.get('tags', 0)} tags{cut}")
-    elif cap:
-        L.append("board: not seen")
+    if not checks:
+        return []
+    if s.get("phase") in PREFLIGHT_PHASES:
+        return ["preflight (collect gate / motion gate, M5):"] + [_check_line(c, width) for c in checks]
+    n = collections.Counter(c.get("status") for c in checks)
+    parts = [f"{n[k]} {k}" for k in ("ok", "info", "warn", "fail") if n[k]]
+    parts += [f"{v} {k}" for k, v in n.items() if k not in ("ok", "info", "warn", "fail")]
+    return [f"preflight: {', '.join(parts)}"] + [_check_line(c, width) for c in checks
+                                                 if c.get("status") not in ("ok", "info")]
+
+
+def _health_lines(health, width):
+    """each message once (with a count), newest first, at most HEALTH_N (10 Nov: 5 lines repeated one warning)"""
+    seen, order = collections.Counter(), []
+    for e in reversed(list(health or ())):
+        k = (str(e.get("level", "")).upper(), str(e.get("message")))
+        if k not in seen:
+            order.append(k)
+        seen[k] += 1
+    return [f"health {lv}: {msg}{f' x{seen[(lv, msg)]}' if seen[(lv, msg)] > 1 else ''}"[:width * 2]
+            for lv, msg in order[:HEALTH_N]]
+
+
+def _progress_lines(s, width=100) -> list:
+    """where the session is: the countdown, the placement, the grid pose, the placement trial"""
+    L = []
+    ph = s.get("phase")
+    full = s.get("mode") == "full"
+    if full and s.get("countdown"):
+        L.append(f">>> STARTING IN {s['countdown']} -- step back from the head <<<")
+    pl = s.get("placement")
+    if full and pl and ph in BOARD_PHASES:
+        L.append(f"placement: {pl.get('target')} ({pl.get('kind')})")
+    g = s.get("grid")
+    if full and g and g.get("pose") is not None and ph in ("GRID", "CHECK_GRID", "HOLD"):
+        last = g.get("last") or {}
+        cmd, meas = last.get("command") or [], last.get("measured") or []
+        tail = "" if not cmd else (f"; last pose {cmd[0]:+.0f}/{cmd[1]:+.0f} deg, measured {meas[0]:+.1f}/"
+                                   f"{meas[1]:+.1f}, {last.get('tags_l', 0)} tags, "
+                                   f"{'board found' if last.get('found') else 'NO BOARD'}")
+        L.append(f"grid {g.get('placement')}: pose {g.get('pose')} of {g.get('of')}{tail}"[:width])
     tr = s.get("trial")
     if tr:
         L.append("placement trial: " + _trial_line(tr))
-        g = tr.get("gravity") or {}
-        if g:
-            L.append(f"  gravity: camera {g.get('pitch_down_deg')} deg below the horizon ({g.get('note', '')})"
-                     if g.get("ok") else f"  gravity: NOT AVAILABLE -- {g.get('note', '')}")
+        gr = tr.get("gravity") or {}
+        if gr:
+            L.append(f"  gravity: camera {gr.get('pitch_down_deg')} deg below the horizon ({gr.get('note', '')})"
+                     if gr.get("ok") else f"  gravity: NOT AVAILABLE -- {gr.get('note', '')}")
         tb = tr.get("board") or {}
         if tb.get("dh_m") is not None:
             dh = float(tb["dh_m"])
@@ -133,16 +205,29 @@ def render(state, width=100, notes=(), prompts=None, ansi=False) -> str:
                      f"{round(float(tb['dxy_m']) * 100):.0f} cm along the floor")
         for r in tr.get("records") or ():
             L.append(f"  {r['target']:7s} {r['result']:11s} {r['seconds']:6.1f} s, {r.get('prompts', 0)} prompts")
-    if s.get("mode") == "full":
-        L += _full_lines(s, width)
-    say = s.get("say")
-    if say and not prompts:
-        L.append(f'>> "{say.get("text")}"')
-    for e in (s.get("health") or [])[-5:]:
-        L.append(f"health {e.get('level', '').upper()}: {e.get('message')}")
-    L.append("-" * width)
-    L.append(keys_for(s))
-    return "\n".join(L)
+    return L
+
+
+def _detail_lines(s, width=100) -> list:
+    """this phase's details: the full session's phase lines first, then the board, the preflight, the cameras"""
+    L = _full_lines(s, width) if s.get("mode") == "full" else []
+    b = s.get("board")
+    cap = s.get("capture") or {}
+    if s.get("mode") != "full" or s.get("phase") in BOARD_PHASES:
+        if b:
+            cut = f", cut by the {'/'.join(b['cut'])} edge" if b.get("cut") else ""
+            L.append(f"board: {b.get('z_m', 0):.2f} m, {b.get('tags', 0)} tags{cut}")
+        elif cap:
+            L.append("board: not seen")
+    L += _preflight_lines(s, width)
+    if cap:
+        cams = cap.get("cams") or {}
+        per = ", ".join(f"queue {q}: {c.get('fps', 0):.1f} fps, {c.get('none_reads', 0)} empty reads"
+                        for q, c in sorted(cams.items()))
+        sync = cap.get("sync_median_ms")
+        L.append(f"cameras: {cap.get('pairs', 0)} pairs; {per}; L/R sync "
+                 f"{'?' if sync is None else f'{sync:.3f}'} ms")
+    return L
 
 
 def _reasons(rs, n=4, width=100):
@@ -150,28 +235,15 @@ def _reasons(rs, n=4, width=100):
 
 
 def _full_lines(s, width=100) -> list:
-    """the full session's screen: what the current phase needs the operator to see"""
+    """the full session's screen: what the current phase needs the operator to see (the motor check list whole only
+    in MOTORS; in HOLD only its problems)"""
     L = []
     mo = s.get("motors")
     if mo and s.get("phase") in ("MOTORS", "HOLD"):
         L.append(f"motors: {mo.get('detail', '')}"[:width])
         for c in mo.get("checks") or ():
-            L.append(f"  {MARK.get(c.get('status'), '?   ')} {c.get('name', ''):16s} "
-                     f"{str(c.get('detail', ''))[:width - 24]}")
-    if s.get("countdown"):
-        L.append(f">>> STARTING IN {s['countdown']} -- step back from the head <<<")
-    pl = s.get("placement")
-    if pl and s.get("phase") in ("PLACE", "GRID", "IMU_PLACE", "IMU_SWEEP", "CHECK_PLACE", "CHECK_GRID", "POST_PLACE",
-                                 "HOLD"):
-        L.append(f"placement: {pl.get('target')} ({pl.get('kind')})")
-    g = s.get("grid")
-    if g and g.get("pose") is not None and s.get("phase") in ("GRID", "CHECK_GRID", "HOLD"):
-        last = g.get("last") or {}
-        cmd, meas = last.get("command") or [], last.get("measured") or []
-        tail = "" if not cmd else (f"; last pose {cmd[0]:+.0f}/{cmd[1]:+.0f} deg, measured {meas[0]:+.1f}/"
-                                   f"{meas[1]:+.1f}, {last.get('tags_l', 0)} tags, "
-                                   f"{'board found' if last.get('found') else 'NO BOARD'}")
-        L.append(f"grid {g.get('placement')}: pose {g.get('pose')} of {g.get('of')}{tail}"[:width])
+            if s.get("phase") == "MOTORS" or c.get("status") not in ("ok", "info"):
+                L.append(_check_line(c, width + 10, gate=False))
     sw = s.get("sweep")
     if sw:
         L.append(f"IMU sweep: {'apply the rotation' if sw.get('deploy') else 'keep the live rotation'}")
@@ -363,9 +435,20 @@ def _trial_line(tr) -> str:
 
 
 class Tui:
-    def __init__(self, send, speaker, clock=time.monotonic, out=print, speak_max_age_s=SPEAK_MAX_AGE_S, ansi=False):
+    """draws a screen only when its text changed, at most once per min_draw_s (a change waiting longer is drawn at
+    the next state; flush() draws it when leaving); a key is acknowledged on screen at once, then calibd's answer
+    (state["last_key"]) replaces it. Speech does not depend on drawing."""
+
+    def __init__(self, send, speaker, clock=time.monotonic, out=print, speak_max_age_s=SPEAK_MAX_AGE_S, ansi=False,
+                 min_draw_s=MIN_DRAW_S):
         self.send_line, self.speaker, self.clock, self.out = send, speaker or Silent(), clock, out
         self.ansi = ansi
+        self.min_draw_s = min_draw_s
+        self.screen = None              # the newest rendered text; _drawn: the one on screen, drawn at _drawn_t
+        self._drawn = self._drawn_t = None
+        self._notes = []
+        self._pressed = None            # the operator's last key: {key, at (laptop clock), before, answer, answer_at}
+        self._lock = threading.RLock()  # the key thread draws too
         self.max_age = speak_max_age_s
         self.spoken = None
         self._fresh = True              # nothing seen yet: old prompts (attaching late) are not spoken
@@ -394,10 +477,62 @@ class Tui:
                     self._speak(x)
                 self.spoken = x["id"]
             self._fresh = False
-        pf = getattr(self.speaker, "prompts", None)
-        self.out(render(st, notes=self.notes(st), ansi=self.ansi,
-                        prompts=pf(float(st.get("updated") or 0)) if pf else None))
+        with self._lock:
+            self._notes = self.notes(st)
+            self._answer(st)
+            self._draw()
         return st
+
+    def _draw(self, force=False) -> bool:
+        with self._lock:
+            now = self.clock()
+            st = self.state or {}
+            pf = getattr(self.speaker, "prompts", None)
+            self.screen = render(st, notes=self._notes, ansi=self.ansi, ack=self.ack_lines(now),
+                                 prompts=pf(float(st.get("updated") or 0)) if pf else None)
+            if self.screen == self._drawn:
+                return False
+            if not force and self._drawn_t is not None and now - self._drawn_t < self.min_draw_s:
+                return False
+            self.out(self.screen)
+            self._drawn, self._drawn_t = self.screen, now
+            return True
+
+    def flush(self) -> bool:
+        """draw the newest screen if it is not the one shown (leaving: nothing waits for the next state)"""
+        with self._lock:
+            if self.screen is None or self.screen == self._drawn:
+                return False
+            self.out(self.screen)
+            self._drawn, self._drawn_t = self.screen, self.clock()
+            return True
+
+    def _answer(self, st):
+        """calibd's answer to the key pressed here: a last_key for that key that was not there when it was pressed"""
+        p, lk = self._pressed, st.get("last_key")
+        if p and p["answer"] is None and isinstance(lk, dict) and lk != p["before"] and \
+                str(lk.get("key", "")).upper() == p["key"]:
+            p["answer"], p["answer_at"] = lk, self.clock()
+
+    def ack_lines(self, now) -> list:
+        """10 Nov: "i press Y and nothing is shown": the key at once, then calibd's answer for KEY_SHOW_S"""
+        p = self._pressed
+        if not p:
+            return []
+        k, a = p["key"], p["answer"]
+        if a is not None:
+            if now - p["answer_at"] > KEY_SHOW_S:
+                return []
+            why = str(a.get("why") or "").strip()
+            if a.get("accepted"):
+                return [f"{k}: {why or 'accepted'}"]
+            return [f"{k} ignored: {why}" if why else f"{k} ignored"]
+        age = now - p["at"]
+        if age < KEY_NO_ANSWER_S:
+            return [f"you pressed {k}; waiting for calibd"]
+        if age < KEY_GIVE_UP_S:
+            return [f"{k} sent, no answer from calibd yet"]
+        return []
 
     def _speak(self, x):
         show = getattr(self.speaker, "show", None)
@@ -435,4 +570,9 @@ class Tui:
             self.send_line(json.dumps({"hb": t}))
 
     def key(self, k):
-        self.send_line(json.dumps({"key": str(k).upper()}))
+        k = str(k).upper()
+        with self._lock:
+            self._pressed = {"key": k, "at": self.clock(), "before": (self.state or {}).get("last_key"),
+                             "answer": None, "answer_at": None}
+        self.send_line(json.dumps({"key": k}))
+        self._draw(force=True)          # the acknowledgement now, not at the next state

@@ -58,6 +58,7 @@ DEPENDENT_ROOTS = ("/etc/phantomos", "/etc/phantom", "/etc/okvis", "/opt/configs
 DEPENDENT_INCLUDE = ("*.yaml", "*.yml", "*.env", "*.json", "*.sh", "*.conf", "*.txt", "*.toml")
 NATIVE = (1280, 800)
 UP_TIMEOUT_S = 180.0
+HEAD_BYTES = 262144             # okvis_log: the start of the log, where the entrypoint names the config
 POLL_S = 2.0
 CRASH_RESTARTS = 2
 CHECK_MIN_HOLDS = 8
@@ -322,8 +323,12 @@ def okvis_log(remote: Remote, pods=None, tail=600) -> list:
     if not pods:
         return []
     p = pods[-1]
-    rc, out = remote.call(kubectl("-n", p["ns"], "logs", p["name"], "-c", OKVIS_CONTAINER, f"--tail={tail}"))
-    return out.splitlines() if rc == 0 else []
+    # 10 Nov, phantom11: the entrypoint names the config (and its sha) at the START of the log; a minute later the
+    # log had 1,000+ lines and --tail=600 never showed it, so a good deploy read "not verified". The head (first
+    # 256 KB) carries the entrypoint and reader lines, the tail the newest (a crash)
+    rc1, head = remote.call(kubectl("-n", p["ns"], "logs", p["name"], "-c", OKVIS_CONTAINER, f"--limit-bytes={HEAD_BYTES}"))
+    rc2, out = remote.call(kubectl("-n", p["ns"], "logs", p["name"], "-c", OKVIS_CONTAINER, f"--tail={tail}"))
+    return (head.splitlines() if rc1 == 0 else []) + (out.splitlines() if rc2 == 0 else [])
 
 
 def crash_loop(pods) -> bool:

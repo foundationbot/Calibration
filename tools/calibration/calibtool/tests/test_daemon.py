@@ -1077,3 +1077,23 @@ def test_the_session_mode_and_dry_run_reach_the_daemon_child():
     a.session_mode, a.dry_run = "watch", False
     argv = dm.run_argv(a)
     assert "--session-mode" not in argv and "--dry-run" not in argv
+
+
+def test_every_key_gets_an_answer_in_the_state(tmp_path):
+    """10 Nov, phantom11: "i press Y and nothing is shown" -- each key says whether it was taken and what it does"""
+    m = full(tmp_path)
+    m.to("MOTORS", "test")
+    m.key("y")
+    lk = m.state["last_key"]
+    assert lk["key"] == "Y" and lk["phase"] == "MOTORS" and lk["accepted"] and "motors" in lk["why"]
+    m.to("FIT", "test")
+    m.key("Y")
+    assert not m.state["last_key"]["accepted"] and "does nothing in FIT" in m.state["last_key"]["why"]
+    m.state["busy"] = {"what": "Deploying (up to 3 min)", "since": 0.0}
+    m.to("DEPLOY", "test")
+    m.key("K")
+    assert not m.state["last_key"]["accepted"] and "busy" in m.state["last_key"]["why"]
+    m.key("G")
+    assert not m.state["last_key"]["accepted"] and "HOLD" in m.state["last_key"]["why"]
+    m.key("A")
+    assert m.state["last_key"]["accepted"] and "abort" in m.state["last_key"]["why"]

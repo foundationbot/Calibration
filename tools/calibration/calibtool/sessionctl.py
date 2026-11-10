@@ -261,9 +261,21 @@ class ProducerCtl:
             self.spec_path.write_text(self.spec.text)
         self.lease.acquire(self.session, self.spec_path, self.clock())
         self.changed = True             # from here on the restore is owed, whatever the cycle did
-        pr.resize(self.kube, self.spec, *want, **self._kw())
+        self._own()
+        try:
+            pr.resize(self.kube, self.spec, *want, **self._kw())
+        finally:
+            self._own()
         self.size = want
         return True
+
+    def _own(self):
+        """the tool's own producer restart, before and after: health takes the next minute's camera USB drop and the
+        generation change as the tool's own (10 Nov, phantom11: "someone else changed the producer", "head camera
+        not on the USB bus" at every own restart)"""
+        cb = getattr(self, "on_change", None)
+        if cb is not None:
+            cb()
 
     def heartbeat(self):
         if self.changed:
@@ -272,7 +284,11 @@ class ProducerCtl:
     def restore(self):
         if not self.changed:
             return False
-        pr.restore(self.kube, self.spec, lease=self.lease, **self._kw())
+        self._own()
+        try:
+            pr.restore(self.kube, self.spec, lease=self.lease, **self._kw())
+        finally:
+            self._own()
         self.changed = False
         self.size = tuple(self.spec.size())
         return True

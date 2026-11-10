@@ -75,9 +75,10 @@ def test_each_new_prompt_is_spoken_once():
     t.step(json.dumps(s3))
     t.step(json.dumps(s3))
     assert sp.said == ["Placement 2 of 6."]
+    c.t = 1.0
     t.step(json.dumps(state(say={"id": 4, "t": 100.0, "kind": "good", "text": "Good. Step back."})))
     assert sp.said == ["Placement 2 of 6.", "Good. Step back."]
-    assert len(out) == 3
+    assert len(out) == 2                    # the repeated state was not drawn again
 
 
 def test_every_prompt_of_a_step_is_spoken_in_order():
@@ -169,7 +170,7 @@ def test_a_daemon_that_stopped_stepping_is_flagged():
     c.t = 1.0 + tui.NOT_STEPPING_S + 0.5
     t.step(json.dumps(state(step_n=17)))
     assert "NOT NORMAL: calibd not stepping" in out[-1]
-    c.t += 0.2
+    c.t += tui.MIN_DRAW_S
     t.step(json.dumps(state(step_n=18)))
     assert "not stepping" not in out[-1]
 
@@ -178,6 +179,7 @@ def test_a_tui_that_lost_control_says_so():
     t, sent, out, sp, c = make()
     t.step(json.dumps(state(client={"id": 1, "claimed": True, "controlling": True})))
     assert "control" not in out[-1].split("\n")[2]
+    c.t = 1.0
     t.step(json.dumps(state(client={"id": 1, "claimed": True, "controlling": False})))
     assert "NOT NORMAL: another TUI attached later and has control" in out[-1]
 
@@ -257,7 +259,8 @@ def test_the_tui_hands_the_prompt_kind_to_the_speaker():
 
 
 def full(phase, **kw):
-    return state(phase=phase, mode="full", read_only=False, banner=(), trial=None, **kw)
+    kw = {"banner": (), **kw}
+    return state(phase=phase, mode="full", read_only=False, trial=None, **kw)
 
 
 def test_full_session_keys_follow_the_phase():
@@ -332,6 +335,12 @@ def make_text(**kw):
     sent, out, c = [], [], Clock()
     sp = tui.make_speaker("text")
     t = tui.Tui(sent.append, sp, clock=c, out=out.append, **kw)
+    step = t.step
+
+    def stepped(line):                      # a second apart: every new screen is drawn
+        c.t += 1.0
+        return step(line)
+    t.step = stepped
     return t, out, sp
 
 
@@ -402,3 +411,169 @@ def test_the_finish_screen_shows_e_and_x_when_offered():
     assert "E = more placements" in txt and "X = decide again" in txt
     assert "E = more placements" in tui.keys_for(st) and "X = decide again" in tui.keys_for(st)
     assert "E =" not in tui.keys_for(state(phase="FINISH", mode="full"))
+
+
+# ---------------------------------------------------------------- 10 Nov: a calmer screen (the operator: "why the hell is
+# tool printing massive chunk 20 times over and over", "i press Y and nothing is shown")
+
+
+def test_an_unchanged_screen_is_not_drawn_again():
+    t, sent, out, sp, c = make()
+    s = state(say={"id": 3, "t": 99.5, "kind": "intro", "text": "Placement 2 of 6."})
+    for k in range(5):
+        c.t = float(k)
+        t.step(json.dumps(s))
+    assert len(out) == 1
+
+
+def test_the_screen_is_drawn_at_most_twice_a_second_and_a_waiting_change_comes_at_the_next_state():
+    t, sent, out, sp, c = make()
+    t.step(json.dumps(state(step_n=1, board={"z_m": 1.00, "tags": 35, "cut": []})))
+    c.t = 0.2
+    t.step(json.dumps(state(step_n=2, board={"z_m": 1.10, "tags": 35, "cut": []})))
+    c.t = 0.4
+    t.step(json.dumps(state(step_n=3, board={"z_m": 1.20, "tags": 35, "cut": []},
+                            say={"id": 4, "t": 100.0, "kind": "good", "text": "Good."})))
+    assert len(out) == 1 and "1.00 m" in out[0]
+    assert sp.said == ["Good."]                       # speech does not wait for the screen
+    c.t = 0.6
+    t.step(json.dumps(state(step_n=4, board={"z_m": 1.20, "tags": 35, "cut": []},
+                            say={"id": 4, "t": 100.0, "kind": "good", "text": "Good."})))
+    assert len(out) == 2 and "1.20 m" in out[1]
+    c.t = 0.7
+    t.step(json.dumps(state(step_n=5, board={"z_m": 1.30, "tags": 35, "cut": []})))
+    assert len(out) == 2
+    t.flush()                                          # leaving: the last screen is drawn
+    assert len(out) == 3 and "1.30 m" in out[2]
+    t.flush()
+    assert len(out) == 3
+
+
+def _lines(r):
+    return r.splitlines()
+
+
+def _at(lines, text):
+    return next(k for k, x in enumerate(lines) if text in x)
+
+
+def test_the_current_prompt_comes_right_after_the_banner_then_progress_then_details():
+    r = tui.render(full("GRID", banner=("motors were on when calibd restarted",), countdown=3,
+                        say={"id": 5, "t": 99.0, "kind": "status", "text": "Step back from the head."},
+                        placement={"target": "0.75 m", "kind": "default"},
+                        grid={"placement": "0.75 m", "pose": 4, "of": 49},
+                        health=[{"level": "warn", "message": "camera 3 slow"}]))
+    L = _lines(r)
+    assert "A = abort" in L[0] and "GRID" in L[0]
+    assert _at(L, "NOT NORMAL") < _at(L, "Step back from the head.") < _at(L, "STARTING IN 3") \
+        < _at(L, "pose 4 of 49") < _at(L, "preflight") < _at(L, "camera 3 slow")
+    assert L[-1] == tui.keys_for(full("GRID"))
+
+
+CHECKS = [{"name": f"c{k}", "status": "ok", "detail": f"fine {k}", "gate": "collect"} for k in range(21)] + [
+    {"name": "info1", "status": "info", "detail": "i1", "gate": "collect"},
+    {"name": "info2", "status": "info", "detail": "i2", "gate": "collect"},
+    {"name": "slowcam", "status": "warn", "detail": "camera 3 at 20 fps", "gate": "collect"},
+    {"name": "estop", "status": "fail", "detail": "e-stop engaged", "gate": "motion"}]
+
+
+@pytest.mark.parametrize("phase", ["PREFLIGHT", "READY", "BLOCKED"])
+def test_the_whole_preflight_list_is_shown_only_in_the_preflight_phases(phase):
+    r = tui.render(full(phase, checks=CHECKS))
+    assert "fine 0" in r and "fine 20" in r and "i2" in r and "camera 3 at 20 fps" in r and "e-stop engaged" in r
+
+
+@pytest.mark.parametrize("phase", ["MOTORS", "PLACE", "GRID", "HOLD", "DEPLOY", "FINISH"])
+def test_elsewhere_the_preflight_is_one_summary_line_plus_its_warnings_and_failures(phase):
+    r = tui.render(full(phase, checks=CHECKS))
+    assert "preflight: 21 ok, 2 info, 1 warn, 1 fail" in r
+    assert "fine 0" not in r and "i2" not in r
+    assert "camera 3 at 20 fps" in r and "e-stop engaged" in r and "FAIL" in r and "WARN" in r
+
+
+MOTOR_CHECKS = [{"name": "estop", "status": "ok", "detail": "e-stop released"},
+                {"name": "gantry", "status": "ok", "detail": "on the gantry"},
+                {"name": "temps", "status": "warn", "detail": "neck pitch 61 C"}]
+
+
+def test_the_motor_check_list_is_whole_in_motors_and_only_its_problems_in_hold():
+    mo = {"checks": MOTOR_CHECKS, "detail": "ready to enable"}
+    r = tui.render(full("MOTORS", motors=mo))
+    assert "e-stop released" in r and "on the gantry" in r and "neck pitch 61 C" in r and "ready to enable" in r
+    r = tui.render(full("HOLD", held_from="GRID", motors=mo))
+    assert "e-stop released" not in r and "on the gantry" not in r and "neck pitch 61 C" in r
+    r = tui.render(full("GRID", motors=mo))
+    assert "e-stop released" not in r and "neck pitch 61 C" not in r
+
+
+def test_health_shows_each_message_once_with_a_count_newest_first_at_most_three():
+    h = [{"level": "warn", "message": "old one"}, {"level": "warn", "message": "lens hot"},
+         {"level": "info", "message": "third"}] + [{"level": "warn", "message": "camera 3 slow"}] * 5 + [
+        {"level": "fail", "message": "frames stalled"}]
+    L = [x for x in _lines(tui.render(full("GRID", health=h))) if x.startswith("health")]
+    assert L == ["health FAIL: frames stalled", "health WARN: camera 3 slow x5", "health INFO: third"]
+
+
+def test_busy_is_shown_as_working_with_the_seconds_since_it_began():
+    what = "Deploying: writing files, restarting OKVIS, waiting for it to load the new calibration (up to 3 min)"
+    r = tui.render(full("DEPLOY", busy={"what": what, "since": 88.0}, updated=100.0))
+    assert f"WORKING: {what} (12 s)" in r
+    assert "WORKING" not in tui.render(full("DEPLOY"))
+
+
+def test_a_pressed_key_is_acknowledged_on_screen_at_once_then_calibd_answer_shown():
+    t, sent, out, sp, c = make()
+    old = {"key": "Y", "phase": "READY", "accepted": False, "why": "Y does nothing in READY", "t": 90.0}
+    t.step(json.dumps(full("MOTORS", last_key=old)))
+    assert "Y does nothing" not in out[-1]             # an answer to a key pressed before is not this key's answer
+    c.t = 0.1
+    t.key("y")
+    assert json.loads(sent[-1]) == {"key": "Y"}
+    assert len(out) == 2 and "you pressed Y; waiting for calibd" in out[-1]   # drawn at once, no throttle
+    assert _at(_lines(out[-1]), "you pressed Y") == 1                          # right under the header
+    c.t = 0.7
+    t.step(json.dumps(full("MOTORS", last_key=old)))
+    assert "you pressed Y; waiting for calibd" in out[-1]
+    c.t = 1.0
+    ans = {"key": "Y", "phase": "MOTORS", "accepted": True,
+           "why": "enabling the motors (or taking them over when already on)", "t": 100.5}
+    t.step(json.dumps(full("MOTORS", last_key=ans)))
+    assert "Y: enabling the motors (or taking them over when already on)" in out[-1]
+    assert "waiting for calibd" not in out[-1]
+    c.t = 10.5
+    t.step(json.dumps(full("MOTORS", last_key=ans)))
+    assert "Y: enabling the motors" in out[-1]
+    c.t = 11.5
+    t.step(json.dumps(full("MOTORS", last_key=ans)))
+    assert "Y: enabling" not in out[-1] and "you pressed" not in out[-1]
+
+
+def test_a_refused_key_says_why():
+    t, sent, out, sp, c = make()
+    t.step(json.dumps(full("GRID")))
+    t.key("Y")
+    c.t = 0.6
+    t.step(json.dumps(full("GRID", last_key={"key": "Y", "phase": "GRID", "accepted": False,
+                                             "why": "Y does nothing in GRID", "t": 100.0})))
+    assert "Y ignored: Y does nothing in GRID" in out[-1]
+
+
+def test_a_key_without_an_answer_in_3_s_says_so():
+    t, sent, out, sp, c = make()
+    t.step(json.dumps(full("MOTORS")))
+    t.key("Y")
+    c.t = 2.5
+    t.step(json.dumps(full("MOTORS")))
+    assert "you pressed Y; waiting for calibd" in out[-1]
+    c.t = 3.2
+    t.step(json.dumps(full("MOTORS", last_key={"key": "G", "phase": "MOTORS", "accepted": False, "why": "x",
+                                               "t": 100.0})))      # another key's answer is not this one's
+    assert "Y sent, no answer from calibd yet" in out[-1] and "you pressed" not in out[-1]
+
+
+@pytest.mark.parametrize("phase", sorted(tui.FULL_KEYS))
+def test_every_full_phase_keeps_abort_in_the_header_and_the_key_help_last(phase):
+    L = _lines(tui.render(full(phase, banner=("DRY RUN",), checks=CHECKS)))
+    assert "A = abort" in L[0] and phase in L[0]
+    assert L[-1] == tui.keys_for(full(phase))
+    assert "NOT NORMAL: DRY RUN" in L

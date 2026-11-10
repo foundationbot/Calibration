@@ -910,3 +910,39 @@ def test_a_full_grid_is_said_as_about_2_minutes():
     """10 Nov, phantom11: 49 poses took 118-119 s; rounding up said "About 3 minutes" """
     assert fl.minutes_text(49) == "Moving the head now. About 2 minutes."
     assert fl.minutes_text(7) == "Moving the head now. About 1 minute."
+
+
+def test_coverage_notes_are_on_screen_not_spoken_and_an_extra_says_what_it_is_for(tmp_path):
+    """10 Nov, phantom11: "after every take it talks about left and right imbalance ... then asks me to do the next
+    take" """
+    asked = []
+
+    def plan_next(col):
+        asked.append(1)
+        return place.Target("extra 1", 1.1, (0.95, 1.25)) if len(asked) == 1 else None
+    plan_next.why = {"extra 1": "held-out check, far band 1.7-2.3 m"}
+    keys = dict(FULL_KEYS)
+    s = Session(tmp_path, keys=keys, plan_next=plan_next).run()
+    texts = [x.text for x in s.says]
+    assert not any(t.startswith("gap after") for t in texts)
+    assert any(e["kind"] == "gaps" for e in s.events())
+    assert any(t.startswith("Extra placement.") and t.endswith("It is for the held-out check, far band 1.7-2.3 m.")
+               for t in texts), [t for t in texts if "Extra" in t]
+
+
+def test_the_deploy_says_it_is_working_and_when_it_is_done(tmp_path):
+    s = Session(tmp_path, keys=FULL_KEYS).run()
+    texts = [x.text for x in s.says]
+    i = texts.index("Deploying now. This takes up to 3 minutes. No key is needed.")
+    assert any(t.startswith("Deployed.") for t in texts[i:])
+    assert s.m.state.get("busy") is None
+
+
+def test_a_deploy_at_the_previous_size_restores_the_producer_as_saved(tmp_path):
+    """10 Nov, phantom11: deployed at 1280x800 (its size before the session), the producer stayed at the session's
+    15 fps instead of its 25"""
+    keys = dict(FULL_KEYS)
+    s = Session(tmp_path, keys=keys).run()
+    rs = s.m.state.get("restore") or {}
+    assert any("restored as saved" in x for x in rs.get("done", [])), rs
+    assert s.kube.args[s.kube.args.index("--fps") + 1] == "25"

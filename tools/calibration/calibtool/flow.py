@@ -279,6 +279,7 @@ class FullFlow:
         self.spec = Spec.from_yaml(robot.producer_yaml)
         self.producer = sc.ProducerCtl(robot.kube, self.spec, robot.lease, robot.session,
                                        Path(dirs.root) / "producer.saved.yaml", clock=clock, sleep=sleep)
+        self.producer.on_change = lambda: self.m.state.__setitem__("producer_own_t", self.clock())
         self.snap = None
         self.okvis = None
         self.neck = None
@@ -648,7 +649,8 @@ class FullFlow:
         where = place.intro(target, 1, 1).split(". ", 1)[1]
         lead = {"extra": "Extra placement.", "redo": "Again.", "check": "Check grid.",
                 "post": "Post-check."}.get(kind, "")
-        return f"{lead} {where}".strip()
+        why = (getattr(self.robot.plan_next, "why", None) or {}).get(target.name) if kind == "extra" else None
+        return f"{lead} {where}".strip() + (f" It is for the {why}." if why else "")
 
     def _ensure_home(self):
         """the head straight ahead (neck 0/0) before a placement is guided: a HOLD mid-grid leaves it at the last pose,
@@ -844,8 +846,11 @@ class FullFlow:
             res = self._grid(target, poses, self.pcol, "GRID", "collect")
             self._live_fit("placement_done", self.collection, self._load_holds(), target.name)
             if res is not None:
-                for s in (res.sentences or [])[:3]:
-                    self._say("gap", s)
+                # 10 Nov, phantom11: spoken after every grid, the coverage notes ("left edge 4x fewer, put the board
+                # to YOUR right") sounded like instructions while the next default placement was something else.
+                # On screen only; an extra placement says what it is for when it is asked
+                self._upd(gaps=list(res.sentences or [])[:6])
+                self._event("gaps", placement=target.name, sentences=list(res.sentences or [])[:6])
                 if res.early_stop is not None:
                     self._say("early", res.early_stop.sentence)
                     if kind != "redo":
@@ -937,7 +942,9 @@ class FullFlow:
         fl = self.fl
         if fl.get("decision") is None:
             self._enter("FIT")
-            self._say("fit", "Fitting the lens. This takes a few minutes.")
+            self._upd(busy={"what": "fitting the calibration and comparing it with the live one (about a minute)",
+                            "since": self.clock()})
+            self._say("fit", "Fitting the calibration. About a minute.")
             g = fl.get("gates_override")
             try:
                 out = dict(self.robot.fit_decide(self.collection, self._load_holds(), self.dirs.fit,
@@ -963,6 +970,7 @@ class FullFlow:
                     fl["decision"]["reasons"].append(f"one-off exception chosen by the operator (X): "
                                                      f"{g.get('min_judged')} judged regions accepted")
             self._save()
+        self._upd(busy=None)
         self._enter("DECIDE")
         dec = fl["decision"]
         self._upd(decision=dec)
@@ -1094,9 +1102,13 @@ class FullFlow:
             self._save()
             start = self.okvis.start_argv() if self.okvis is not None and self.okvis.stopped else None
             d = self._deployer()
+            self._upd(busy={"what": "deploying: writing the calibration and robot.env, restarting OKVIS, waiting for "
+                                    "it to load the new file (up to 3 min); no key needed", "since": self.clock()})
+            self._say("deploy", "Deploying now. This takes up to 3 minutes. No key is needed.")
             try:
                 res = d.deploy(plan, restart_argv=start)
             except dp.DeployDrift as e:
+                self._upd(busy=None)
                 fl["deploy_started"] = False
                 self._upd(deploy={"drift": str(e)})
                 self._event("deploy_drift", why=str(e))
@@ -1107,17 +1119,22 @@ class FullFlow:
                 self.snap.save(self.dirs.deploy)
                 continue
             except dp.DeployRefused as e:
+                self._upd(busy=None)
                 fl["deploy_started"], fl["outcome"] = False, "refused"
                 self._upd(deploy={"refused": str(e)})
                 self._event("deploy_refused", why=str(e))
                 return
             except dp.DeployFailed as e:
+                self._upd(busy=None)
                 self._event("deploy_failed", why=str(e))
                 fl["outcome"] = "deployed"
                 fl["deploy_left"] = None if self.robot.dry_run else [list(x) for x in (d.left or [])] or None
                 self._rollback(f"the deploy failed: {e}")
                 return
             break
+        self._upd(busy=None)
+        self._say("deploy", "Deployed. OKVIS runs the new calibration." if res.ok else
+                  "Deployed. The check of OKVIS's log did not confirm it: see the screen.")
         if start and self.okvis is not None:
             self.okvis.stopped = False          # the deploy started it on the new robot.env
         fl["deploy_done"], fl["outcome"] = True, "deployed"
@@ -1310,7 +1327,12 @@ class FullFlow:
         fl, errs, done = self.fl, [], []
         deployed = fl.get("outcome") == "deployed" and not fl.get("rolled_back")
         try:
-            if deployed:
+            same = deployed and tuple(self.spec.size()[:2]) == tuple(self._deploy_size())
+            if same and self.producer.restore():
+                # 10 Nov, phantom11: deployed at the size it had before the session, the producer stayed at the
+                # session's 15 fps (and head-only); restored as saved, its size is the deploy size anyway
+                done.append("producer restored as saved (fps and cameras as before; its size is the deploy size)")
+            elif deployed:
                 self.producer.changed = False       # the deploy set the producer's size: it stays
                 self.robot.lease.release()
                 done.append("producer left at the deploy size, lease released")
