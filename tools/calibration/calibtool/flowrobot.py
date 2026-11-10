@@ -47,8 +47,9 @@ def build(prof, *, session, dirs, capture, detect_pair, producer_yaml, probes, b
         if dry_run:
             names, q = shm_robot.joints()
             dr = nk.DryRun(names, q, tool_path=tool)
-            return nk.Neck(tool, dr.run, dr.robot, dr.tool_info, clock=dr.clock, sleep=dr.clock.sleep)
-        return nk.Neck(tool, motor_run, shm_robot, tool_info or motors.motor_tool(tool))
+            return nk.Neck(tool, dr.run, dr.robot, dr.tool_info, clock=dr.clock, sleep=dr.clock.sleep,
+                           kp=getattr(prof, "neck_kp", None))
+        return nk.Neck(tool, motor_run, shm_robot, tool_info or motors.motor_tool(tool), kp=getattr(prof, "neck_kp", None))
 
     return flow.Robot(
         run=run, dry_run=dry_run, recorder=rec, enabler=enabler,

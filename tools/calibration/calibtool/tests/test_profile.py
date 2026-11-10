@@ -59,3 +59,4 @@ def test_p11_has_a_profile_with_its_live_config_and_kit():
     assert p.live_config.endswith("refitA-yawA2-1280x800-15fps.yaml") and p.stand_steps
     assert p.machine_id_prefix == "dfaae203c0d0" and p.rig_path.name == "rig-p11.yaml"
     assert profile.load("P10").live_config is None
+    assert p.neck_kp == 60.0 and profile.load("P10").neck_kp is None

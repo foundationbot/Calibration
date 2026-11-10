@@ -39,3 +39,5 @@ profiles:
     # robot.env's OKVIS_CALIBRATION is commented out (10 Nov: "use image config"); the live calibration to compare
     # against and to roll back to is the last stand-in (the operator's choice, 10 Nov)
     live_config: /etc/phantomos/okvis/phantom07_stereo_dense_thor-STANDIN-p12fitc-refitA-yawA2-1280x800-15fps.yaml
+    # 10 Nov: its neck lagged the 1 s ramp (21.6 deg short at the first pose); kp only, never kd (operator's OK)
+    neck_kp: 60
