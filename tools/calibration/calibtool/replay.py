@@ -4,8 +4,8 @@ The session's holds go, in capture order (first left stamp), through the FIT/TES
 after each placement (take) a Snapshot is taken: tallies, what is short (coverage deficits), the gap sentences the
 operator would hear and one progress line. After the last placement the planner suggests the next placements. Then the
 split is written, fitted (step 45), validated (step 66: the new fit and the live config, a RADTAN live config through
-livecfg's runner), both are scored on the same TEST pairs (decide.score) and decided (decide.verdict, with and without
-Gates.require_all_edges). run() writes out_dir/report.json and out_dir/report.md.
+livecfg's runner), both are scored on the same TEST pairs (decide.score) and decided (decide.verdict, with the default
+required edges and with all four required). run() writes out_dir/report.json and out_dir/report.md.
 
 The live tool (M2) reuses the collection part as it is: Collection.add(hold) per hold as it arrives (a
 assign.CaptureHold: in-memory corner dict, nothing read from or written to disk), Collection.end_placement() after
@@ -41,7 +41,8 @@ from calibtool.session import Session
 ASSIGNMENTS = ("capture", "split16")
 REGION_TALLY = "all"            # "all" | "fit": which corners the region deficits count (see the module text)
 MD_SENTENCES = 6                # gap sentences per placement in report.md (all of them are in report.json)
-VERDICT_KEYS = {False: "require_all_edges=False", True: "require_all_edges=True"}
+# the report's two verdicts: the default required edges (left, right, bottom; C3) and all four
+VERDICT_KEYS = {"required_edges=left,right,bottom": cv.REQUIRED_EDGES, "required_edges=all": frozenset(cv.EDGES)}
 # the errors that make the live config "not scorable" (the verdict says so, with the error); any other error while
 # loading, scoring or validating it is a bug and stops the run
 NOT_SCORABLE = (livecfg.NotScorable, pipeline.PipelineError)
@@ -372,15 +373,14 @@ def _js(o):
 
 
 def decision(new, live, step66_new, gates: decide.Gates, live_error=None) -> dict:
-    """decide.verdict with require_all_edges False and True, the paired statistics (new - live) and each side's own
+    """decide.verdict with each VERDICT_KEYS edge set, the paired statistics (new - live) and each side's own
     statistics. new / live: decide.Scores (live None: not scorable, live_error saying why); step66_new: step 66 of the
     new fit"""
     out = {"verdicts": {}, "paired": None, "stats": {"new": decide.stats(new) if new is not None else None,
                                                      "live": decide.stats(live) if live is not None else None}}
-    for flag in (False, True):
-        out["verdicts"][VERDICT_KEYS[flag]] = decide.verdict(new, live, step66_new,
-                                                             replace(gates, require_all_edges=flag),
-                                                             live_error=live_error).as_dict()
+    for key, edges in VERDICT_KEYS.items():
+        out["verdicts"][key] = decide.verdict(new, live, step66_new, replace(gates, required_edges=edges),
+                                              live_error=live_error).as_dict()
     if new is not None and live is not None:
         out["paired"] = decide.paired(new, live, gates).as_dict()
     return _js(out)
@@ -393,7 +393,7 @@ def _num(x, fmt="{:.3f}"):
 def decision_md(dec: dict) -> list:
     """report.md lines of a decision() result"""
     out = ["## Decision", ""]
-    for key in (VERDICT_KEYS[False], VERDICT_KEYS[True]):
+    for key in VERDICT_KEYS:
         v = dec["verdicts"][key]
         out.append(f"**{v['decision']}** with {key}")
         out += [f"- {r}" for r in v["reasons"]]

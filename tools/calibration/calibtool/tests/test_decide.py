@@ -188,15 +188,44 @@ def test_fewer_than_six_judged_entries_is_not_enough_data():
     assert v.decision == "NOT_ENOUGH_DATA" and any("5 judged" in r for r in v.reasons)
 
 
-def test_edges_switch():
+def test_required_edges_default_left_right_bottom():
+    """C3 (9 Nov): a deploy needs judged entries on the left, right and bottom image edges; the top is asked for during
+    collection but does not block, and the reasons say when it is not judged. required_edges=EDGES needs all four"""
     no_top = {k: x for k, x in ALL_EDGES.items() if k[0] != "top"}
     no_top[("right", (0.9, 1.3))] = 0.1
     new, live = synthetic(0.3, 0.3), synthetic()
-    v = decide.verdict(new, live, step66(no_top), decide.Gates(require_all_edges=True))
-    assert v.decision == "NOT_ENOUGH_DATA" and v.missing_edges == ["top"]
-    assert any("top" in r for r in v.reasons)
-    assert decide.verdict(new, live, step66(no_top), decide.Gates(require_all_edges=False)).decision == "DEPLOY"
-    assert decide.verdict(new, live, step66(), decide.Gates(require_all_edges=True)).decision == "DEPLOY"
+    assert decide.Gates().required_edges == frozenset({"left", "right", "bottom"})
+    v = decide.verdict(new, live, step66(no_top))
+    assert v.decision == "DEPLOY", v.reasons
+    assert v.missing_edges == ["top"]
+    assert any("top" in r and "not judged" in r and "not required" in r for r in v.reasons), v.reasons
+    strict = decide.verdict(new, live, step66(no_top), decide.Gates(required_edges=frozenset(decide.EDGES)))
+    assert strict.decision == "NOT_ENOUGH_DATA" and strict.missing_edges == ["top"]
+    assert any("top" in r for r in strict.reasons)
+    assert decide.verdict(new, live, step66(), decide.Gates(required_edges=frozenset(decide.EDGES))).decision \
+        == "DEPLOY"
+    full = decide.verdict(new, live, step66())
+    assert full.decision == "DEPLOY" and not any("not required" in r for r in full.reasons), full.reasons
+
+
+@pytest.mark.parametrize("edge", ["left", "right", "bottom"])
+def test_a_missing_required_edge_is_not_enough_data(edge):
+    """an entry set with no judged cell on a required edge (a corner cell would count for it, so those go too)"""
+    ent = {k: x for k, x in ALL_EDGES.items() if edge not in k[0]}
+    ent.update({("centre", (0.6, 0.9)): 0.0, ("centre", (0.9, 1.3)): 0.0, ("top", (0.6, 0.9)): 0.0})
+    assert len(ent) >= decide.Gates().min_judged
+    v = decide.verdict(synthetic(0.3, 0.3), synthetic(), step66(ent))
+    assert v.decision == "NOT_ENOUGH_DATA", v.reasons
+    assert edge in v.missing_edges and any(edge in r for r in v.reasons)
+
+
+def test_required_edges_are_checked():
+    with pytest.raises(ValueError, match="sideways"):
+        decide.Gates(required_edges=frozenset({"left", "sideways"}))
+
+
+def test_band_min_placements_is_three():
+    assert decide.Gates().band_min_placements == 3
 
 
 def test_corner_cell_counts_for_both_its_edges():
@@ -242,7 +271,7 @@ def test_depth_is_judged_on_the_intervals_upper_end():
 def test_without_live_the_entry_and_edge_checks_still_apply():
     """live not scorable, deploy without live allowed: fewer than 6 judged entries, or an image edge with no judged
     entry, is still NOT_ENOUGH_DATA"""
-    g = decide.Gates(allow_deploy_without_live=True, require_all_edges=True)
+    g = decide.Gates(allow_deploy_without_live=True, required_edges=frozenset(decide.EDGES))
     few = dict(list(ALL_EDGES.items())[:5])
     assert len(few) == 5 and decide.edges_judged(few) == set(decide.EDGES)
     v = decide.verdict(synthetic(0.3, 0.3), None, step66(few), g)
@@ -273,7 +302,7 @@ def test_pairs_live_scored_but_new_did_not_are_gated():
 
 def test_thresholds_are_named_parameters():
     g = decide.Gates()
-    for k in ("min_judged", "require_all_edges", "depth_margin_pct", "rows_margin_px", "band_worse_margin_pct",
+    for k in ("min_judged", "required_edges", "depth_margin_pct", "rows_margin_px", "band_worse_margin_pct",
               "band_min_pairs", "band_min_placements", "min_placements", "boot", "seed"):
         assert hasattr(g, k)
     # a margin larger than the improvement turns DEPLOY into KEEP_LIVE
@@ -295,7 +324,8 @@ def test_verdict_as_dict_is_json():
 @pytest.mark.parametrize("name", ["p21_1105", "p10_1106"])
 def test_stored_sessions_new_beats_live(name, data_root, tmp_path):
     """the recorded fit vs the robot's live config on the recorded TEST split: new better on every paired statistic,
-    DEPLOY with require_all_edges=False; the strict verdict is reported (p21 has no judged top entry)"""
+    DEPLOY with the default required edges (left, right, bottom); with all four required p21 is NOT_ENOUGH_DATA (no
+    judged top entry)"""
     from calibtool import livecfg, pipeline, sessions
     from calibtool.session import Session
     st = sessions.get(name)
@@ -311,8 +341,8 @@ def test_stored_sessions_new_beats_live(name, data_root, tmp_path):
         old = decide.score(live.write_json(tmp_path / "live.json"), test_npz, st.rig_path, place)
         v66 = fut.result()
     assert v66.verdict == "PASS"
-    loose = decide.verdict(new, old, v66, decide.Gates(require_all_edges=False))
-    strict = decide.verdict(new, old, v66, decide.Gates(require_all_edges=True))
+    loose = decide.verdict(new, old, v66, decide.Gates())
+    strict = decide.verdict(new, old, v66, decide.Gates(required_edges=frozenset(decide.EDGES)))
     out = {"session": name, "summary_new": decide.stats(new), "summary_live": decide.stats(old),
            "loose": loose.as_dict(), "strict": strict.as_dict()}
     print(f"DECIDE {name}: " + json.dumps(out))

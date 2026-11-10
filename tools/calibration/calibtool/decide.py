@@ -15,35 +15,41 @@ not independent. A statistic is judged only with enough pairs and placements (Ga
 
 Verdict (verdict()):
   NOT_ENOUGH_DATA           step 66 on the new fit gave no result; or fewer than Gates.min_judged judged (validated)
-                            entries; or, with require_all_edges, an image edge (left/right/top/bottom; a corner cell
-                            counts for both its edges: coverage.edges_of_cell) without a judged entry; or too few
-                            placements to compare; or no live scores (the live config could not be scored, the error
-                            in the reasons) without Gates.allow_deploy_without_live
+                            entries; or a required image edge (Gates.required_edges, default left, right and bottom;
+                            a corner cell counts for both its edges: coverage.edges_of_cell) without a judged entry;
+                            or too few placements to compare; or no live scores (the live config could not be scored,
+                            the error in the reasons) without Gates.allow_deploy_without_live
   KEEP_LIVE                 step 66 FAILs the new fit; or the paired interval does not show new better on depth and
                             on rows; or a judged band where the interval shows new worse; or the new fit could not
                             score more than Gates.max_new_unscored_frac of the pairs the live config scored
   LIVE_NOT_SCORABLE_DEPLOY  no live scores and Gates.allow_deploy_without_live=True: step 66 PASS alone decides
   DEPLOY                    otherwise
-Every threshold is a field of Gates; the defaults are PLACEHOLDERS, to be fixed from the stored sessions (M1 C3)."""
+An edge that is not required (default: the top) and has no judged entry does not block; the reasons say so.
+Every threshold is a field of Gates; the defaults were set in M1 C3 (9 Nov 2026, with the user) from the stored
+sessions: p21 5 Nov judged left, right and bottom but no top entry, p10 6 Nov all four; both deploy."""
 from dataclasses import asdict, dataclass, field
 
 import numpy as np
 
+from calibtool.coverage import EDGES, REQUIRED_EDGES
+
 BANDS = ((0.4, 0.6), (0.6, 0.9), (0.9, 1.3), (1.3, 1.7), (1.7, 2.3))     # [lo, hi) m
-EDGES = ("left", "right", "top", "bottom")
 DECISIONS = ("DEPLOY", "KEEP_LIVE", "NOT_ENOUGH_DATA", "LIVE_NOT_SCORABLE_DEPLOY")
 
 
 @dataclass(frozen=True)
 class Gates:
-    """the decision's thresholds. PLACEHOLDER defaults (M1 B3): fixed from the stored sessions in M1 C3"""
-    min_judged: int = 6                 # step-66 entries validated on the new fit (design 5: >= 6)
-    require_all_edges: bool = True      # each image edge has a judged entry (design 5)
+    """the decision's thresholds (M1 C3, 9 Nov 2026)"""
+    min_judged: int = 6                 # step-66 entries validated on the new fit (design 5: >= 6; p21 7, p10 9)
+    # the image edges that need a judged entry (a corner cell counts for both its edges). C3: left, right and bottom;
+    # the top is asked for during collection but does not block (p21 5 Nov had none and deployed well).
+    # frozenset(EDGES) requires all four
+    required_edges: frozenset = REQUIRED_EDGES
     depth_margin_pct: float = 0.0       # new better on depth: interval's upper end < -margin
     rows_margin_px: float = 0.0         # new better on rows: interval's upper end < -margin
     band_worse_margin_pct: float = 0.0  # a band is worse when its interval's lower end > +margin
     band_min_pairs: int = 10            # a band is judged from this many pairs ...
-    band_min_placements: int = 2        # ... from this many placements
+    band_min_placements: int = 3        # ... from this many placements (C3: 3)
     min_placements: int = 2             # the whole comparison needs this many placements
     boot: int = 2000                    # bootstrap resamples
     seed: int = 20261109                # bootstrap seed (fixed: the same data gives the same intervals)
@@ -54,6 +60,12 @@ class Gates:
     # without live scores, deploy on step 66 alone (LIVE_NOT_SCORABLE_DEPLOY) only when this is set: "deploy only if
     # shown better than live" cannot be checked then, so it takes an explicit choice (else NOT_ENOUGH_DATA)
     allow_deploy_without_live: bool = False
+
+    def __post_init__(self):
+        bad = set(self.required_edges) - set(EDGES)
+        if bad:
+            raise ValueError(f"required_edges {sorted(bad)}: not image edges {EDGES}")
+        object.__setattr__(self, "required_edges", frozenset(self.required_edges))
 
 
 # ---------------------------------------------------------------- scores of one calibration
@@ -283,10 +295,12 @@ class Verdict:
     gates: Gates = Gates()
 
     def as_dict(self):
+        g = asdict(self.gates)
+        g["required_edges"] = [e for e in EDGES if e in self.gates.required_edges]
         return {"decision": self.decision, "reasons": list(self.reasons),
                 "paired": self.paired.as_dict() if self.paired else None,
                 "judged": [f"{c} {lo:g}-{hi:g}" for c, (lo, hi) in self.judged],
-                "missing_edges": list(self.missing_edges), "gates": asdict(self.gates)}
+                "missing_edges": list(self.missing_edges), "gates": g}
 
 
 def _fmt(s: Stat, unit, level_pct=95.0):
@@ -312,11 +326,13 @@ def verdict(new: Scores, live, step66_new, gates: Gates = Gates(), live_error=No
     short = []
     if len(judged) < gates.min_judged:
         short.append(f"{len(judged)} judged entries (step 66 validated), {gates.min_judged} needed")
-    if gates.require_all_edges and missing:
-        short.append("no judged entry on the image's " + ", ".join(missing) + " edge" + ("s" if len(missing) > 1
-                                                                                         else ""))
+    need = [e for e in missing if e in gates.required_edges]
+    if need:
+        short.append("no judged entry on the image's " + ", ".join(need) + " edge" + ("s" if len(need) > 1 else ""))
     if short:
         return Verdict("NOT_ENOUGH_DATA", short + ([no_live] if live is None else []), **base)
+    note = [f"image {e} edge not judged (no judged entry there; asked for, not required)" for e in missing
+            if e not in gates.required_edges]
     if live is None:
         if not gates.allow_deploy_without_live:
             return Verdict("NOT_ENOUGH_DATA",
@@ -324,7 +340,7 @@ def verdict(new: Scores, live, step66_new, gates: Gates = Gates(), live_error=No
                             f"on its step-66 PASS alone needs allow_deploy_without_live=True"], **base)
         return Verdict("LIVE_NOT_SCORABLE_DEPLOY",
                        [f"{no_live}: deploy rests on the new fit's step-66 PASS alone ({len(judged)} judged entries; "
-                        f"allow_deploy_without_live=True)"], **base)
+                        f"allow_deploy_without_live=True)"] + note, **base)
     pr = paired(new, live, gates)
     depth, rows = pr.stat("depth"), pr.stat("rows")
     if not (depth.judged and rows.judged):
@@ -350,4 +366,4 @@ def verdict(new: Scores, live, step66_new, gates: Gates = Gates(), live_error=No
         if s.name.startswith("band ") and s.judged and s.ci[0] > gates.band_worse_margin_pct:
             keep = True
             reasons.append(f"new worse in {s.name} m: " + _fmt(s, "%", gates.level_pct))
-    return Verdict("KEEP_LIVE" if keep else "DEPLOY", reasons, paired=pr, **base)
+    return Verdict("KEEP_LIVE" if keep else "DEPLOY", reasons + note, paired=pr, **base)

@@ -1,7 +1,8 @@
 """calibtool.replay: a stored session replayed as if live. Holds go through the FIT/TEST assignment and the coverage
 tallies in capture order, a snapshot (tallies, deficits, gap sentences, a progress line) is taken after each
 placement, the planner suggests the next placements after the last one, and then the split is fitted (45), validated
-(66, new and live) and decided (decide.verdict with and without require_all_edges) into report.json + report.md.
+(66, new and live) and decided (decide.verdict with the default required edges and with all four) into report.json
++ report.md.
 
 Fast tests use synthetic takes (test_assign's generator) and a synthetic OKVIS config (test_livecfg's); stored-session
 tests need CALIBTOOL_DATA; `replay` tests (-m replay) run the whole thing, fit included (minutes per session)."""
@@ -24,6 +25,7 @@ HERE = Path(__file__).resolve().parent
 RIG_PATH = sessions.get("p21_1105").rig_path
 P21_LEFT = "Left camera, left edge: 176 corners vs 1,099 on the right edge (6x fewer)."
 P21_BOTTOM_LEFT = "Left camera, bottom-left corner: 50 corners vs 588 in the bottom-right corner (12x fewer)."
+DEFAULT, ALL4 = "required_edges=left,right,bottom", "required_edges=all"     # the report's two verdicts
 REPORT_KEYS = {"session", "robot", "assignment", "exclude_takes", "take_order", "capture_order", "placements",
                "final", "suggestions", "split", "fit", "validate_new", "validate_live", "live", "stats", "paired",
                "verdicts", "timings"}
@@ -228,15 +230,15 @@ def test_decision_section_both_gates_and_paired_table():
     rp = replay()
     new, live = TD.synthetic(0.3, 0.3), TD.synthetic()
     dec = rp.decision(new, live, TD.step66(), decide.Gates())
-    assert set(dec["verdicts"]) == {"require_all_edges=False", "require_all_edges=True"}
-    for k, want in (("require_all_edges=False", False), ("require_all_edges=True", True)):
+    assert set(dec["verdicts"]) == {DEFAULT, ALL4}
+    for k, want in ((DEFAULT, ["left", "right", "bottom"]), (ALL4, ["left", "right", "top", "bottom"])):
         assert dec["verdicts"][k]["decision"] == "DEPLOY"
-        assert dec["verdicts"][k]["gates"]["require_all_edges"] is want
+        assert dec["verdicts"][k]["gates"]["required_edges"] == want
     names = [s["name"] for s in dec["paired"]["stats"]]
     assert names[:3] == ["depth", "spread", "rows"] and any(n.startswith("band ") for n in names)
     md = "\n".join(rp.decision_md(dec))
     assert "DEPLOY" in md and "| depth |" in md and "| rows |" in md
-    for r in dec["verdicts"]["require_all_edges=False"]["reasons"]:
+    for r in dec["verdicts"][DEFAULT]["reasons"]:
         assert r in md
 
 
@@ -288,7 +290,7 @@ def test_evaluate_scores_a_readable_live_config(monkeypatch, tmp_path):
     rig_path, split = _fake_steps(monkeypatch, tmp_path)
     ev = replay().evaluate(None, rig_path, split, _live(tmp_path), tmp_path / "out", decide.Gates(), jobs=1)
     assert ev["live"]["scorable"] and ev["live"]["error"] is None
-    assert ev["verdicts"]["require_all_edges=False"]["decision"] == "DEPLOY"
+    assert ev["verdicts"][DEFAULT]["decision"] == "DEPLOY"
 
 
 def test_evaluate_unsupported_live_config_is_not_enough_data_with_the_error(monkeypatch, tmp_path):
@@ -303,8 +305,8 @@ def test_evaluate_unsupported_live_config_is_not_enough_data_with_the_error(monk
         assert any("omni" in r for r in v["reasons"]), v["reasons"]
     ev = replay().evaluate(None, rig_path, split, live, tmp_path / "out", decide.Gates(allow_deploy_without_live=True),
                            jobs=1)
-    assert ev["verdicts"]["require_all_edges=False"]["decision"] == "LIVE_NOT_SCORABLE_DEPLOY"
-    assert any("omni" in r for r in ev["verdicts"]["require_all_edges=False"]["reasons"])
+    assert ev["verdicts"][DEFAULT]["decision"] == "LIVE_NOT_SCORABLE_DEPLOY"
+    assert any("omni" in r for r in ev["verdicts"][DEFAULT]["reasons"])
 
 
 def test_evaluate_a_step_error_while_scoring_live_is_not_scorable(monkeypatch, tmp_path):
@@ -369,9 +371,9 @@ def test_replay_new_beats_live_and_deploys(name, assignment, data_root, tmp_path
     assert js["validate_new"]["verdict"] == "PASS", js["validate_new"]["text"]
     worse = [s["name"] for s in js["paired"]["stats"] if s["judged"] and not s["diff"] < 0]
     assert not worse, f"new not better on {worse}"
-    loose = js["verdicts"]["require_all_edges=False"]
-    assert loose["decision"] == "DEPLOY", loose["reasons"]
-    assert js["verdicts"]["require_all_edges=True"]["decision"] in decide.DECISIONS
+    v = js["verdicts"][DEFAULT]
+    assert v["decision"] == "DEPLOY", v["reasons"]
+    assert js["verdicts"][ALL4]["decision"] in decide.DECISIONS
     if name == "p21_1105":
         last = js["placements"][-1]["sentences"]
         assert any(s.startswith(P21_LEFT) for s in last) and any(s.startswith(P21_BOTTOM_LEFT) for s in last)

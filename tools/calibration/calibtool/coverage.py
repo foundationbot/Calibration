@@ -32,6 +32,10 @@ MIRROR = {"left": "right", "right": "left", "top": "bottom", "bottom": "top", "t
           "top-right": "top-left", "bottom-left": "bottom-right", "bottom-right": "bottom-left"}
 CAMERA = {0: "Left camera", 1: "Right camera"}
 EDGE_CELLS = ("left", "right", "top", "bottom")       # step-66 cells on each image side
+# the image edges that need a judged entry (M1 C3, 9 Nov 2026, decided with the user): left, right and bottom block a
+# deploy (decide.Gates.required_edges) and the stop rule (Targets.required_sides); the top is asked for during
+# collection (a deficit and its sentence) but blocks neither. p21 5 Nov judged no top entry and deployed well
+REQUIRED_EDGES = frozenset({"left", "right", "bottom"})
 
 
 def edges_of_cell(cell) -> set:
