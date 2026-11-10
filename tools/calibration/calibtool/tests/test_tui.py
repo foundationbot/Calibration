@@ -278,3 +278,26 @@ def test_postcheck_deploy_and_finish_screens():
                         motors_on=True))
     assert "deployed and verified" in r and "/x/rb.sh" in r and "post-check passed" in r
     assert "MOTORS ON" in r and "the warning comes first" in r
+
+
+def test_piper_voice_synthesises_then_plays_and_falls_back_when_missing(tmp_path):
+    """10 Nov: the operator found espeak 'ridiculously artificial'; Piper (a local neural voice) is the opt-in
+    replacement. It writes a wav with piper, plays it, and is unavailable when its binary or model is missing."""
+    binary, model = tmp_path / "piper", tmp_path / "voice.onnx"
+    calls = []
+    sp = tui.PiperSay(binary=binary, model=model, player="/usr/bin/pw-play",
+                      run=lambda argv, **kw: calls.append((argv, kw.get("input"))))
+    assert not sp.available()
+    binary.write_text(""); model.write_text("")
+    assert sp.available()
+    sp.say("Good. Step back.")
+    (synth, text), (play, _) = calls
+    assert synth[0] == str(binary) and "--model" in synth and str(model) in synth and "--length_scale" in synth
+    assert text == b"Good. Step back.\n"
+    assert play[0] == "/usr/bin/pw-play" and play[1] == synth[synth.index("--output_file") + 1]
+
+
+def test_make_speaker_prefers_the_asked_voice_and_falls_back(tmp_path):
+    assert isinstance(tui.make_speaker("espeak"), tui.SpdSay)
+    sp = tui.make_speaker("piper", piper_dir=tmp_path)             # nothing installed there
+    assert isinstance(sp, tui.SpdSay)

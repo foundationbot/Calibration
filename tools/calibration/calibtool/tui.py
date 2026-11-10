@@ -9,7 +9,10 @@ sends {"hb": t} at most once a second, key(k) sends {"key": K}. SpdSay speaks th
 the caller runs it off the render thread); Silent is the no-voice speaker."""
 import collections
 import json
+import os
 import subprocess
+import tempfile
+from pathlib import Path
 import threading
 import time
 
@@ -214,6 +217,42 @@ class SpdSay:
     def say(self, text):
         self.run([self.path, "-w", "-x", "-l", self.lang, "-t", self.voice, "-r", str(self.rate),
                   ssml_with_pauses(text, self.word_ms, self.sentence_ms)], timeout=90)
+
+
+PIPER_DIR = Path.home() / ".local" / "share" / "calib-voice"
+
+
+class PiperSay:
+    """a local neural voice (Piper, rhasspy; voice en_US-lessac-medium) in place of espeak, which the operator found
+    'ridiculously artificial' (10 Nov). Text -> wav with piper (length_scale > 1 = slower), then played. Opt-in:
+    make_speaker("piper") falls back to SpdSay when the binary or the model is missing."""
+
+    def __init__(self, binary=None, model=None, player="/usr/bin/pw-play", run=subprocess.run, length_scale=1.15,
+                 sentence_silence=0.45, wav=None):
+        self.binary = Path(binary or PIPER_DIR / "piper" / "piper")
+        self.model = Path(model or PIPER_DIR / "en_US-lessac-medium.onnx")
+        self.player, self.run = player, run
+        self.length_scale, self.sentence_silence = length_scale, sentence_silence
+        self.wav = str(wav or Path(tempfile.gettempdir()) / f"calibtool-say-{os.getpid()}.wav")
+
+    def available(self) -> bool:
+        return self.binary.is_file() and self.model.is_file()
+
+    def say(self, text):
+        self.run([str(self.binary), "--model", str(self.model), "--length_scale", str(self.length_scale),
+                  "--sentence_silence", str(self.sentence_silence), "--output_file", self.wav],
+                 input=(text.strip() + "\n").encode(), timeout=60, capture_output=True)
+        self.run([self.player, self.wav], timeout=90)
+
+
+def make_speaker(voice="espeak", piper_dir=None):
+    """espeak (spd-say, the default) or piper when asked and installed; anything else falls back to spd-say"""
+    if voice == "piper":
+        d = Path(piper_dir) if piper_dir is not None else PIPER_DIR
+        sp = PiperSay(binary=d / "piper" / "piper", model=d / "en_US-lessac-medium.onnx")
+        if sp.available():
+            return sp
+    return SpdSay()
 
 
 class Silent:

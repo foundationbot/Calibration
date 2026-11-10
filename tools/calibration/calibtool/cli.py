@@ -196,6 +196,8 @@ def main(argv=None):
                     help="with --full: every robot change recorded in the session's commands.txt, none sent")
     ap.add_argument("--headless", type=int, default=0, help="render N states and leave (no keys)")
     ap.add_argument("--no-speech", action="store_true")
+    ap.add_argument("--voice", choices=["espeak", "piper"], default="espeak",
+                    help="piper = local neural voice in ~/.local/share/calib-voice (falls back to espeak if missing)")
     ap.add_argument("--no-sync", action="store_true", help="do not copy the kit to the robot")
     ap.add_argument("--replace", action="store_true",
                     help="stop a calibd already running (other code, or another session) and start this one")
@@ -207,7 +209,7 @@ def main(argv=None):
         ap.error("--full and --trial are different sessions: pick one")
     if a.dry_run and not a.full:
         ap.error("--dry-run is for a --full session")
-    speaker = tui.Silent() if a.no_speech else tui.SpdSay()
+    speaker = tui.Silent() if a.no_speech else tui.make_speaker(a.voice)
     if a.say:
         speaker.say(a.say)
         return 0
