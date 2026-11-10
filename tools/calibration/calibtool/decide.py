@@ -27,7 +27,7 @@ Verdict (verdict()):
 An edge that is not required (default: the top) and has no judged entry does not block; the reasons say so.
 Every threshold is a field of Gates; the defaults were set in M1 C3 (9 Nov 2026, with the user) from the stored
 sessions: p21 5 Nov judged left, right and bottom but no top entry, p10 6 Nov all four; both deploy."""
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 
 import numpy as np
 
@@ -288,10 +288,13 @@ def _fmt(s: Stat, unit, level_pct=95.0):
     return f"{s.new:.3f} vs live {s.live:.3f} {unit}, difference {s.diff:+.3f} ({level_pct:g} % {ci})"
 
 
-def verdict(new: Scores, live, step66_new, gates: Gates = Gates(), live_error=None) -> Verdict:
+def verdict(new: Scores, live, step66_new, gates: Gates = Gates(), live_error=None, paired_: Paired = None) -> Verdict:
     """the decision (DECISIONS) with its reasons. new / live: Scores on the same TEST file (live None: the live
     config could not be scored, live_error saying why); step66_new: step 66 of the new fit (pipeline.ValidateResult:
-    .verdict, .entries)"""
+    .verdict, .entries). paired_: paired(new, live, g) already made with gates that differ from these at most in
+    required_edges (the bootstrap does not read them), used instead of a second bootstrap"""
+    if paired_ is not None and replace(paired_.gates, required_edges=gates.required_edges) != gates:
+        raise ValueError("paired_ was made with other gates than required_edges: bootstrap again")
     v66 = getattr(step66_new, "verdict", None)
     judged = sorted(getattr(step66_new, "entries", {}) or {})
     edges = edges_judged(judged)
@@ -321,7 +324,7 @@ def verdict(new: Scores, live, step66_new, gates: Gates = Gates(), live_error=No
         return Verdict("LIVE_NOT_SCORABLE_DEPLOY",
                        [f"{no_live}: deploy rests on the new fit's step-66 PASS alone ({len(judged)} judged entries; "
                         f"allow_deploy_without_live=True)"] + note, **base)
-    pr = paired(new, live, gates)
+    pr = paired_ if paired_ is not None else paired(new, live, gates)
     depth, rows = pr.stat("depth"), pr.stat("rows")
     if not (depth.judged and rows.judged):
         return Verdict("NOT_ENOUGH_DATA", [f"new vs live not comparable: {depth.why or rows.why}"], paired=pr, **base)

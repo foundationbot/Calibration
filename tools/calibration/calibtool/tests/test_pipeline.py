@@ -273,3 +273,31 @@ def test_summary_rows_are_the_median_of_the_row_errors_it_keeps(tmp_path):
     assert np.array_equal(sm.corner_src, src) and np.array_equal(sm.corner_dy, dy)
     assert sm.rows_px == float(np.median(np.abs(dy)))
     assert "corner_dy" not in sm.as_dict()
+
+
+# ---------------------------------------------------------------- the decision: one bootstrap
+
+
+def test_decision_bootstraps_once_for_both_verdicts(monkeypatch):
+    from calibtool import replay
+    TD = _test_module("test_decide")
+    new, live, v66 = TD.synthetic(0.3, 0.3), TD.synthetic(), TD.step66()
+    want = {k: decide.verdict(new, live, v66, decide.Gates(required_edges=e)).as_dict()
+            for k, e in replay.VERDICT_KEYS.items()}
+    want_paired = decide.paired(new, live, decide.Gates()).as_dict()
+    n = []
+    real = decide.paired
+    monkeypatch.setattr(decide, "paired", lambda *a, **k: n.append(1) or real(*a, **k))
+    dec = replay.decision(new, live, v66, decide.Gates())
+    assert len(n) == 1
+    assert dec["verdicts"] == replay._js(want) and dec["paired"] == replay._js(want_paired)
+
+
+def test_verdict_takes_a_paired_comparison_made_with_other_required_edges_only():
+    TD = _test_module("test_decide")
+    new, live, v66 = TD.synthetic(0.3, 0.3), TD.synthetic(), TD.step66()
+    pr = decide.paired(new, live, decide.Gates())
+    v = decide.verdict(new, live, v66, decide.Gates(required_edges=frozenset(decide.EDGES)), paired_=pr)
+    assert v.paired is pr and v.decision == "DEPLOY"
+    with pytest.raises(ValueError, match="gates"):
+        decide.verdict(new, live, v66, decide.Gates(boot=100), paired_=pr)

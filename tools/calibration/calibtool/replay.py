@@ -426,11 +426,12 @@ def decision(new, live, step66_new, gates: decide.Gates, live_error=None) -> dic
     new fit"""
     out = {"verdicts": {}, "paired": None, "stats": {"new": decide.stats(new) if new is not None else None,
                                                      "live": decide.stats(live) if live is not None else None}}
+    pr = decide.paired(new, live, gates) if new is not None and live is not None else None   # one bootstrap for all
     for key, edges in VERDICT_KEYS.items():
         out["verdicts"][key] = decide.verdict(new, live, step66_new, replace(gates, required_edges=edges),
-                                              live_error=live_error).as_dict()
-    if new is not None and live is not None:
-        out["paired"] = decide.paired(new, live, gates).as_dict()
+                                              live_error=live_error, paired_=pr).as_dict()
+    if pr is not None:
+        out["paired"] = pr.as_dict()
     return _js(out)
 
 
