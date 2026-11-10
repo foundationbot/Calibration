@@ -161,6 +161,7 @@ def _recording_steps(monkeypatch, tmp_path):
     def rec(name, value):
         def f(*a, **k):
             calls.setdefault(name, []).append(k.get("solver"))
+            calls.setdefault("kwargs", []).append((name, k))
             return value() if callable(value) else value
         return f
 
@@ -182,7 +183,10 @@ def test_evaluate_passes_the_solver_to_every_step(solver, tmp_path, monkeypatch)
     calls, args = _recording_steps(monkeypatch, tmp_path)
     replay.evaluate(*args, jobs=1, **({} if solver is None else {"solver": solver}))
     want = solver or "fast"
+    kw = calls.pop("kwargs")
     assert calls == {"fit45": [want], "validate66": [want], "live66": [want], "score": [want, want]}
+    # each calibration's scores come from its own step-66 run (no second scoring)
+    assert [k["step66"].name for n, k in kw if n == "score"] == ["validate-new", "validate-live"]
 
 
 def test_run_checks_the_solver_first_and_passes_it_to_evaluate(tmp_path, monkeypatch):
@@ -301,3 +305,99 @@ def test_verdict_takes_a_paired_comparison_made_with_other_required_edges_only()
     assert v.paired is pr and v.decision == "DEPLOY"
     with pytest.raises(ValueError, match="gates"):
         decide.verdict(new, live, v66, decide.Gates(boot=100), paired_=pr)
+
+
+# ---------------------------------------------------------------- step 66's scores reused (no second scoring)
+
+
+def _scored66(tmp_path, solver="fast"):
+    """step 66 (in this process) of the true calibration on holdout_sweep() -> (calibration, test npz, report dir)"""
+    np.savez_compressed(tmp_path / "t.npz", **S.holdout_sweep())
+    cal = S.write_calibration(tmp_path / "c.json", "KB4T", [S.I0, S.I1], S.C_TRUE)
+    v66 = importlib.import_module("66_validate_lens")
+    with sf.solver_scope(solver):
+        v66.main([str(cal), str(tmp_path / "t.npz"), str(tmp_path / "v"), "--rig", str(S.RIG12)])
+    return cal, tmp_path / "t.npz", tmp_path / "v"
+
+
+def test_step66_writes_the_scores_it_judged(tmp_path):
+    import lensscore
+    cal, npz, out = _scored66(tmp_path)
+    js = json.loads((out / "scores.json").read_text())
+    data = sf.Data(str(npz), S.BOARD)
+    with sf.solver_scope("fast"):
+        rec, _, solves = lensscore.score("KB4T", [S.I0, S.I1], S.C_TRUE, data)
+    assert js["records"] == rec and js["solves"] == solves and js["solver"] == "fast"
+    assert js["calibration_sha256"] == sf.calibration_digest("KB4T", [S.I0, S.I1], S.C_TRUE)
+    assert js["test_sha256"] == sf.file_sha256(npz)
+
+
+def test_summary_from_step66_scores_equals_a_fresh_scoring_without_scoring_again(tmp_path, monkeypatch):
+    import lensscore
+    cal, npz, out = _scored66(tmp_path)
+    fresh = pipeline.summary(cal, npz, S.RIG12)
+    got = pipeline.step66_scores(out, cal, npz, solver="fast")
+    assert got is not None
+
+    def no(*a, **k):
+        raise AssertionError("scored again")
+
+    monkeypatch.setattr(lensscore, "score", no)
+    sm = pipeline.summary(cal, npz, S.RIG12, scores=got)
+    assert sm.as_dict(records=True) == fresh.as_dict(records=True)
+    sc = decide.score(cal, npz, S.RIG12, np.zeros(400, int), step66=out)
+    assert sc.summary.as_dict(records=True) == fresh.as_dict(records=True)
+
+
+def test_step66_scores_of_another_calibration_test_file_or_solver_are_not_used(tmp_path):
+    cal, npz, out = _scored66(tmp_path)
+    other = S.write_calibration(tmp_path / "o.json", "KB4T", [S.I0 * 1.001, S.I1], S.C_TRUE)
+    assert pipeline.step66_scores(out, other, npz) is None
+    np.savez_compressed(tmp_path / "u.npz", **S.holdout_sweep(seed=12))
+    assert pipeline.step66_scores(out, cal, tmp_path / "u.npz") is None
+    assert pipeline.step66_scores(out, cal, npz, solver="scipy") is None
+    assert pipeline.step66_scores(tmp_path / "nowhere", cal, npz) is None
+
+
+@pytest.mark.parametrize("jobs, want", [(1, [1, 1]), (2, [1, 1]), (3, [2, 1]), (4, [2, 2])])
+def test_evaluate_runs_both_step66_at_once_with_two_processes_or_more(jobs, want, tmp_path, monkeypatch):
+    """jobs: processes at a time. 1: one step after the other; 2: step 66 of the new fit and of the live config at
+    once; 3-4: as 2, and a step 66 also rescoring its self-check in a second process (--jobs 2)"""
+    from calibtool import livecfg, replay
+    calls, args = _recording_steps(monkeypatch, tmp_path)
+    started, seen = threading.Barrier(2, timeout=5), []
+    TD = _test_module("test_decide")
+
+    def step(name):
+        def f(*a, **k):
+            seen.append((name, k.get("jobs", 1)))
+            if jobs >= 2:
+                started.wait()              # both must be running: a BrokenBarrierError if they ran one by one
+            v = TD.step66()
+            v.as_dict = lambda: {"verdict": "PASS"}
+            return v
+        return f
+
+    monkeypatch.setattr(pipeline, "validate66", step("new"))
+    monkeypatch.setattr(livecfg, "validate66", step("live"))
+    replay.evaluate(*args, jobs=jobs)
+    assert sorted(seen) == [("live", want[1]), ("new", want[0])]
+
+
+# ---------------------------------------------------------------- step 66 --jobs 2: the self-check in a second process
+
+
+def test_step66_with_its_self_check_in_a_second_process_reports_the_same(tmp_path):
+    """66_validate_lens --jobs 2 (as its own process, as calibtool runs it): the same report, self-check included,
+    and the same scores as --jobs 1"""
+    np.savez_compressed(tmp_path / "t.npz", **S.holdout_sweep())
+    cal = S.write_calibration(tmp_path / "c.json", "KB4T", [S.I0, S.I1], S.C_TRUE)
+    out = {}
+    for j in (1, 2):
+        v = pipeline.validate66(cal, tmp_path / "t.npz", tmp_path / f"v{j}", S.RIG12, jobs=j)
+        out[j] = (v, json.loads((tmp_path / f"v{j}" / "scores.json").read_text()))
+    (v1, s1), (v2, s2) = out[1], out[2]
+    assert v1.verdict == v2.verdict and v1.entries == v2.entries
+    assert v1.report["self_check"] == v2.report["self_check"] and v2.report["self_check"]["passed"]
+    assert s1 == s2
+    assert v2.report.get("jobs") == 2 and v1.report.get("jobs", 1) == 1

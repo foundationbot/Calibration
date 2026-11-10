@@ -495,10 +495,20 @@ class _Now:
         return False
 
 
+def step66_jobs(jobs):
+    """processes at a time -> (step 66 runs at once, --jobs of the new fit's, --jobs of the live config's): 1 -> one
+    after the other; 2 -> new and live at once; 3 -> and the new fit's self-check rescored in a second process;
+    4 and up -> both self-checks too"""
+    if jobs <= 1:
+        return 1, 1, 1
+    return 2, 1 + (jobs >= 3), 1 + (jobs >= 4)
+
+
 def evaluate(session, rig_path, split: pipeline.Split, live_config, out_dir, gates: decide.Gates, jobs=2,
              max_fit_z=3.0, solver=pipeline.DEFAULT_SOLVER) -> dict:
-    """step 45 on the split, step 66 (new and live), decide.score of both, decision(). jobs: processes at a time
-    (2: the step-66 runs in a second process while this one scores); solver: pipeline.SOLVERS, for every step"""
+    """step 45 on the split, step 66 (new and live), decide.score of both (from step 66's own scores: no second
+    scoring), decision(). jobs: processes at a time (step66_jobs: the two step-66 runs at once from 2, each with its
+    self-check in a second process from 3-4); solver: pipeline.SOLVERS, for every step"""
     pipeline.check_solver(solver)
     out_dir = Path(out_dir)
     rig = pipeline.load_rig(rig_path)
@@ -523,30 +533,36 @@ def evaluate(session, rig_path, split: pipeline.Split, live_config, out_dir, gat
         res["validate_new"] = {"verdict": "NO RESULT", "text": v_new.text}
     else:
         place = decide.placements(split.test_npz, session)
-        new_sc = live_sc = None
-        with (_Now() if jobs <= 1 else ThreadPoolExecutor(max(1, jobs - 1))) as ex:
-            f_new = ex.submit(pipeline.validate66, fit.json_path, split.test_npz, out_dir / "validate-new", rig_path,
-                              fit_report=fit.json_path, solver=solver)
-            f_live = ex.submit(livecfg.validate66, live, split.test_npz, out_dir / "validate-live", rig_path,
-                               solver=solver) if live else None
-            new_sc = decide.score(fit.json_path, split.test_npz, rig_path, place, solver=solver)
-            if live:
-                try:
-                    js = live.write_json(out_dir / f"live-{live.model.lower()}.json")
-                    live_sc = decide.score(js, split.test_npz, rig_path, place, solver=solver)
-                except NOT_SCORABLE as e:
-                    live_err = f"live config not scored: {type(e).__name__}: {e}"
+        new_sc = live_sc = v_live = None
+        at_once, j_new, j_live = step66_jobs(jobs)
+        d_new, d_live = out_dir / "validate-new", out_dir / "validate-live"
+        with (_Now() if at_once <= 1 else ThreadPoolExecutor(at_once)) as ex:
+            f_new = ex.submit(pipeline.validate66, fit.json_path, split.test_npz, d_new, rig_path,
+                              fit_report=fit.json_path, solver=solver, jobs=j_new)
+            f_live = ex.submit(livecfg.validate66, live, split.test_npz, d_live, rig_path, solver=solver,
+                               jobs=j_live) if live else None
             v_new = f_new.result()
-            v_live = None
             if f_live is not None:
                 try:
                     v_live = f_live.result()
                 except NOT_SCORABLE as e:
-                    live_err = live_err or f"step 66 on the live config: {type(e).__name__}: {e}"
+                    live_err = f"step 66 on the live config: {type(e).__name__}: {e}"
+        tm["step66_s"] = time.time() - t
+        t1 = time.time()
+        new_sc = decide.score(fit.json_path, split.test_npz, rig_path, place, solver=solver, step66=d_new)
+        if live:
+            try:
+                js = live.write_json(out_dir / f"live-{live.model.lower()}.json")
+                live_sc = decide.score(js, split.test_npz, rig_path, place, solver=solver, step66=d_live)
+            except NOT_SCORABLE as e:
+                live_err = live_err or f"live config not scored: {type(e).__name__}: {e}"
+        tm["scores_s"] = time.time() - t1
         res["validate_new"] = v_new.as_dict()
         res["validate_live"] = v_live.as_dict() if v_live else None
         res["live"].update(scorable=live_sc is not None, error=live_err)
+        t1 = time.time()
         dec = decision(new_sc, live_sc, v_new, gates, live_error=live_err)
+        tm["decision_s"] = time.time() - t1
     tm["validate_score_s"] = time.time() - t
     res.update(dec)
     res["timings"] = tm

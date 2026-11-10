@@ -183,16 +183,17 @@ class ValidateResult:
 
 
 def validate66(calib_json, test_npz, out_dir, rig, fit_report=None, script=None,
-               solver=DEFAULT_SOLVER) -> ValidateResult:
+               solver=DEFAULT_SOLVER, jobs=1) -> ValidateResult:
     """step 66 of calib_json on test_npz -> out_dir/report.json (+ report.md), log out_dir.log. The verdict is read
     from report.json and checked against the printed verdict line. script: run this instead of 66_validate_lens.py
-    with the same arguments (a runner that registers a lens model first, or a test's fake); solver: SOLVERS"""
+    with the same arguments (a runner that registers a lens model first, or a test's fake); solver: SOLVERS; jobs:
+    step 66's --jobs (2: its self-check rescored in a second process)"""
     check_solver(solver)
     out_dir = Path(out_dir)
     out_dir.parent.mkdir(parents=True, exist_ok=True)
     log = out_dir.parent / f"{out_dir.name}.log"
     args = [calib_json, test_npz, out_dir] + (["--fit-report", fit_report] if fit_report else [])
-    args += ["--rig", _rig_path(rig)]
+    args += ["--rig", _rig_path(rig)] + (["--jobs", int(jobs)] if jobs > 1 else [])
     rc, sec = _run(script or paths.script("66_validate_lens"), args, log, solver)
     rp = out_dir / "report.json"
     if not rp.is_file():
@@ -237,17 +238,40 @@ class SummaryResult:
         return d
 
 
-def summary(calib_json, test_npz, rig, bands=BANDS, solver=DEFAULT_SOLVER) -> SummaryResult:
+def step66_scores(report_dir, calib_json, test_npz, solver=DEFAULT_SOLVER):
+    """step 66's per-pair scores (its scores.json in report_dir) -> (records, solves), when they are of this
+    calibration (its numbers' digest) on this TEST file (its sha256) with this solver; else None (score afresh)"""
+    import stereofit as sf
+    p = Path(report_dir) / "scores.json"
+    try:
+        js = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return None
+    rec, solves = js.get("records"), js.get("solves")
+    if (js.get("solver") != solver or js.get("test_sha256") != sf.file_sha256(test_npz)
+            or js.get("calibration_sha256") != sf.calibration_digest(*sf.load_calibration(str(calib_json)))
+            or not isinstance(rec, dict) or not isinstance(solves, dict)
+            or any(v is None for vals in rec.values() for v in vals)):          # a non-finite number written as null
+        return None
+    return rec, solves
+
+
+def summary(calib_json, test_npz, rig, bands=BANDS, solver=DEFAULT_SOLVER, scores=None) -> SummaryResult:
     """run_lens_kb4t.summary_row's numbers (same math), as data: the TEST depth error of the calibration (lensscore
     board scale - 1: median, IQR, per distance band) and its row error. The lens model must be known to lensmodel
-    (a radtan config needs its model registered first). solver: SOLVERS, for this call (stereofit.solver_scope)"""
+    (a radtan config needs its model registered first). solver: SOLVERS, for this call (stereofit.solver_scope).
+    scores: (records, solves) of this calibration on this file already made (step66_scores), used instead of
+    scoring again"""
     import lensscore
     import stereofit as sf
     rig = load_rig(rig)
     model, intr, C = sf.load_calibration(str(calib_json))
-    data = sf.Data(str(test_npz), rig.board)
-    with sf.solver_scope(check_solver(solver)):
-        rec, _, solves = lensscore.score(model, intr, C, data)
+    if scores is not None:
+        rec, solves = scores
+    else:
+        data = sf.Data(str(test_npz), rig.board)
+        with sf.solver_scope(check_solver(solver)):
+            rec, _, solves = lensscore.score(model, intr, C, data)
     sc = np.array(rec["scale"]) - 1
     zz = np.array(rec["z"])
     csrc, dy = row_errors(model, intr, C, test_npz, rig)

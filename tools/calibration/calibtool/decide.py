@@ -133,14 +133,17 @@ def row_errors(model, intr, C, test_npz, rig):
     return pipeline.row_errors(model, intr, C, test_npz, rig)
 
 
-def score(calib_json, test_npz, rig, placement, solver="fast") -> Scores:
+def score(calib_json, test_npz, rig, placement, solver="fast", step66=None) -> Scores:
     """a calibration (any step-66 JSON: step 45's fit, livecfg's live config) scored on the TEST file: pipeline.summary
-    (lensscore) and row_errors, the model registered while it runs (a RADTAN live config). solver: pipeline.SOLVERS"""
+    (lensscore) and row_errors, the model registered while it runs (a RADTAN live config). solver: pipeline.SOLVERS.
+    step66: the report folder of step 66 on this calibration and file: its scores are used when they match
+    (pipeline.step66_scores), instead of scoring again"""
     import stereofit as sf
     from calibtool import livecfg, pipeline
     model, intr, C = sf.load_calibration(str(calib_json))
+    done = pipeline.step66_scores(step66, calib_json, test_npz, solver) if step66 is not None else None
     with livecfg.model_scope(model):
-        sm = pipeline.summary(calib_json, test_npz, rig, solver=solver)
+        sm = pipeline.summary(calib_json, test_npz, rig, solver=solver, scores=done)
     return Scores.from_records(sm.records, placement, sm.corner_src, sm.corner_dy, sm)
 
 

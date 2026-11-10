@@ -307,7 +307,7 @@ def test_summary_and_validate_wrap_pipeline(tmp_path, monkeypatch):
         calls.setdefault("solver", []).append(solver)
         return "S"
 
-    def fake_validate(calib_json, test_npz, out_dir, rig, fit_report=None, script=None, solver=None):
+    def fake_validate(calib_json, test_npz, out_dir, rig, fit_report=None, script=None, solver=None, jobs=1):
         calls.setdefault("validate", []).append((json.loads(Path(calib_json).read_text())["model"], script))
         calls.setdefault("solver", []).append(solver)
         return "V"
