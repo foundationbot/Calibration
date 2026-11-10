@@ -7,6 +7,7 @@ scripts/rigcfg.py
 scripts/rigmath.py
 scripts/okviscfg.py
 scripts/stereofit.py
+scripts/45_fit_lens.py
 scripts/lensscore.py
 scripts/16_split_distance.py
 scripts/66_validate_lens.py
