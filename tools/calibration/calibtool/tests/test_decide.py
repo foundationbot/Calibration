@@ -254,6 +254,23 @@ def test_without_live_the_entry_and_edge_checks_still_apply():
     assert decide.verdict(synthetic(0.3, 0.3), None, step66(), g).decision == "LIVE_NOT_SCORABLE_DEPLOY"
 
 
+def test_pairs_live_scored_but_new_did_not_are_gated():
+    """pairs the live config scored and the new fit could not (PnP failed on its lens) leave the comparison; more than
+    Gates.max_new_unscored_frac of live's pairs that way keeps live, with the count in the reasons. Pairs only the new
+    fit scored are not gated"""
+    live = synthetic()
+    n = len(live.src)
+    assert decide.Gates().max_new_unscored_frac == 0.05
+    few, many = range(3), range(int(0.1 * n))
+    assert decide.verdict(synthetic(0.3, 0.3, drop_src=few), live, step66()).decision == "DEPLOY"
+    v = decide.verdict(synthetic(0.3, 0.3, drop_src=many), live, step66())
+    assert v.decision == "KEEP_LIVE", v.reasons
+    assert any(f"{len(many)} of the {n} pairs" in r for r in v.reasons), v.reasons
+    loose = decide.Gates(max_new_unscored_frac=0.2)
+    assert decide.verdict(synthetic(0.3, 0.3, drop_src=many), live, step66(), loose).decision == "DEPLOY"
+    assert decide.verdict(synthetic(0.3, 0.3), synthetic(drop_src=many), step66()).decision == "DEPLOY"
+
+
 def test_thresholds_are_named_parameters():
     g = decide.Gates()
     for k in ("min_judged", "require_all_edges", "depth_margin_pct", "rows_margin_px", "band_worse_margin_pct",

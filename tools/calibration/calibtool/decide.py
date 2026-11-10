@@ -18,7 +18,8 @@ Verdict (verdict()):
                             entries; or, with require_all_edges, an image edge (left/right/top/bottom; a corner cell
                             counts for both its edges) without a judged entry; or too few placements to compare
   KEEP_LIVE                 step 66 FAILs the new fit; or the paired interval does not show new better on depth and
-                            on rows; or a judged band where the interval shows new worse
+                            on rows; or a judged band where the interval shows new worse; or the new fit could not
+                            score more than Gates.max_new_unscored_frac of the pairs the live config scored
                             ; or no live scores (the live config could not be scored, the error in the reasons)
                             without Gates.allow_deploy_without_live
   LIVE_NOT_SCORABLE_DEPLOY  no live scores and Gates.allow_deploy_without_live=True: step 66 PASS alone decides
@@ -48,6 +49,8 @@ class Gates:
     seed: int = 20261109                # bootstrap seed (fixed: the same data gives the same intervals)
     level_pct: float = 95.0             # interval
     min_valid_frac: float = 0.5         # a band's interval needs data in this share of the resamples
+    max_new_unscored_frac: float = 0.05     # live scored a pair, the new fit could not: above this share of live's
+                                            # pairs, keep live (the comparison would leave out the new fit's misses)
     # without live scores, deploy on step 66 alone (LIVE_NOT_SCORABLE_DEPLOY) only when this is set: "deploy only if
     # shown better than live" cannot be checked then, so it takes an explicit choice (else NOT_ENOUGH_DATA)
     allow_deploy_without_live: bool = False
@@ -169,7 +172,7 @@ class Stat:
 class Paired:
     stats: list
     placements: list
-    dropped_pairs: dict         # pairs scored by one side only: {"new": n, "live": n}
+    dropped_pairs: dict         # pairs scored by one side only: {"new": n, "live": n} ("live": live scored it, new not)
     gates: Gates
     boot: dict = field(default=None, repr=False)    # {name: new - live per bootstrap resample} (nan: no data)
 
@@ -326,6 +329,12 @@ def verdict(new: Scores, live, step66_new, gates: Gates = Gates(), live_error=No
     if not (depth.judged and rows.judged):
         return Verdict("NOT_ENOUGH_DATA", [f"new vs live not comparable: {depth.why or rows.why}"], paired=pr, **base)
     reasons, keep = [], False
+    n_live, lost = len(live.src), pr.dropped_pairs["live"]
+    if n_live and lost > gates.max_new_unscored_frac * n_live:
+        keep = True
+        reasons.append(f"the new fit could not score {lost} of the {n_live} pairs the live config scored "
+                       f"({100 * lost / n_live:.1f} % > {100 * gates.max_new_unscored_frac:g} %): the comparison "
+                       f"would leave them out")
     if depth.ci[1] < -gates.depth_margin_pct:
         reasons.append("new better on median |depth error|: " + _fmt(depth, "%", gates.level_pct))
     else:
