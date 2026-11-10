@@ -95,12 +95,25 @@ def _cov(e0=P21_E0, b0=P21_B0, e1=FINE_E, b1=FINE_B, far=100, **kw):
 
 def test_deficits_p21_numbers_left_edge_and_bottom_left_box_first():
     d = _cov().deficits(cv.Targets())
-    assert [(x.kind, x.cam, x.region) for x in d[:2]] == [("box", 0, "bottom-left"), ("edge", 0, "left")] or \
-        [(x.kind, x.cam, x.region) for x in d[:2]] == [("edge", 0, "left"), ("box", 0, "bottom-left")]
+    assert [(x.kind, x.cam, x.region) for x in d[:2]] == [("edge", 0, "left"), ("box", 0, "bottom-left")]
     left = next(x for x in d if x.region == "left")
     assert (left.have, left.ref_region, left.ref_have) == (176, "right", 1099)
     # top-left box 89 vs 155: within the default ratio, not a deficit; top/bottom edges fine
     assert not any(x.region in ("top-left", "top", "bottom", "right") for x in d)
+
+
+def test_weights_edges_then_boxes_then_the_rest():
+    w = cv.Targets().weights
+    assert w["edge"] > w["box"] > 1.0
+    d = _cov().deficits(cv.Targets())
+    assert {x.kind: x.weight for x in d} == {"edge": w["edge"], "box": w["box"]}
+
+
+def test_deficits_edges_then_boxes_then_others():
+    e = dict(FINE_E, right=50)
+    b = dict(FINE_B, **{"top-left": 10})
+    d = _cov(e0=e, b0=b, thirds=1000).deficits(cv.Targets())
+    assert [x.kind for x in d[:2]] == ["edge", "box"]
 
 
 def test_deficits_edges_before_other_kinds():
@@ -251,3 +264,20 @@ def test_p21_gap_sentences_name_left_edge_and_bottom_left(data_root):
     assert "Left camera, left edge: 176 corners vs 1,099 on the right edge (6x fewer)." in " ".join(ss)
     assert "Left camera, bottom-left corner: 50 corners vs 588 in the bottom-right corner (12x fewer)." \
         in " ".join(ss)
+
+
+# ---------------------------------------------------------------- step 16's rule as a hold assignment
+
+
+def test_split16_assignment_every_second_near_hold_and_far_holds():
+    s = _mini_session()
+    a = cv.split16_assignment(s, z=np.array([0.5, 0.7, 3.5]), max_fit_z=3.0, holdout_every=2)
+    assert a == {0: "FIT", 1: "TEST", 2: "TEST"}
+
+
+@pytest.mark.parametrize("name,n_test", [("p21_1105", 499), ("p10_1106", 572)])
+def test_split16_assignment_reproduces_step16_test_pairs(data_root, name, n_test):
+    s, rig = _load(name)
+    a = cv.split16_assignment(s, z=cv.session_z(s, rig))
+    test = np.array([a[int(h)] == "TEST" for h in s.pairs["hold"]])
+    assert int(test.sum()) == n_test

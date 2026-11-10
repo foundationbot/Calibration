@@ -28,8 +28,8 @@ FAR_BANDS = ((1.3, 1.7), (1.7, 2.3))
 EDGES = ("left", "right", "top", "bottom")
 BOXES = ("top-left", "top-right", "bottom-left", "bottom-right")
 CORNER_THIRDS = {"top-left": (0, 0), "top-right": (0, 2), "bottom-left": (2, 0), "bottom-right": (2, 2)}
-MIRROR = {"left": "right", "right": "left", "top": "bottom", "bottom": "top",
-          "top-left": "top-right", "top-right": "top-left", "bottom-left": "bottom-right", "bottom-right": "bottom-left"}
+MIRROR = {"left": "right", "right": "left", "top": "bottom", "bottom": "top", "top-left": "top-right",
+          "top-right": "top-left", "bottom-left": "bottom-right", "bottom-right": "bottom-left"}
 CAMERA = {0: "Left camera", 1: "Right camera"}
 EDGE_CELLS = ("left", "right", "top", "bottom")       # step-66 cells on each image side
 
@@ -147,6 +147,25 @@ def test_tally(session, assignment, pp, z) -> TestTally:
     return TestTally(entries, far)
 
 
+def split16_assignment(session, z, max_fit_z=3.0, holdout_every=2) -> dict:
+    """step 16's split as a hold assignment {global hold id: "FIT" | "TEST"}: per take, in time order, every
+    holdout_every-th hold with near pairs (rough distance <= max_fit_z) is TEST, and so is a hold with no near pair.
+    Step 16 splits at the pair level: a hold mixing FIT near pairs and far pairs is FIT here (its far pairs are TEST
+    in 16); the stored sessions have none (no pair beyond 2.3 m)"""
+    from calibtool import paths
+    d16 = paths.import_script("16_split_distance")
+    P = session.pairs
+    near = np.nan_to_num(np.asarray(z, float), nan=np.inf) <= max_fit_z
+    out = {}
+    for t in session.take_order:
+        m = P["take"] == t
+        held = d16.near_holdout(P["hold"][m], P["t0"][m], near[m], holdout_every)
+        for h in np.unique(P["hold"][m]):
+            k = P["hold"][m] == h
+            out[int(h)] = "TEST" if (held[k].any() or not near[m][k].any()) else "FIT"
+    return out
+
+
 # ---------------------------------------------------------------- targets and deficits
 
 
@@ -166,7 +185,9 @@ class Targets:
     test_holds: int = 10                # TEST holds an entry needs (8 required + margin)
     judged_min: int = 6
     far_band_min: int = 10
-    weights: dict = field(default_factory=lambda: {"edge": 3.0, "box": 3.0, "side": 2.0})
+    # the planner's weights per deficit kind (default 1): edge strips weigh most, corner boxes next (the handoff's
+    # order: p21's left edge first, its bottom-left box second), a side of the image with no judged TEST entry 2
+    weights: dict = field(default_factory=lambda: {"edge": 3.0, "box": 2.0, "side": 2.0})
 
 
 @dataclass
@@ -191,7 +212,8 @@ class Coverage:
     test: object = None         # TestTally or None
 
     def deficits(self, targets: Targets = Targets()) -> list:
-        """what is short, edge strips and corner boxes first (most lopsided first), then the rest (least met first)"""
+        """what is short: edge strips first, then corner boxes (each most lopsided first), then the rest (least met
+        first)"""
         w = targets.weights
         out = []
         for c in targets.fit_cams:
@@ -229,11 +251,10 @@ class Coverage:
             for band, n in self.test.far_bands.items():
                 if n < targets.far_band_min:
                     out.append(Deficit("far_band", None, band, n, targets.far_band_min, weight=w.get("far_band", 1)))
-        first = [d for d in out if d.kind in ("edge", "box")]
-        rest = [d for d in out if d.kind not in ("edge", "box")]
-        first.sort(key=lambda d: d.have / max(d.ref_have, 1))
-        rest.sort(key=lambda d: d.have / max(d.want, 1e-9))
-        return first + rest
+        edges = sorted([d for d in out if d.kind == "edge"], key=lambda d: d.have / max(d.ref_have, 1))
+        boxes = sorted([d for d in out if d.kind == "box"], key=lambda d: d.have / max(d.ref_have, 1))
+        rest = sorted([d for d in out if d.kind not in ("edge", "box")], key=lambda d: d.have / max(d.want, 1e-9))
+        return edges + boxes + rest
 
 
 # ---------------------------------------------------------------- sentences
