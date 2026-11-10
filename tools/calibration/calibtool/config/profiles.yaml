@@ -26,3 +26,16 @@ profiles:
     stand: {raise_max_m: 0.30, lower_max_m: 0.40, auto_skip: false, steps: true}
     # 10 Nov: "Skipping this one." after 3 minutes came while the operator was still trying; only their C skips
     placement_timeout_s: null
+  P11:
+    python: /root/calib-kit/venv/bin/python     # phantom10's kit venv, copied 10 Nov 2026
+    pydeps: /root/calib-kit/pydeps               # phantom11's own dma_ipc (from /root/burst-grab/pydeps)
+    root: /data/calib
+    left: 3
+    right: 0
+    producer: {namespace: dma-video, deployment: producer}
+    motor_tool: /root/calib-kit/dma_motor_motion # the fixed tool (md5 208231a2...), as on phantom10
+    stand: {raise_max_m: 0.30, lower_max_m: 0.40, auto_skip: false, steps: true}   # the same chair as on phantom10
+    placement_timeout_s: null
+    # robot.env's OKVIS_CALIBRATION is commented out (10 Nov: "use image config"); the live calibration to compare
+    # against and to roll back to is the last stand-in (the operator's choice, 10 Nov)
+    live_config: /etc/phantomos/okvis/phantom07_stereo_dense_thor-STANDIN-p12fitc-refitA-yawA2-1280x800-15fps.yaml

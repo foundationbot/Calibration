@@ -963,7 +963,7 @@ def cmd_run(a):
     trial = None
     if a.trial or m.state.get("mode") == "trial":
         # 'up' in camera 0 (head IMU + the live OKVIS R_SC, read-only; None -> guidance by camera distance only)
-        grav = gravity.from_robot()
+        grav = gravity.from_robot(fallback=prof.live_config)
         grav.up()
         m.store.event("gravity", t=time.time(), **grav.status())
         trial = place.Trial(place.DEFAULTS, dirs.report / "trial.jsonl", timeout_s=prof.placement_timeout_s,
@@ -1024,8 +1024,8 @@ def _full_flow(prof, m, d, dirs, cap, pools, rig, size, res, probes, dry_run, se
     import dma_ipc
     from calibtool import (coverage, flow, flowrobot, gravity, imusweep, livecfg, neck as nk, place, protocol,
                            refit, replay)
-    grav = gravity.from_robot()
-    R_live, live_path = gravity.live_r_sc()
+    grav = gravity.from_robot(fallback=prof.live_config)
+    R_live, live_path = gravity.live_r_sc(fallback=prof.live_config)
     live = livecfg.load(live_path, at_size=size)
     board = rig.board
 

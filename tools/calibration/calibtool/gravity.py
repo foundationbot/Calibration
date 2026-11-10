@@ -89,13 +89,15 @@ def okvis_config_path(env_text, mounts=MOUNTS):
     return None
 
 
-def live_r_sc(env_files=ENV_FILES, mounts=MOUNTS):
+def live_r_sc(env_files=ENV_FILES, mounts=MOUNTS, fallback=None):
     """(R_SC of camera 0, config path) from the live OKVIS config; FileNotFoundError / ValueError says what is
-    missing"""
+    missing. fallback: the config to use when robot.env names none (the profile's live_config)"""
     for e in env_files:
         e = Path(e)
         if e.is_file():
             cfg = okvis_config_path(e.read_text(), mounts)
+            if cfg is None and fallback:
+                cfg = str(fallback)
             if cfg is None:
                 raise ValueError(f"{e}: no OKVIS_CALIBRATION")
             from calibtool import paths  # noqa: F401  (scripts folder on sys.path)
@@ -163,10 +165,11 @@ class Gravity:
                 "pitch_down_deg": None if u is None else round(pitch_down_deg(u), 1), "note": self.note}
 
 
-def from_robot(ring=RING, env_files=ENV_FILES, mounts=MOUNTS, clock=time.monotonic, refresh_s=REFRESH_S) -> Gravity:
+def from_robot(ring=RING, env_files=ENV_FILES, mounts=MOUNTS, clock=time.monotonic, refresh_s=REFRESH_S,
+               fallback=None) -> Gravity:
     """the robot's Gravity (never raises: a missing IMU or config gives a Gravity whose up() is None)"""
     try:
-        R_SC, cfg = live_r_sc(env_files, mounts)
+        R_SC, cfg = live_r_sc(env_files, mounts, fallback)
         note = f"R_SC from {cfg}"
     except Exception as e:  # noqa: BLE001
         R_SC, note = None, f"no OKVIS config ({type(e).__name__}: {e})"

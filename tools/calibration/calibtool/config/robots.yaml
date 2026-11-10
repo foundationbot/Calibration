@@ -21,5 +21,5 @@ robots:
   P11:
     thor: phantom11
     old_names: [phantom07]
-    machine_id_prefix: null     # unknown
-    rig: null
+    machine_id_prefix: "dfaae203c0d0"     # read on the robot 10 Nov 2026
+    rig: rig-p11.yaml

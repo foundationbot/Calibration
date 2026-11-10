@@ -173,3 +173,15 @@ def test_a_failed_refresh_keeps_the_last_good_reading():
     c.t = 40.0
     assert np.allclose(g.up(), first)
     assert g.status()["ok"] and "kept" in g.status()["note"]
+
+
+def test_live_r_sc_takes_the_profiles_config_when_robot_env_names_none(tmp_path, monkeypatch):
+    """P11, 10 Nov 2026: robot.env's OKVIS_CALIBRATION commented out ("use image config")"""
+    env = tmp_path / "robot.env"
+    env.write_text("# OKVIS_CALIBRATION=/etc/okvis/old.yaml\nOKVIS_DMA_CAMERAS=3,0\n")
+    with pytest.raises(ValueError):
+        gv.live_r_sc([env], {})
+    import okviscfg
+    monkeypatch.setattr(okviscfg, "load", lambda p: type("C", (), {"T_SC": [np.eye(4)]})())
+    R, cfg = gv.live_r_sc([env], {}, fallback="/etc/phantomos/okvis/standin.yaml")
+    assert cfg == "/etc/phantomos/okvis/standin.yaml" and np.allclose(R, np.eye(3))

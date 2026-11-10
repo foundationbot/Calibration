@@ -21,7 +21,7 @@ def test_registry_entries():
     assert (r["P12"].thor, r["P12"].old_names, r["P12"].machine_id_prefix, r["P12"].rig) == \
         ("phantom12", ("phantom21",), "9851aca02a7d", "rig-phantom21.yaml")
     assert (r["P11"].thor, r["P11"].old_names, r["P11"].machine_id_prefix, r["P11"].rig) == \
-        ("phantom11", ("phantom07",), None, None)
+        ("phantom11", ("phantom07",), "dfaae203c0d0", "rig-p11.yaml")       # read on the robot 10 Nov 2026
     for x in r.values():
         assert x.rig_path is None or x.rig_path == paths.CONFIG / x.rig and x.rig_path.is_file()
     assert robots.ROBOTS_YAML == paths.PKG / "config" / "robots.yaml"
@@ -50,12 +50,14 @@ def test_known_robot_with_another_machine_id_is_refused():
         robots.identify("phantom10", OTHER_MID)
 
 
-def test_robot_without_a_known_machine_id_by_host_name():
-    """P11's machine-id is not known: its host name identifies it, marked unverified; phantom11 with an unknown
-    machine-id is P11 (P10, whose old name it is, has a known machine-id that does not match)"""
-    i = robots.identify("phantom11", OTHER_MID)
-    assert i.robot.bot == "P11" and i.by == "hostname" and not i.machine_id_verified
-    assert robots.identify("phantom07", None).robot.bot == "P11"
+def test_phantom11_is_told_apart_by_machine_id():
+    """10 Nov 2026: P11's machine-id is known now; the name phantom11 (P10's old name, P11's current one) is resolved
+    by it, and a phantom11 with neither machine-id is refused"""
+    i = robots.identify("phantom11", "dfaae203c0d04ae39e8dadef9efae3c5")
+    assert i.robot.bot == "P11" and i.by == "machine-id" and i.machine_id_verified
+    assert robots.identify("phantom11", "60776b08836249d18784f1faea62e3cd").robot.bot == "P10"
+    with pytest.raises(robots.IdentityError):
+        robots.identify("phantom11", OTHER_MID)
 
 
 def test_without_a_machine_id_a_name_two_robots_had_is_refused():
