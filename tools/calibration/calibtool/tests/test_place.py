@@ -241,8 +241,8 @@ def at(dh, dxy, pitch=PITCH, lateral=0.0, n_tags=35, cut=()):
     return detect.BoardObs(c, float(p[2]), n_tags, 4 * n_tags, bool(cut), tuple(cut), c - 150, c + 150, p)
 
 
-def gguide(name, pitch=PITCH, **kw):
-    return guide(place.target(name), up=up_cam(pitch), stand=STAND, **kw)
+def gguide(name, pitch=PITCH, stand=None, **kw):
+    return guide(place.target(name), up=up_cam(pitch), stand=stand or STAND, **kw)
 
 
 AT_FEET = (-1.2, 0.45)          # a board standing on the floor at the feet: centre 0.3 m up, 45 cm in front
@@ -549,3 +549,20 @@ def test_the_trial_state_carries_gravity_and_the_boards_height(tmp_path):
     json.dumps(st)
     assert st["gravity"]["pitch_down_deg"] == 50.0
     assert st["board"]["dh_m"] == pytest.approx(-0.6, abs=1e-3) and st["board"]["dxy_m"] == pytest.approx(2.0, abs=1e-3)
+
+
+def test_without_auto_skip_the_operator_decides_reachability():
+    """10 Nov trial: 'This one is out of reach. Skipping.' was judged from where the board first rested plus a guessed
+    stand range, and ended a placement the operator could reach. With auto_skip off (phantom10's profile) the guide
+    searches all heights, says what is needed, never ends a placement by itself, and only C (the operator) skips."""
+    stand = place.Stand(auto_skip=False)
+    g = gguide("0.75 m", stand=stand)
+    s = feed(g, [at(*AT_FEET)] * 12)                                # 6 s at rest at the robot's feet
+    assert s and all(x.kind == "correction" for x in s) and not g.done
+    assert s[0].text.startswith("Raise the board. At least ")      # beyond the old +30 cm window, still asked for
+    assert "out of reach" not in " ".join(x.text for x in s).lower()
+
+
+def test_profile_reads_the_stands_auto_skip():
+    from calibtool import profile
+    assert profile.load("P10").stand_auto_skip is False

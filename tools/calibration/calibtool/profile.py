@@ -27,6 +27,7 @@ class Profile:
     stand_raise_m: float = 0.30     # the operator's board stand: up / down this far from the placement's start height
     stand_lower_m: float = 0.40
     placement_timeout_s: float = 180.0
+    stand_auto_skip: bool = True   # False: the operator decides reachability (C), the guide never skips itself
 
     @property
     def host(self) -> str:
@@ -48,7 +49,7 @@ def load(bot, path=PROFILES_YAML, registry=None) -> Profile:
                    int(e["right"]), str(prod.get("namespace", "dma-video")), str(prod.get("deployment", "producer")),
                    str(e.get("motor_tool") or ""), r.rig_path, r.machine_id_prefix,
                    float(stand.get("raise_max_m", 0.30)), float(stand.get("lower_max_m", 0.40)),
-                   float(e.get("placement_timeout_s", 180.0)))
+                   float(e.get("placement_timeout_s", 180.0)), bool(stand.get("auto_skip", True)))
 
 
 def for_host(host, path=PROFILES_YAML) -> Profile:

@@ -947,7 +947,7 @@ def cmd_run(a):
         m.store.event("gravity", t=time.time(), **grav.status())
         trial = place.Trial(place.DEFAULTS, dirs.report / "trial.jsonl", timeout_s=prof.placement_timeout_s,
                             focal=rig.nominal_focal_px, size=(W, H), gravity=grav,
-                            stand=place.Stand(prof.stand_raise_m, prof.stand_lower_m))
+                            stand=place.Stand(prof.stand_raise_m, prof.stand_lower_m, prof.stand_auto_skip))
     sampler = SystemSampler(kube, run=lambda argv, timeout: pf._sh(argv, timeout))
     sampler.refresh()
     sampler.refresh_slow()
@@ -1020,7 +1020,7 @@ def _full_flow(prof, m, d, dirs, cap, pools, rig, size, res, probes, dry_run, se
         prof, session=session, dirs=dirs, capture=cap, detect_pair=submit_pair,
         producer_yaml=res.snapshot.get("producer_yaml"), probes=probes, baseline=res.baseline, obs_box=d.obs_box,
         guide_kw={"focal": rig.nominal_focal_px, "size": size, "up": grav.up,
-                  "stand": place.Stand(prof.stand_raise_m, prof.stand_lower_m)},
+                  "stand": place.Stand(prof.stand_raise_m, prof.stand_lower_m, prof.stand_auto_skip)},
         make_collection=lambda: replay.Collection(rig, replay.capture_labeler(rig),
                                                   targets=coverage.Targets.for_per_hold(protocol.PER_HOLD)),
         fit_decide=flowrobot.pipeline_fit_decide(prof.rig_path, lambda: live_path, name, live_fit=live_fit),

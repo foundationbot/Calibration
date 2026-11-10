@@ -85,6 +85,8 @@ BAND_STEP_M = 0.05       # depths of the target's band tried when its own is out
 BAND_MARGIN_M = 0.05     # ... this far inside the band's edges
 DONE_TEXT = "Good. That one is done. Step back."
 UNREACHABLE_TEXT = "This one is out of reach. Skipping."
+NOPLACE_TEXT = "I cannot find a good spot. Press C to skip this one."
+AUTO_OFF_RANGE_M = 1.5
 SKIP_TEXT = "Skipping this one."
 KEEP_HEIGHT = "Keep the same height."
 TIMEOUT_S = 180.0
@@ -104,6 +106,10 @@ class Stand:
     """the operator's board stand: from the board's height at the start of a placement it goes up / down this far"""
     raise_max_m: float = 0.30
     lower_max_m: float = 0.40
+    # 10 Nov trial: judging "out of reach" from a guessed range ended a placement the operator could reach. With
+    # auto_skip off the guide searches every height (AUTO_OFF_RANGE_M around the board), never ends a placement by
+    # itself, and only the operator's C skips
+    auto_skip: bool = True
 
 
 @dataclass(frozen=True)
@@ -371,11 +377,16 @@ class PlacementGuide:
                 key, word = ("closer", "closer") if move > 0 else ("back", "further back")
                 return "correction", f"Move the board {_cm(move)} centimetres {word}. {KEEP_HEIGHT}", key, abs(move)
         h0 = dh if self.h0 is None else self.h0
-        lo, hi = h0 - self.stand.lower_max_m, h0 + self.stand.raise_max_m
+        if self.stand.auto_skip:
+            lo, hi = h0 - self.stand.lower_max_m, h0 + self.stand.raise_max_m
+        else:
+            lo, hi = dh - AUTO_OFF_RANGE_M, dh + AUTO_OFF_RANGE_M
         n = int(math.floor((hi - lo) / HEIGHT_STEP_M + 1e-9))
         ok = [lo + k * HEIGHT_STEP_M for k in range(n + 1)]
         ok = [v for v in ok if any(floor_distance_for(d, v, up, h) is not None for d in depths)]
         if not ok:
+            if not self.stand.auto_skip:
+                return "correction", NOPLACE_TEXT, "noplace", None
             return "unreachable", UNREACHABLE_TEXT, "unreachable", None
         best = min(ok, key=lambda v: abs(v - dh))
         if best > dh:
