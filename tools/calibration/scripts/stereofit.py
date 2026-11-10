@@ -282,10 +282,17 @@ def pnp_poses(data: Data, model, intr, C, min_corners=12):
     included (sweep.init_poses did this with phantom12's deployed calibration). -> (poses (n, 6), ok (n,))"""
     import cv2
     poses, ok = np.zeros((data.n, 6)), np.zeros(data.n, bool)
+    rays = np.zeros((len(data.uv), 3))
+    for c in (0, 1):                                  # every corner of a camera unprojected at once
+        m = data.cam == c
+        if m.any():
+            rays[m] = lensmodel.unproject(model, intr[c], data.uv[m])
+    order = np.lexsort((data.cam, data.pair))         # by pair, then camera; stable: a group keeps the data's order
+    bounds = np.searchsorted(data.pair[order] * 2 + data.cam[order], np.arange(2 * data.n + 1))
     for p in range(data.n):
         for c in (0, 1):
-            m = (data.pair == p) & (data.cam == c)
-            ray = lensmodel.unproject(model, intr[c], data.uv[m])
+            m = order[bounds[2 * p + c]:bounds[2 * p + c + 1]]
+            ray = rays[m]
             front = ray[:, 2] > 0.1                   # within ~84 deg of the axis, where a pinhole direction exists
             if front.sum() < min_corners:
                 continue

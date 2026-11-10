@@ -438,3 +438,52 @@ def test_step66_with_its_self_check_in_a_second_process_reports_the_same(tmp_pat
     assert v1.report["self_check"] == v2.report["self_check"] and v2.report["self_check"]["passed"]
     assert s1 == s2
     assert v2.report.get("jobs") == 2 and v1.report.get("jobs", 1) == 1
+
+
+# ---------------------------------------------------------------- the PnP start: one unprojection per camera
+
+
+def _pnp_reference(data, model, intr, C, min_corners=12):
+    """stereofit.pnp_poses up to 9 Nov 2026: a mask and an unprojection per pair and camera"""
+    import cv2
+    import lensmodel
+    import rigmath as rm
+    poses, ok = np.zeros((data.n, 6)), np.zeros(data.n, bool)
+    for p in range(data.n):
+        for c in (0, 1):
+            m = (data.pair == p) & (data.cam == c)
+            ray = lensmodel.unproject(model, intr[c], data.uv[m])
+            front = ray[:, 2] > 0.1
+            if front.sum() < min_corners:
+                continue
+            und = np.ascontiguousarray(ray[front, :2] / ray[front, 2:3]).reshape(-1, 1, 2)
+            obj = np.ascontiguousarray(data.P[m][front]).reshape(-1, 1, 3)
+            good, rv, tv = cv2.solvePnP(obj, und, np.eye(3), None)
+            if not good or tv[2, 0] <= 0:
+                continue
+            T = rm.transform(cv2.Rodrigues(rv)[0], tv.ravel())
+            if c == 1:
+                T = C @ T
+            poses[p] = np.r_[rm.log_rot(T[:3, :3]), T[:3, 3]]
+            ok[p] = True
+            break
+    return poses, ok
+
+
+def test_pnp_start_equals_the_per_pair_loop_with_one_unprojection_per_camera(monkeypatch):
+    import lensmodel
+    data = sf.Data(S.fit_sweep(), S.BOARD)
+    intr = [S.I0, S.I1]
+    want = _pnp_reference(data, "KB4T", intr, S.C_TRUE)
+    calls = []
+    real = lensmodel.unproject
+    monkeypatch.setattr(lensmodel, "unproject", lambda *a, **k: calls.append(1) or real(*a, **k))
+    got = sf.pnp_poses(data, "KB4T", intr, S.C_TRUE)
+    assert len(calls) <= 2
+    assert np.array_equal(got[1], want[1])
+    assert np.allclose(got[0], want[0], rtol=0, atol=1e-12)
+    # pairs whose camera 0 has too few usable corners start from camera 1
+    sub = data.subset(~((data.cam == 0) & (data.pair % 5 == 0)))
+    monkeypatch.setattr(lensmodel, "unproject", real)
+    w2, g2 = _pnp_reference(sub, "KB4T", intr, S.C_TRUE), sf.pnp_poses(sub, "KB4T", intr, S.C_TRUE)
+    assert np.array_equal(g2[1], w2[1]) and np.allclose(g2[0], w2[0], rtol=0, atol=1e-12)
