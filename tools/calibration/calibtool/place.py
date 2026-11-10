@@ -470,7 +470,8 @@ class Trial:
                "seconds": round((rest_t if rest_t is not None else t) - self.t_intro, 2),
                "prompts": len(g.says) if g else 0, "t_intro": self.t_intro, "t_end": t,
                "z_m": None if g is None or g.last_obs is None else round(float(g.last_obs.z), 3),
-               "dh_m": None if geom is None else round(geom[0], 3), "dxy_m": None if geom is None else round(geom[1], 3)}
+               "dh_m": None if geom is None else round(geom[0], 3),
+               "dxy_m": None if geom is None else round(geom[1], 3)}
         self.records.append(rec)
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.log_path, "a") as f:

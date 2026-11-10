@@ -90,7 +90,8 @@ def okvis_config_path(env_text, mounts=MOUNTS):
 
 
 def live_r_sc(env_files=ENV_FILES, mounts=MOUNTS):
-    """(R_SC of camera 0, config path) from the live OKVIS config; FileNotFoundError / ValueError says what is missing"""
+    """(R_SC of camera 0, config path) from the live OKVIS config; FileNotFoundError / ValueError says what is
+    missing"""
     for e in env_files:
         e = Path(e)
         if e.is_file():
