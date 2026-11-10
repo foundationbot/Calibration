@@ -93,6 +93,10 @@ def speech_s(text) -> float:
 STEEPEST_DEG = 75.0      # a board further below / above the camera than this, seen from the camera: under the head
 MAX_OFF_AXIS_DEG = 30.0  # the board's centre at most this far from the optical axis (image: +-40 deg tall)
 HEIGHT_STEP_M = 0.01     # the stand's range is searched in these steps
+# 10 Nov (phantom10, tilted placement): a board cut at the top was told "Lower", which took it out of the band, and
+# then "Raise 40". Every height or floor move the guide asks for now lands the board in the band AND fully in view
+# (its image box, scaled by distance, VIEW_MARGIN_PX inside the image: more than detection's 8 px cut margin)
+VIEW_MARGIN_PX = 20.0
 BAND_STEP_M = 0.05       # depths of the target's band tried when its own is out of reach (phantom10: 1.6 m is)
 BAND_MARGIN_M = 0.05     # ... this far inside the band's edges
 DONE_TEXT = "Good. That one is done. Step back."
@@ -161,6 +165,10 @@ class Stand:
     # auto_skip off the guide searches every height (AUTO_OFF_RANGE_M around the board), never ends a placement by
     # itself, and only the operator's C skips
     auto_skip: bool = True
+    # 10 Nov: phantom10's chair has fixed seat positions (up raise_max_m or down lower_max_m from where it was):
+    # steps=True asks for those positions first, so an operator moving the seat a whole step lands where the guide
+    # aimed (a "Raise at least 10" became +30 cm, past the spot, and then "Lower")
+    steps: bool = False
 
 
 @dataclass(frozen=True)
@@ -490,30 +498,66 @@ class PlacementGuide:
                     out.append(d)
         return out
 
-    def _distance(self, obs, up, sp):
-        """the distance correction with gravity: (kind, text, key, err). At this height if any depth of the band can
-        be reached there (the target's own preferred), else the smallest height change within the stand's range"""
+    def _project(self, q):
+        """camera point -> pixel in the nominal equidistant camera (the guide's focal and principal point)"""
+        q = np.asarray(q, float)
+        rho = math.hypot(q[0], q[1])
+        k = self.f * math.atan2(rho, q[2]) / rho if rho > 1e-9 else self.f / max(float(q[2]), 1e-9)
+        return np.array([self.pp[0] + k * q[0], self.pp[1] + k * q[1]])
+
+    def _in_view(self, obs, q) -> bool:
+        """the board moved so that its centre is at camera point q: its image box (half size from the side the image
+        does not cut, scaled by distance) VIEW_MARGIN_PX inside the image"""
+        p = np.asarray(obs.p, float)
+        c0 = self._project(p)
+        half = np.maximum(c0 - np.asarray(obs.lo, float), np.asarray(obs.hi, float) - c0)
+        size_m = float(np.linalg.norm(p)) * np.tan(np.minimum(half / self.f, 1.5))   # the board's half size (m)
+        half = self.f * np.arctan(size_m / max(float(np.linalg.norm(q)), 1e-9))
+        c1 = self._project(q)
+        m, (w, hgt) = VIEW_MARGIN_PX, self.size
+        return bool(np.all(c1 - half >= m) and c1[0] + half[0] <= w - 1 - m and c1[1] + half[1] <= hgt - 1 - m)
+
+    def _spot(self, obs, up, h, v, depths):
+        """the floor distance at height v for the first depth of the band (best first) that is fully in view there"""
+        for d in depths:
+            x = floor_distance_for(d, v, up, h)
+            if x is not None and self._in_view(obs, v * up + x * h):
+                return x
+        return None
+
+    def _heights(self, dh):
+        """the heights to try for a height change, in order: the stand's own positions (steps), then its range (1 cm
+        steps, nearest first), then (auto_skip off) AUTO_OFF_RANGE_M around the board"""
+        h0 = dh if self.h0 is None else self.h0
+        lo, hi = h0 - self.stand.lower_max_m, h0 + self.stand.raise_max_m
+        groups = []
+        if self.stand.steps:
+            groups.append([v for v in (hi, lo) if abs(v - dh) > MOVE_H_M])
+        n = int(math.floor((hi - lo) / HEIGHT_STEP_M + 1e-9))
+        groups.append([lo + k * HEIGHT_STEP_M for k in range(n + 1)])
+        if not self.stand.auto_skip:
+            n = int(math.floor(2 * AUTO_OFF_RANGE_M / HEIGHT_STEP_M + 1e-9))
+            groups.append([dh - AUTO_OFF_RANGE_M + k * HEIGHT_STEP_M for k in range(n + 1)])
+        return [sorted(g, key=lambda v: abs(v - dh)) for g in groups]
+
+    def _distance(self, obs, up, sp, cut=None):
+        """the correction with gravity, for a wrong distance or a board cut at the top / bottom: (kind, text, key,
+        err). A floor move at this height that lands in the band and in view (the target's own depth preferred),
+        else the nearest height (the stand's positions, then its range, then wider) where such a floor move exists"""
         dh, dxy, h = sp
         depths = self.depths()
-        for d in depths:
-            x = floor_distance_for(d, dh, up, h)
-            if x is not None:
-                move = dxy - x
-                key, word = ("closer", "closer") if move > 0 else ("back", "further back")
-                return "correction", f"Move the board {_cm(move)} centimetres {word}. {KEEP_HEIGHT}", key, abs(move)
-        h0 = dh if self.h0 is None else self.h0
-        if self.stand.auto_skip:
-            lo, hi = h0 - self.stand.lower_max_m, h0 + self.stand.raise_max_m
-        else:
-            lo, hi = dh - AUTO_OFF_RANGE_M, dh + AUTO_OFF_RANGE_M
-        n = int(math.floor((hi - lo) / HEIGHT_STEP_M + 1e-9))
-        ok = [lo + k * HEIGHT_STEP_M for k in range(n + 1)]
-        ok = [v for v in ok if any(floor_distance_for(d, v, up, h) is not None for d in depths)]
-        if not ok:
+        x = self._spot(obs, up, h, dh, depths)
+        if x is not None:
+            move = dxy - x
+            key, word = ("closer", "closer") if move > 0 else ("back", "further back")
+            return "correction", f"Move the board {_cm(move)} centimetres {word}. {KEEP_HEIGHT}", key, abs(move)
+        best = next((v for g in self._heights(dh) for v in g if self._spot(obs, up, h, v, depths) is not None), None)
+        if best is None:
+            if cut is not None:
+                return cut
             if not self.stand.auto_skip:
                 return "correction", NOPLACE_TEXT, "noplace", None
             return "unreachable", UNREACHABLE_TEXT, "unreachable", None
-        best = min(ok, key=lambda v: abs(v - dh))
         if best > dh:
             return "correction", f"Raise the board. At least {_cm_up(best - dh)} centimetres.", "raise", best - dh
         return "correction", f"Lower the board. At least {_cm_up(dh - best)} centimetres.", "lower", dh - best
@@ -532,7 +576,11 @@ class PlacementGuide:
             # height on the chair-shaped stand moves only in coarse steps (operator, 9 Nov: "lower maybe 40 cm or raise
             # by 30 cm"), so up/down says the minimum; sideways stays approximate
             amount = "At least" if side in ("top", "bottom") else "About"
-            return "correction", f"{first} {amount} {_cm(m)} centimetres.", f"cut_{side}", float(m)
+            plain = "correction", f"{first} {amount} {_cm(m)} centimetres.", f"cut_{side}", float(m)
+            if side in ("top", "bottom") and sp is not None:
+                # 10 Nov: plain "Lower" took a board cut at the top out of the band; plan distance and view together
+                return self._distance(obs, up, sp, cut=plain)
+            return plain
         if obs.n_tags < FEW_TAGS and not t.tilted:
             return "correction", "Tilt the board back. Face it to the robot's head.", "tilt", None
         lo, hi = t.accept

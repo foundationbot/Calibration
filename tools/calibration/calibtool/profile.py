@@ -28,6 +28,7 @@ class Profile:
     stand_lower_m: float = 0.40
     placement_timeout_s: object = 180.0     # seconds, or None: no limit (only the operator's C skips a placement)
     stand_auto_skip: bool = True   # False: the operator decides reachability (C), the guide never skips itself
+    stand_steps: bool = False      # True: the stand has fixed positions (place.Stand.steps)
 
     @property
     def host(self) -> str:
@@ -49,7 +50,8 @@ def load(bot, path=PROFILES_YAML, registry=None) -> Profile:
                    int(e["right"]), str(prod.get("namespace", "dma-video")), str(prod.get("deployment", "producer")),
                    str(e.get("motor_tool") or ""), r.rig_path, r.machine_id_prefix,
                    float(stand.get("raise_max_m", 0.30)), float(stand.get("lower_max_m", 0.40)),
-                   place_limit(e.get("placement_timeout_s", 180.0)), bool(stand.get("auto_skip", True)))
+                   place_limit(e.get("placement_timeout_s", 180.0)), bool(stand.get("auto_skip", True)),
+                   bool(stand.get("steps", False)))
 
 
 def place_limit(v):

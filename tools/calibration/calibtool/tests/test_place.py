@@ -222,6 +222,7 @@ def test_default_placements():
 # (it goes up ~30 cm or down ~40 cm from its usual height, in coarse steps).
 
 PITCH = 50.0                                        # camera pitched 50 deg below the horizon
+BOARD_HALF_M = (0.41, 0.29)     # the aprilgrid (7 x 5 tags at 0.12 m pitch): half width, half height
 STAND = place.Stand(raise_max_m=0.30, lower_max_m=0.40)
 
 
@@ -239,7 +240,8 @@ def at(dh, dxy, pitch=PITCH, lateral=0.0, n_tags=35, cut=()):
     rho = float(np.hypot(p[0], p[1]))
     k = F * np.arctan2(rho, p[2]) / rho if rho > 0 else 0.0
     c = np.array([(W - 1) / 2 + k * p[0], (H - 1) / 2 + k * p[1]])
-    return detect.BoardObs(c, float(p[2]), n_tags, 4 * n_tags, bool(cut), tuple(cut), c - 150, c + 150, p)
+    half = F * np.arctan(np.asarray(BOARD_HALF_M) / float(np.linalg.norm(p)))     # the real board's image box
+    return detect.BoardObs(c, float(p[2]), n_tags, 4 * n_tags, bool(cut), tuple(cut), c - half, c + half, p)
 
 
 def gguide(name, pitch=PITCH, stand=None, **kw):
@@ -317,7 +319,7 @@ def test_a_far_board_too_high_to_be_seen_at_that_distance_is_lowered():
 
 
 @pytest.mark.parametrize("name,dh,dxy", [("1.6 m", -1.1, 0.45), ("1.1 m", -0.6, 2.0), ("far", -0.9, 1.2),
-                                          ("0.75 m", -0.4, 1.7), ("1.1 m", -0.7, 0.3)])
+                                          ("0.75 m", -0.5, 1.7), ("1.1 m", -0.7, 0.3)])
 def test_a_horizontal_correction_keeps_the_height_and_lands_in_the_band(name, dh, dxy):
     g = gguide(name)
     s = feed(g, [at(dh, dxy)] * 4)[0].text
@@ -331,15 +333,15 @@ def test_a_horizontal_correction_keeps_the_height_and_lands_in_the_band(name, dh
 def test_partial_progress_says_what_is_left():
     """9 Nov trial: after 'move 90 cm closer' and a 60 cm move, say 'Not yet. 30 more centimetres closer.'"""
     a = np.radians(PITCH)
-    x = (0.75 - 0.4 * np.sin(a)) / np.cos(a)                       # 0.4 m below the camera: depth 0.75 m here
+    x = (0.75 - 0.5 * np.sin(a)) / np.cos(a)                       # 0.5 m below the camera: depth 0.75 m here
     g = gguide("0.75 m")
-    s1 = feed(g, [at(-0.4, x + 0.9)] * 4)[0].text
+    s1 = feed(g, [at(-0.5, x + 0.9)] * 4)[0].text
     assert s1 == "Move the board 90 centimetres closer. Keep the same height."
-    s2 = feed(g, [at(-0.4, x + 0.3)] * 4, t0=10.0)[0].text         # moved 60 cm closer
+    s2 = feed(g, [at(-0.5, x + 0.3)] * 4, t0=10.0)[0].text         # moved 60 cm closer
     assert s2 == "Not yet. 30 more centimetres closer."
-    s3 = feed(g, [at(-0.4, x + 0.4)] * 4, t0=20.0)[0].text         # moved, but back the wrong way
+    s3 = feed(g, [at(-0.5, x + 0.4)] * 4, t0=20.0)[0].text         # moved, but back the wrong way
     assert s3 == "Not yet. Move the board 40 centimetres closer. Keep the same height."
-    s4 = feed(g, [at(-0.4, x)] * 4, t0=30.0)[0]
+    s4 = feed(g, [at(-0.5, x)] * 4, t0=30.0)[0]
     assert s4.kind == "good" and s4.text == "Good. That one is done. Step back."
 
 
@@ -799,3 +801,104 @@ def test_the_trial_passes_the_reason_to_the_guide(tmp_path):
     for i in range(1, 12):
         says += tr.update(i * 0.5, None, miss=miss("dark", n_tags=0, bright=20.0))
     assert "It is too dark for me to see the board." in [x.text for x in says]
+
+
+# ------------------------------------------------------------------ one planner for "cut at the top / bottom" and
+# "wrong distance" (10 Nov, phantom10, tilted placement): "Lower the board. At least 10 centimetres." (board cut at
+# the top at 0.74 m), then "Good. Raise the board. At least 40 centimetres." The cut rule said "lower" without asking
+# whether the lowered board is still in the band; the distance rule then sent it back up. Now both go through one
+# search: a floor move at this height that lands in the band AND fully in view first, else the nearest height (within
+# the stand's range first) where such a floor move exists.
+
+
+
+def view(dh, dxy, pitch=PITCH):
+    """the board as detection reports it: its image box from its size and distance, cut where that box leaves the
+    image (tags lost there: the box clipped, fewer tags), None when nothing of it is in view"""
+    o = at(dh, dxy, pitch)
+    if o.z <= 0.15:
+        return None
+    lo, hi = o.lo, o.hi
+    gaps = {"left": lo[0], "top": lo[1], "right": W - 1 - hi[0], "bottom": H - 1 - hi[1]}
+    cut = tuple(s for s, g in sorted(gaps.items(), key=lambda kv: kv[1]) if g < detect.BORDER_PX)
+    lo_c, hi_c = np.maximum(lo, 0.0), np.minimum(hi, [W - 1.0, H - 1.0])
+    if np.any(hi_c - lo_c < 0.3 * (hi - lo)):
+        return None
+    n = 35 if not cut else 25
+    return detect.BoardObs((lo_c + hi_c) / 2, o.z, n, 4 * n, bool(cut), cut, lo_c, hi_c, o.p)
+
+
+def follow_view(g, dh, dxy, pitch=PITCH, steps=8, coarse=None):
+    """an operator who does what the guide says, on the real view; coarse=(up, down): the stand moves only by these
+    steps (phantom10's chair: up 0.30 or down 0.40 from where it was) -> (texts, heights moved: +1 up / -1 down)"""
+    texts, moves, t, h0 = [], [], 0.0, dh
+    for _ in range(steps):
+        o = view(dh, dxy, pitch)
+        if o is None:
+            texts.append("<board out of view>")
+            break
+        s = feed(g, [o] * 8, t0=t)
+        t += 10.0
+        if not s:
+            break
+        x = s[-1]
+        texts.append(x.text)
+        if x.kind in ("good", "unreachable") or x.text == place.NOPLACE_TEXT:
+            break
+        m = re.search(r"(\d+) (?:more )?centimetres", x.text)
+        n = int(m.group(1)) / 100.0 if m else 0.1
+        if "closer" in x.text:
+            dxy -= n
+        elif "further back" in x.text:
+            dxy += n
+        elif "Raise" in x.text or "higher" in x.text:
+            dh = max(dh + n, h0 + coarse[0]) if coarse else dh + n
+            moves.append(+1)
+        elif "Lower" in x.text or "lower" in x.text:
+            dh = min(dh - n, h0 - coarse[1]) if coarse else dh - n
+            moves.append(-1)
+    return texts, moves
+
+
+ENDS = (place.DONE_TEXT, place.UNREACHABLE_TEXT, place.NOPLACE_TEXT)
+
+
+@pytest.mark.parametrize("pitch", [40.5, 50.0])
+@pytest.mark.parametrize("coarse", [None, (0.30, 0.40)])
+def test_following_the_guide_on_the_real_view_never_sends_the_board_back_up_or_down(pitch, coarse):
+    """from every resting place where the board is (at least partly) seen: following the guide ends in a few prompts
+    ("Good", or the operator is told no spot fits), and the height never goes one way and then the other"""
+    bad = []
+    for name in ("tilted", "0.75 m", "1.1 m", "1.6 m"):
+        for dh0 in (-0.9, -0.7, -0.5, -0.3, -0.15):
+            for dxy0 in (0.3, 0.5, 0.75, 1.0, 1.3):
+                if view(dh0, dxy0, pitch) is None:
+                    continue
+                g = gguide(name, pitch, stand=place.Stand(auto_skip=False), **QUIET)
+                texts, moves = follow_view(g, dh0, dxy0, pitch, coarse=coarse)
+                ok = bool(texts) and (texts[-1] in ENDS or texts[-1].startswith("Close enough"))
+                if not ok or len(set(moves)) > 1:
+                    bad.append((name, dh0, dxy0, texts))
+    assert not bad, bad[:4]
+
+
+def test_a_board_cut_at_the_top_in_the_band_is_moved_along_the_floor_not_lowered_out_of_it():
+    """the phantom10 case: neck level (camera 40.5 deg down), tilted placement, board 0.74 m away cut at the top"""
+    dh, dxy = -0.23, 0.745
+    o = view(dh, dxy, 40.5)
+    assert o.cut and o.cut[0] == "top" and 0.70 < o.z < 0.78
+    g = gguide("tilted", 40.5, stand=place.Stand(auto_skip=False), **QUIET)
+    texts, moves = follow_view(g, dh, dxy, 40.5, coarse=(0.30, 0.40))
+    assert texts[-1] == place.DONE_TEXT and len(texts) <= 3, texts
+    assert not moves or len(set(moves)) == 1, texts
+
+
+def test_a_height_change_is_asked_within_the_stands_range_first():
+    """auto_skip off searches every height, but a height the stand reaches comes first: no "Raise 40" on a stand
+    that goes up 30 when lowering 10 also works"""
+    g = gguide("0.75 m", 50.0, stand=place.Stand(raise_max_m=0.30, lower_max_m=0.40, auto_skip=False), **QUIET)
+    texts, _ = follow_view(g, -0.9, 0.3, 50.0)
+    for x in texts:
+        m = re.search(r"(Raise|Lower) the board\. At least (\d+)", x)
+        if m:
+            assert int(m.group(2)) <= (30 if m.group(1) == "Raise" else 40), texts

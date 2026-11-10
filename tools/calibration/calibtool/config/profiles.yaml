@@ -22,6 +22,7 @@ profiles:
     motor_tool: /root/p11-cal/dma_motor_motion
     # chair-shaped frame; its height changes only in coarse steps: from the usual height up ~30 cm or down ~40 cm
     # (operator, 9 Nov trial)
-    stand: {raise_max_m: 0.30, lower_max_m: 0.40, auto_skip: false}   # the operator decides (10 Nov)
+    # the operator decides reachability (10 Nov); steps: the seat has fixed positions, asked for as whole steps
+    stand: {raise_max_m: 0.30, lower_max_m: 0.40, auto_skip: false, steps: true}
     # 10 Nov: "Skipping this one." after 3 minutes came while the operator was still trying; only their C skips
     placement_timeout_s: null
