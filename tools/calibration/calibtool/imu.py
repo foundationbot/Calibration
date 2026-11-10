@@ -405,9 +405,9 @@ def verdict(sweep: Sweep, R_live=None, gates: Gates = Gates()) -> Verdict:
     else:
         better = gain > bar
         ok = ok and better
-        reasons.append(f"held-out median gap {h.new_median_deg:.3f} deg (new) vs {h.live_median_deg:.3f} deg (live) on "
-                       f"{h.n_poses} poses: gain {gain:+.3f} deg {'>' if better else '<='} {gates.k_sigma:g} x combined "
-                       f"sigma {f.combined_sigma_deg:.3f} deg")
+        reasons.append(f"held-out median gap {h.new_median_deg:.3f} deg (new) vs {h.live_median_deg:.3f} deg (live) "
+                       f"on {h.n_poses} poses: gain {gain:+.3f} deg {'>' if better else '<='} {gates.k_sigma:g} x "
+                       f"combined sigma {f.combined_sigma_deg:.3f} deg")
     for fd in h.pitch:
         reasons.append(f"  {fd.name}: median {np.median(fd.gap_new_deg):.3f} deg (new) vs "
                        f"{np.median(fd.gap_live_deg):.3f} deg (live)")
@@ -417,8 +417,9 @@ def verdict(sweep: Sweep, R_live=None, gates: Gates = Gates()) -> Verdict:
     d = rotation_angle_deg(sweep.R_SC, R_live)
     if d > SWEEP_LIVE_TOL_DEG:
         reasons.append(f"the sweep ran with a cam0 rotation {d:.3f} deg from live's; the correction is taken vs live")
-    reasons.append(f"third angle (about gravity, camera-frame axis {np.array2string(ob.up_cam, precision=3)}) kept from "
-                   f"the live config: observable at {100 * ob.ratio:.0f} % of the best axis (1-sigma "
+    axis = np.array2string(ob.up_cam, precision=3)
+    reasons.append(f"third angle (about gravity, camera-frame axis {axis}) kept from the live config: "
+                   f"observable at {100 * ob.ratio:.0f} % of the best axis (1-sigma "
                    f"{ob.weak_sigma_deg:.2f} deg if fitted); +1 deg about it moves the median gap "
                    f"{ob.gap_change_deg['gravity']:+.3f} deg vs {ob.gap_change_deg['camera x']:+.3f} about camera x")
     reasons.append("T_SC changes with T_BS kept: the camera moves in the Head frame for every other consumer of "
