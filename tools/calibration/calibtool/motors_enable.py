@@ -152,7 +152,9 @@ class Enabler:
         try:
             s = self.probe()
         except Exception as e:  # noqa: BLE001  (a broken probe is a failed check, never an enable)
+            self._last_state = None
             return [preflight.Check("probe", "fail", f"could not check: {type(e).__name__}: {e}", "motion")]
+        self._last_state = s
         return pre_enable_checks(s, self.baseline, gantry)
 
     def _ping_state(self):
@@ -207,7 +209,11 @@ class Enabler:
     def _adopt(self, cs) -> EnableResult:
         """motors already on: verify (ping + the journal's last 'N of N motors enabled') and take them over; nothing
         is sent. A partial or unverified state is not taken over"""
-        state = self._ping_state()
+        # the motor state the checks just read (10 Nov: a separate ping from inside calibd answered motor_state 0 while
+        # the master reported 2 to the probe and to the shell); a second ping only if the probe had none
+        m = (getattr(self, "_last_state", None) or {}).get("master")
+        state = getattr(m, "motor_state", None) if getattr(m, "motors_on", None) else None
+        state = state or self._ping_state()
         try:
             jrc, jout = self.run(["journalctl", "-u", motors.SERVICE, "--since", "-2h", "-o", "cat", "--no-pager"],
                                  timeout=10)

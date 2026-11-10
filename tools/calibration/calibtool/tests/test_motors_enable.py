@@ -230,3 +230,18 @@ def test_parse_enabled_reads_the_2_1_1_roll_call_line_too():
             "no drive fault, no latch (29 motors, enabled 29/29, wkc 144/144) [roll-call: periodic]")
     assert me.parse_enabled(line) == (29, 29)
     assert me.parse_enabled("x 50 of 50 motors enabled\n" + line.replace("29/29", "28/29")) == (28, 29)
+
+
+def test_takeover_uses_the_state_the_checks_read_not_a_second_ping():
+    """10 Nov live: the takeover's own ping answered motor_state 0 inside calibd while the probe had read 2"""
+    r = Run(); r.motor_state = 0                       # the second ping would say 0
+    r.enabled_line = "(29 motors, enabled 29/29, wkc 144/144)"
+    calls = []
+    orig = r.__call__
+    def run(argv, timeout=5):
+        if argv[0] == "journalctl":
+            calls.append(argv); return 0, "boot\n" + r.enabled_line + "\n"
+        return orig(argv, timeout)
+    en, _ = make(state=good_state(master=master(motor_state=2)), run=run, adopt_on=True)
+    res = en.enable("Y", gantry=True)
+    assert res.ok and "taken over" in res.detail and (res.n, res.of) == (29, 29)
