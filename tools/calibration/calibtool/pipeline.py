@@ -225,9 +225,13 @@ class SummaryResult:
     bands: list                 # [{"lo", "hi", "n", "median_pct" (None below 5 pairs)}], (lo, hi] m
     solves: dict
     records: dict = field(repr=False)     # lensscore.score's per-pair records: src, hold, scale, z, u, v
+    corner_src: np.ndarray = field(default=None, repr=False)     # row_errors: pair per corner
+    corner_dy: np.ndarray = field(default=None, repr=False)      # row_errors: dy per corner (px)
 
     def as_dict(self, records=False):
         d = asdict(self)
+        d.pop("corner_src")
+        d.pop("corner_dy")
         if not records:
             d.pop("records")
         return d
@@ -237,8 +241,6 @@ def summary(calib_json, test_npz, rig, bands=BANDS, solver=DEFAULT_SOLVER) -> Su
     """run_lens_kb4t.summary_row's numbers (same math), as data: the TEST depth error of the calibration (lensscore
     board scale - 1: median, IQR, per distance band) and its row error. The lens model must be known to lensmodel
     (a radtan config needs its model registered first). solver: SOLVERS, for this call (stereofit.solver_scope)"""
-    import cv2
-    import lensmodel
     import lensscore
     import stereofit as sf
     rig = load_rig(rig)
@@ -248,22 +250,7 @@ def summary(calib_json, test_npz, rig, bands=BANDS, solver=DEFAULT_SOLVER) -> Su
         rec, _, solves = lensscore.score(model, intr, C, data)
     sc = np.array(rec["scale"]) - 1
     zz = np.array(rec["z"])
-    T10 = np.linalg.inv(C)
-    R0, R1, *_ = cv2.stereoRectify(np.eye(3), np.zeros(5), np.eye(3), np.zeros(5), tuple(rig.resolution),
-                                   np.ascontiguousarray(T10[:3, :3]), np.ascontiguousarray(T10[:3, 3].reshape(3, 1)),
-                                   flags=cv2.CALIB_ZERO_DISPARITY, alpha=0)
-    z = np.load(test_npz)
-    dys = []
-    for j in range(len(z["img_t0"])):
-        m = z["det_img"] == j
-        d = [{(t, k): (u, v) for t, k, u, v, c in zip(z["det_tag"][m], z["det_k"][m], z["det_u"][m], z["det_v"][m],
-                                                       z["det_cam"][m]) if c == cam} for cam in (0, 1)]
-        keys = sorted(set(d[0]) & set(d[1]))
-        if keys:
-            b0 = (R0 @ lensmodel.unproject(model, intr[0], [d[0][k] for k in keys]).T).T
-            b1 = (R1 @ lensmodel.unproject(model, intr[1], [d[1][k] for k in keys]).T).T
-            dys.append(rig.nominal_focal_px * (b0[:, 1] / b0[:, 2] - b1[:, 1] / b1[:, 2]))
-    dy = np.concatenate(dys) if dys else np.zeros(1)
+    csrc, dy = row_errors(model, intr, C, test_npz, rig)
     out_bands = []
     for lo, hi in bands:
         m = (zz > lo) & (zz <= hi)
@@ -271,4 +258,36 @@ def summary(calib_json, test_npz, rig, bands=BANDS, solver=DEFAULT_SOLVER) -> Su
                           "median_pct": float(100 * np.median(sc[m])) if m.sum() >= 5 else None})
     return SummaryResult(model, float(1e3 * np.linalg.norm(C[:3, 3])), int(len(sc)), float(100 * np.median(sc)),
                          (float(100 * np.percentile(sc, 25)), float(100 * np.percentile(sc, 75))),
-                         float(np.median(np.abs(dy))), out_bands, solves, rec)
+                         float(np.median(np.abs(dy if len(dy) else np.zeros(1)))), out_bands, solves, rec, csrc, dy)
+
+
+def row_errors(model, intr, C, test_npz, rig):
+    """the row error per corner seen by both cameras: rectified with the calibration's own stereo pose, dy (px) at
+    the rig's nominal focal -> (pair index in the TEST file per corner, dy per corner), pairs in file order and a
+    pair's corners by (tag, corner). Each array of the file read once, every corner unprojected in one call per
+    camera. The lens model must be known to lensmodel (livecfg.model_scope)"""
+    import cv2
+    import lensmodel
+    rig = load_rig(rig)
+    T10 = np.linalg.inv(np.asarray(C, float))
+    R0, R1, *_ = cv2.stereoRectify(np.eye(3), np.zeros(5), np.eye(3), np.zeros(5), tuple(rig.resolution),
+                                   np.ascontiguousarray(T10[:3, :3]), np.ascontiguousarray(T10[:3, 3].reshape(3, 1)),
+                                   flags=cv2.CALIB_ZERO_DISPARITY, alpha=0)
+    with np.load(test_npz) as z:
+        img, cam, tag, k = (np.asarray(z[n], np.int64) for n in ("det_img", "det_cam", "det_tag", "det_k"))
+        uv = np.c_[z["det_u"], z["det_v"]].astype(float)
+    if not len(img):
+        return np.zeros(0, int), np.zeros(0)
+    nk = int(k.max()) + 1
+    key = (img * (int(tag.max()) + 1) + tag) * nk + k               # (pair, tag, corner), sorts as the old loop did
+    i0, i1 = np.flatnonzero(cam == 0), np.flatnonzero(cam == 1)
+    # a corner listed twice in one camera: the last one counts (the old loop's dict)
+    u0 = len(i0) - 1 - np.unique(key[i0][::-1], return_index=True)[1]
+    u1 = len(i1) - 1 - np.unique(key[i1][::-1], return_index=True)[1]
+    i0, i1 = i0[u0], i1[u1]
+    common, a, b = np.intersect1d(key[i0], key[i1], assume_unique=True, return_indices=True)
+    if not len(common):
+        return np.zeros(0, int), np.zeros(0)
+    b0 = lensmodel.unproject(model, intr[0], uv[i0[a]]) @ R0.T
+    b1 = lensmodel.unproject(model, intr[1], uv[i1[b]]) @ R1.T
+    return img[i0[a]], rig.nominal_focal_px * (b0[:, 1] / b0[:, 2] - b1[:, 1] / b1[:, 2])

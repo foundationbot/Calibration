@@ -200,3 +200,76 @@ def test_run_checks_the_solver_first_and_passes_it_to_evaluate(tmp_path, monkeyp
     b = replay.run(stored, out_dir=tmp_path / "p")
     assert seen == ["scipy", "fast"]
     assert (a["solver"], b["solver"]) == ("scipy", "fast")              # the report says which one ran
+
+
+# ---------------------------------------------------------------- row errors: read once, vectorised
+
+
+def _rows_reference(model, intr, C, test_npz, rig):
+    """the row error as pipeline.summary computed it up to 9 Nov 2026 (a loop over pairs, a dict per camera):
+    -> (pair per corner, dy per corner)"""
+    import cv2
+    import lensmodel
+    rig = pipeline.load_rig(rig)
+    T10 = np.linalg.inv(np.asarray(C, float))
+    R0, R1, *_ = cv2.stereoRectify(np.eye(3), np.zeros(5), np.eye(3), np.zeros(5), tuple(rig.resolution),
+                                   np.ascontiguousarray(T10[:3, :3]), np.ascontiguousarray(T10[:3, 3].reshape(3, 1)),
+                                   flags=cv2.CALIB_ZERO_DISPARITY, alpha=0)
+    z = dict(np.load(test_npz))
+    srcs, dys = [], []
+    for j in range(len(z["img_t0"])):
+        m = z["det_img"] == j
+        d = [{(t, k): (u, v) for t, k, u, v, c in zip(z["det_tag"][m], z["det_k"][m], z["det_u"][m], z["det_v"][m],
+                                                       z["det_cam"][m]) if c == cam} for cam in (0, 1)]
+        keys = sorted(set(d[0]) & set(d[1]))
+        if keys:
+            b0 = (R0 @ lensmodel.unproject(model, intr[0], [d[0][k] for k in keys]).T).T
+            b1 = (R1 @ lensmodel.unproject(model, intr[1], [d[1][k] for k in keys]).T).T
+            dys.append(rig.nominal_focal_px * (b0[:, 1] / b0[:, 2] - b1[:, 1] / b1[:, 2]))
+            srcs.append(np.full(len(keys), j))
+    return np.concatenate(srcs), np.concatenate(dys)
+
+
+def _sweep_with_one_sided_corners(tmp_path):
+    """holdout_sweep() with some corners seen by one camera only (dropped from camera 1) -> npz path"""
+    d = {k: np.asarray(v) for k, v in S.holdout_sweep().items()}
+    drop = (d["det_cam"] == 1) & (np.arange(len(d["det_cam"])) % 7 == 0)
+    for k in [k for k in d if k.startswith("det_")]:
+        d[k] = d[k][~drop]
+    np.savez_compressed(tmp_path / "t.npz", **d)
+    return tmp_path / "t.npz"
+
+
+def test_row_errors_equal_the_per_pair_loop(tmp_path):
+    npz = _sweep_with_one_sided_corners(tmp_path)
+    intr = [S.I0, S.I1]
+    want_src, want_dy = _rows_reference("KB4T", intr, S.C_TRUE, npz, S.RIG12)
+    src, dy = pipeline.row_errors("KB4T", intr, S.C_TRUE, npz, S.RIG12)
+    assert np.array_equal(src, want_src)
+    assert np.allclose(dy, want_dy, rtol=0, atol=1e-9)
+    s2, d2 = decide.row_errors("KB4T", intr, S.C_TRUE, npz, S.RIG12)        # decide's name for the same numbers
+    assert np.array_equal(s2, src) and np.array_equal(d2, dy)
+
+
+def test_row_errors_read_each_array_of_the_test_file_once(tmp_path, monkeypatch):
+    npz = _sweep_with_one_sided_corners(tmp_path)
+    reads = []
+    real = np.lib.npyio.NpzFile.__getitem__
+
+    def counting(self, key):
+        reads.append(key)
+        return real(self, key)
+
+    monkeypatch.setattr(np.lib.npyio.NpzFile, "__getitem__", counting)
+    pipeline.row_errors("KB4T", [S.I0, S.I1], S.C_TRUE, npz, S.RIG12)
+    assert len(reads) == len(set(reads)), sorted(reads)
+
+
+def test_summary_rows_are_the_median_of_the_row_errors_it_keeps(tmp_path):
+    npz = _sweep_with_one_sided_corners(tmp_path)
+    cal = S.write_calibration(tmp_path / "c.json", "KB4T", [S.I0, S.I1], S.C_TRUE)
+    sm = pipeline.summary(cal, npz, S.RIG12)
+    src, dy = pipeline.row_errors("KB4T", [S.I0, S.I1], S.C_TRUE, npz, S.RIG12)
+    assert np.array_equal(sm.corner_src, src) and np.array_equal(sm.corner_dy, dy)
+    assert sm.rows_px == float(np.median(np.abs(dy)))
+    assert "corner_dy" not in sm.as_dict()
