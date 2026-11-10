@@ -263,3 +263,15 @@ def test_dma_cameras_none_read_and_reattach():
     before = dict(made)
     cams.reattach(0)
     assert made["queues"] == before["queues"] + 1 and made["pools"] == before["pools"] + 1
+
+
+def test_latest_age_is_the_time_since_the_newest_pair():
+    """review 2: latest() never expires, so a frozen camera kept the board 'seen'; the age says how old it is"""
+    now = [10.0]
+    cap = cp.Capture(FakeSource(_pairs_script(2)), 3, 0, clock=lambda: now[0])
+    assert cap.latest_age() is None
+    cap.step()
+    now[0] = 12.5
+    assert cap.latest_age() == pytest.approx(2.5)
+    cap.step()
+    assert cap.latest_age() == pytest.approx(0.0)

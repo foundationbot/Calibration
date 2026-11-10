@@ -520,14 +520,21 @@ class Trial:
         if self.guide.done:
             self._record(t, self.guide.result or "placed", self.guide.rest_t)
             out += self._next(t)
-        elif t - self.t_intro >= self.timeout_s:
-            # 9 Nov trial: placements ran out silently; say it before moving on
-            s = Say(next(self.ids), float(t), "skip", SKIP_TEXT)
-            self.says.append(s)
-            out.append(s)
-            self._record(t, "timeout")
-            out += self._next(t)
+        else:
+            out += self.tick(t)
         return out
+
+    def tick(self, t) -> list:
+        """the placement's clock without a new detection (calibd calls it every step: a slow or stuck detector must
+        not stop the timeout)"""
+        if self.finished or self.guide is None or t - self.t_intro < self.timeout_s:
+            return []
+        self.t_last = t
+        # 9 Nov trial: placements ran out silently; say it before moving on
+        s = Say(next(self.ids), float(t), "skip", SKIP_TEXT)
+        self.says.append(s)
+        self._record(t, "timeout")
+        return [s] + self._next(t)
 
     def key(self, t, k) -> list:
         if self.finished or self.guide is None:

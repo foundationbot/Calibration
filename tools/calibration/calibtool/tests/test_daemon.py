@@ -474,3 +474,49 @@ def test_hold_time_does_not_count_against_the_placement_and_g_repeats_the_intro(
     _run(d, cap, c, 18.0)                       # the placement's own 20 s still run out
     assert tr.records and tr.records[0]["result"] == "timeout"
     assert tr.records[0]["paused_s"] == pytest.approx(200.3, abs=0.5)
+
+
+def test_a_stalled_camera_is_shown_said_once_and_pauses_the_trial(tmp_path):
+    """review 2: a frozen or dropped camera stalled the trial silently (latest() never expires; the freeze warning
+    never reached the banner)"""
+    c = Clock()
+    m = machine(tmp_path, c)
+    d, cap, tr = _trial_daemon(tmp_path, m, c, ["1.6 m", "1.1 m"], to_obs=lambda det: _obs(1.3), timeout_s=10.0)
+    d.preflight_done(pf.Result([], {}, {}))
+    m.heartbeat()
+    m.key("T")
+    _run(d, cap, c, 1.0)
+    assert m.state["board"] is not None and m.state["pair_age_s"] < 1.0
+    for _ in range(int(30 / 0.15)):             # 30 s without a new pair (the reader is not stepped)
+        c.t += 0.15
+        m.heartbeat()
+        d.step()
+    st = m.state
+    assert st["board"] is None and st["pair_age_s"] > 25
+    assert any("CAMERA STALLED" in b for b in st["banner"]), st["banner"]
+    said = [x["text"] for x in st["says"]]
+    assert said.count("The camera stopped. Please wait.") == 1, said
+    assert tr.records == []                     # 30 s stalled is no 10 s timeout
+    _run(d, cap, c, 1.0)                        # frames again
+    assert not any("CAMERA STALLED" in b for b in m.state["banner"])
+    after = [x["text"] for x in m.state["says"]]
+    after = after[after.index("The camera stopped. Please wait.") + 1:]
+    assert after and after[0].startswith("Placement 1 of 2."), after          # what to place, again
+    kinds_ = kinds(m.store)
+    assert "camera_stalled" in kinds_ and "camera_back" in kinds_
+
+
+def test_the_trial_times_out_without_fresh_detections(tmp_path):
+    """review 2: the timeout ran only when a detection finished; a detector that never answers stalled it"""
+    c = Clock()
+    m = machine(tmp_path, c)
+    cap = cp.Capture(FakeSource(), 3, 0, clock=c)
+    tr = place.Trial([place.target("1.6 m"), place.target("1.1 m")], tmp_path / "trial.jsonl", timeout_s=3.0)
+    d = dm.Daemon(m, cap, detector=lambda pair: Future(), to_obs=lambda det: None, sampler=lambda: {}, trial=tr,
+                  clock=c)
+    d.preflight_done(pf.Result([], {}, {}))
+    m.heartbeat()
+    m.key("T")
+    _run(d, cap, c, 4.0)
+    assert [r["result"] for r in tr.records] == ["timeout"]
+    assert "Skipping this one." in [x["text"] for x in m.state["says"]]

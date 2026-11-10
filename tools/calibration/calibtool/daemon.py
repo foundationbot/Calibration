@@ -39,6 +39,8 @@ STEP_S = 0.15            # 9 Nov trial: guidance felt laggy at 0.5 s, then 0.25 
 SAYS_KEEP = 8            # the recent prompts kept in the state: a step can make two (an end and the next intro)
 SAMPLE_S = 1.0
 HEALTH_KEEP = 30
+STALE_S = 1.0            # no new left/right pair for this long = the camera stalled (frozen or dropped)
+STALL_TEXT = "The camera stopped. Please wait."
 
 
 # ---------------------------------------------------------------- persistence
@@ -370,6 +372,8 @@ class Daemon:
         self._last_sample = None
         self._trial_started = False
         self._paused_at = None          # when the running trial was last interrupted (HOLD, a stalled camera)
+        self._stall_since = None        # when the newest pair got older than STALE_S
+        self._stall_said = False
         self.stop_flag = threading.Event()
         # prompt ids continue after the ones a previous run of this session spoke (Machine.resume keeps the max)
         self.ids = itertools.count(int(machine.state.get("say_id_max") or 0) + 1)
@@ -403,6 +407,9 @@ class Daemon:
             out.append("READ-ONLY session: the tool changes nothing on the robot (producer, motors, OKVIS as found)")
         if st["phase"] == "HOLD":
             out.append(f"HOLD: no TUI heartbeat; nothing resumes by itself: press G (from {st.get('held_from')})")
+        if st.get("camera_stalled_s") is not None:
+            out.append(f"CAMERA STALLED: no new left/right pair for {st['camera_stalled_s']:.0f} s (frozen or dropped); "
+                       "the trial waits")
         if st["phase"] == "BLOCKED":
             out.append("preflight failed: " + ", ".join(c["name"] for c in st["checks"]
                                                         if c["status"] == "fail" and c["gate"] == "collect"))
@@ -467,31 +474,66 @@ class Daemon:
         self.m.state["says"] = (list(self.m.state.get("says") or []) + [d])[-SAYS_KEEP:]
         self.m.store.event("say", t=s.t, say=d)
 
+    def _stall(self, t) -> bool:
+        """the camera check of every step: True while the newest pair is older than STALE_S (review 2: a frozen camera
+        kept the board 'seen' and the trial waited silently)"""
+        st = self.m.state
+        age = self.capture.latest_age()
+        st["pair_age_s"] = None if age is None else round(age, 2)
+        stalled = age is None or age > STALE_S
+        if stalled:
+            if self._stall_since is None:
+                self._stall_since = t
+                self.m.store.event("camera_stalled", t=t, pair_age_s=st["pair_age_s"])
+            st["camera_stalled_s"] = round(age if age is not None else t - self._stall_since, 1)
+            st["board"] = None
+        else:
+            if self._stall_since is not None:
+                self.m.store.event("camera_back", t=t, stalled_s=round(t - self._stall_since, 2))
+            self._stall_since, self._stall_said = None, False
+            st["camera_stalled_s"] = None
+        if st.get("board"):
+            st["board"]["age_s"] = round(t - float(st["board"].get("t") or t), 2)
+        return stalled
+
     def step(self):
         t = self.clock()
         self.m.tick()
         st = self.m.state
         st["capture"] = self.capture.snapshot()
         fresh = self._detect()
+        stalled = self._stall(t)
         self._health(t)
         if self.trial is not None and self.m.phase == "TRIAL":
             if not self._trial_started:
                 self._trial_started = True
                 self._say(self.trial.start(t))
                 self.m.store.event("trial_gravity", t=t, gravity=self.trial.gravity_status())
+            if stalled:
+                if self._paused_at is None and not self.trial.finished:
+                    self._paused_at = t
+                if not self._stall_said:
+                    from calibtool import place
+                    self._stall_said = True
+                    self._say(place.Say(next(self.ids), float(t), "camera", STALL_TEXT))
             elif self._paused_at is not None:
-                # back from HOLD: the time away does not count against the placement, and the operator hears again
-                # what to place (review 4)
+                # back from HOLD or a stalled camera: the time away does not count against the placement, and the
+                # operator hears again what to place (review 4)
                 self.m.store.event("trial_resumed", t=t, paused_s=round(t - self._paused_at, 2))
                 for s in self.trial.resume(t, t - self._paused_at):
                     self._say(s)
-            self._paused_at = None
-            for k in self.m.take_keys():
-                for s in self.trial.key(t, k):
+                self._paused_at = None
+            keys = self.m.take_keys()
+            if not stalled:
+                for k in keys:
+                    for s in self.trial.key(t, k):
+                        self._say(s)
+                # a fresh detection feeds the guide; without one the placement's clock still runs (review 2)
+                for s in (self.trial.update(t, fresh) if fresh is not False else self.trial.tick(t)):
                     self._say(s)
-            if fresh is not False:
-                for s in self.trial.update(t, fresh):
-                    self._say(s)
+            else:
+                for k in keys:
+                    self.m.store.event("key_dropped", t=t, key=k, phase="TRIAL", why="camera stalled")
             st["trial"] = self.trial.state(t)
             if self.trial.finished:
                 self.m.store.event("trial_summary", t=t, summary=self.trial.summary())

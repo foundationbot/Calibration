@@ -4,7 +4,8 @@ A camera source yields, per poll of one camera, a Frame (capture stamp, sequence
 arrived but the frame pool returned None: the pool's sequence desynced, e.g. after a producer restart) or None (nothing
 new). Capture.step() polls both cameras once, updates the per-camera FrameCounters, matches left/right frames by
 capture stamp (PairMatcher, tolerance 0.5 ms: the section-8 sync limit) and hands each pair to:
-  latest()      the newest pair (one slot: a reader that is late sees the newest, never a backlog)
+  latest()      the newest pair (one slot: a reader that is late sees the newest, never a backlog); latest_age()
+                how long ago it came (a frozen camera keeps the slot, its age grows)
   subscribe()   bounded queues filled with put_nowait: a full queue drops the pair (counted in sub_dropped), so a slow
                 detector never stalls the reader
   grab(n)       the next n pairs after the call (a hold's capture)
@@ -160,6 +161,7 @@ class Capture:
         self.pair_stats = PairStats()
         self.sub_dropped = 0
         self._latest = None
+        self._latest_at = None          # clock() when the newest pair was delivered
         self._subs = []
         self._grabs = []                # [(n, list, Event)]
         self._lock = threading.Lock()
@@ -190,6 +192,7 @@ class Capture:
         self.pair_stats.add(p)
         with self._lock:
             self._latest = p
+            self._latest_at = self.clock()
             for q in self._subs:
                 try:
                     q.put_nowait(p)
@@ -210,6 +213,12 @@ class Capture:
     def latest(self):
         with self._lock:
             return self._latest
+
+    def latest_age(self):
+        """seconds since the newest pair was delivered (None: no pair yet); a frozen or dropped camera keeps latest()
+        but its age grows"""
+        with self._lock:
+            return None if self._latest_at is None else self.clock() - self._latest_at
 
     def subscribe(self, maxsize=2) -> queue.Queue:
         q = queue.Queue(maxsize=maxsize)
