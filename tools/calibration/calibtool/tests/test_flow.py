@@ -804,6 +804,26 @@ def test_the_check_grid_snakes_too():
 # regions judged (a one-off exception, every other rule kept)
 
 
+def test_a_turned_head_goes_to_the_middle_before_a_placement_is_guided(tmp_path):
+    """10 Nov, phantom11: a HOLD at the first grid pose left the head at -24/-34; after the resume the guide (made for
+    the head straight ahead) told the operator to move a centred board to the left"""
+    q0 = [0.0] * len(NAMES)
+    q0[NAMES.index("NeckPitch")], q0[NAMES.index("NeckYaw")] = -24.0, -34.0
+    s = Session(tmp_path, keys=FULL_KEYS, neck_backend=nk.DryRun(NAMES, q0)).run()
+    assert s.m.phase == "DONE", s.kinds()[-15:]
+    first = " ".join(s.neck_cmds()[0])
+    assert "NeckPitch=0.0,NeckYaw=0.0" in first or "NeckPitch=0,NeckYaw=0" in first, first
+    texts = [x.text for x in s.says]
+    i_home = next(i for i, t in enumerate(texts) if t.startswith("The head is turned"))
+    i_intro = next(i for i, t in enumerate(texts) if t.startswith("Placement 1"))
+    assert i_home < i_intro and "Step back. Starting in 5." in texts[i_home:i_intro]
+
+
+def test_a_straight_head_is_not_moved_before_guiding(tmp_path):
+    s = Session(tmp_path, keys=FULL_KEYS).run()
+    assert not any(x.text.startswith("The head is turned") for x in s.says)
+
+
 def _then_deploy_on_second_fit(s):
     return "NOT_ENOUGH_DATA" if s.fit_calls == 1 else "DEPLOY"
 

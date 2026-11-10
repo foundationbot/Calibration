@@ -112,6 +112,8 @@ NATIVE = dp.NATIVE
 MOTORS_TEXT = ("Motor check. If the robot hangs on the gantry and nobody is at its head, press Y to enable the motors.")
 FLAT_TEXT = "Put the board flat on the floor in front of the robot. Then step back."
 FINISH_TEXT = "The session is done. Press D to disable the motors, or K to keep them on."
+HOME_TOL_DEG = 3.0          # the head counts as straight within this of neck 0/0 (the guidance assumes it)
+HOME_TEXT = "The head is turned. Moving it to the middle."
 EXTRAS_PER_E = 2            # E: this many more extra placements, then the fit and the decision again
 OVERRIDE_MIN_JUDGED = 5     # X: never accepts fewer judged regions than this (the rule is decide.Gates.min_judged)
 _JUDGED = re.compile(r"(\d+) judged entries.*?(\d+) needed")
@@ -642,9 +644,27 @@ class FullFlow:
                 "post": "Post-check."}.get(kind, "")
         return f"{lead} {where}".strip()
 
+    def _ensure_home(self):
+        """the head straight ahead (neck 0/0) before a placement is guided: a HOLD mid-grid leaves it at the last pose,
+        and the guidance (made for the head at home) then misdirects (10 Nov, phantom11: "move it to your left" for a
+        centred board). Moved with the usual countdown, abort live"""
+        n = self._arm()                     # reads the joints (the neck's indices) and pins; sends nothing
+        try:
+            p, y = n.neck_deg()
+        except Exception as e:  # noqa: BLE001  (no reading: guide as before, said in the events)
+            self._event("home_check_failed", error=f"{type(e).__name__}: {e}")
+            return
+        if max(abs(float(p)), abs(float(y))) <= HOME_TOL_DEG:
+            return
+        self._event("head_not_home", pitch=float(p), yaw=float(y))
+        self._say("home", HOME_TEXT)
+        self._countdown("GRID")
+        self._home(n)
+
     def _guide(self, target, phase, kind):
         """-> "placed" | "placed_near" (close enough: self.near_z the distance used) | "unreachable" (C, or the
         guide's out of reach) | "timeout\""""
+        self._ensure_home()
         self._enter(phase)
         g = self.robot.make_guide(target, ids=self.ids, **self.robot.guide_kw)
         intro = self._intro(target, kind)
@@ -679,6 +699,7 @@ class FullFlow:
 
     def _flat_wait(self):
         """IMU_PLACE: the board seen (>= FLAT_MIN_TAGS tags) and still for FLAT_STILL_S -> "placed"; C -> "skipped\""""
+        self._ensure_home()
         self._enter("IMU_PLACE")
         self._upd(placement={"target": "flat on the floor", "kind": "imu", "phase": "IMU_PLACE"})
         self._say("intro", FLAT_TEXT)
