@@ -12,7 +12,7 @@ important first:
                                   height." (or "further back"); reachable only higher / lower within the stand's range
                                   -> "Raise the board. At least N centimetres." (or Lower); not within the stand's
                                   range -> "This one is out of reach. Skipping." and the placement ends as unreachable
-                                  (after 1 s of rest: it is final)
+                                  (it is final: only after two separate rests of 1 s judged so, or one of 3 s)
                                   without gravity -> the camera distance alone, as before ("About N centimetres")
   off the target bearing       -> sideways (only for targets with a bearing: adaptive extras)
   otherwise                    -> "Good. That one is done. Step back."
@@ -25,7 +25,7 @@ is not used in speech (inside the tool it is a still neck pose).
 The distance model (9 Nov trial, phantom10): the head camera is ~1.5 m up and looks steeply down, so a board standing
 at the robot's feet is already ~1.1 m from the camera, and the near placements need the board high near the head. The
 operator's chair-shaped stand moves in coarse steps: from the height the board had at the start of the placement (h0,
-recorded at its first rest) it can go up raise_max_m or down lower_max_m (Stand, from the robot profile). A height dh
+recorded at the first rest that gets an instruction; a silent rest may be a pause while carrying) it can go up raise_max_m or down lower_max_m (Stand, from the robot profile). A height dh
 (m above the camera) can serve a target of depth D when the board, moved along the floor at that height in its
 current direction, reaches depth D (exactly: depth is linear in the floor distance) with
   - |dh| < D sin(STEEPEST_DEG): not nearly straight below or above the head, where the robot's body is (the plain
@@ -59,7 +59,9 @@ from calibtool import protocol
 
 STILL_S = 0.4            # 9 Nov trial: 1.0 s, then 0.6 s, plus slow detection felt laggy
 STILL_PX = 6.0
-UNREACHABLE_STILL_S = 1.0  # "out of reach" ends the placement, so it waits for a longer rest
+UNREACHABLE_STILL_S = 1.0  # "out of reach" ends the placement, so it needs rests of at least this long ...
+UNREACHABLE_RESTS = 2      # ... judged out of reach on this many separate rests (review 9: one pause while carrying
+UNREACHABLE_LONG_S = 3.0   # the board low ended a placement for good), or one rest this long
 FEW_TAGS = 20          # of 35: fewer readable tags with the board in view = seen too obliquely (9 Nov trial: 8)
 FEW_TAGS_STILL_PX = 25.0   # few tags make the centroid jitter; stillness is judged more loosely then
 LOST_S = 6.0
@@ -216,7 +218,10 @@ class PlacementGuide:
         self.done = False
         self.result = None              # placed | unreachable, once done
         self.rest_t = None              # when the board came to rest for the accepted check
-        self.h0 = None                  # the board's height (m above the camera) at its first rest in this placement
+        self.h0 = None                  # the board's height (m above the camera) at the first rest that got an
+                                        # instruction in this placement (the stand's base)
+        self._unreach_n = 0             # separate rests judged out of reach, since the last reachable judgement
+        self._unreach_rest = None       # the start of the last rest counted there
         self.geom = None                # (dh, dxy) of the last board seen, with gravity
         self.says = []
         self._start = None              # (t, centroid, z, dh) of the current still stretch
@@ -267,8 +272,6 @@ class PlacementGuide:
             return None
         if t - self._start[0] < self.still_s:
             return None
-        if self.h0 is None and sp is not None:
-            self.h0 = sp[0]
         if self._spoken_at is not None:
             # already spoke in this still stretch: repeat the same instruction at most once, after repeat_s
             if t - self._spoken_at < self.repeat_s or self._repeats >= 1:
@@ -282,11 +285,22 @@ class PlacementGuide:
             self.rest_t = self._start[0]
             return self._say(t, kind, DONE_TEXT)
         if kind == "unreachable":
-            if t - self._start[0] < UNREACHABLE_STILL_S:
-                return None                 # final: a pause while carrying the board must not end the placement
+            # final, so a pause while carrying the board must not end the placement: two separate rests of a second
+            # or one of three (review 9)
+            rest = t - self._start[0]
+            if rest < UNREACHABLE_STILL_S:
+                return None
+            if self._unreach_rest != self._start[0]:
+                self._unreach_rest = self._start[0]
+                self._unreach_n += 1
+            if self._unreach_n < UNREACHABLE_RESTS and rest < UNREACHABLE_LONG_S:
+                return None
             self.done, self.result = True, "unreachable"
             self.rest_t = self._start[0]
             return self._say(t, kind, UNREACHABLE_TEXT)
+        self._unreach_n = 0
+        if self.h0 is None and sp is not None:
+            self.h0 = sp[0]                 # the stand's base: the first rest the operator gets an instruction at
         if self._spoken_at is None and self._last_key is not None:
             # the board was moved since the last instruction: tell the operator how that went
             if key != self._last_key:

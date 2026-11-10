@@ -245,9 +245,9 @@ def test_a_board_at_the_feet_is_already_in_the_1_1_m_band():
 @pytest.mark.parametrize("name", ["0.75 m", "0.5 m", "tilted"])
 def test_a_placement_the_stand_cannot_reach_is_skipped_at_once(name):
     """at the feet the board is 1.2 m below the camera; raised by the stand's 30 cm it is still 0.9 m below, too low
-    for any board in the 0.75 m band (up to 0.925 m deep): say so and finish, no 180 s wait"""
+    for any board in the 0.75 m band (up to 0.925 m deep): say so after 3 s of rest and finish, no 180 s wait"""
     g = gguide(name)
-    s = feed(g, [at(*AT_FEET)] * 4)
+    s = feed(g, [at(*AT_FEET)] * 8)
     assert [(x.kind, x.text) for x in s] == [("unreachable", "This one is out of reach. Skipping.")]
     assert g.done and g.result == "unreachable"
 
@@ -258,6 +258,29 @@ def test_a_short_pause_while_carrying_does_not_skip_a_placement():
     assert feed(g, [at(*AT_FEET)] * 4, dt=0.2) == []               # 0.6 s at rest, then carried on
     assert feed(g, [at(-0.9, 0.9 + 0.1 * i) for i in range(6)], t0=1.0, dt=0.2) == []
     assert not g.done
+
+
+def test_one_rest_while_carrying_low_neither_skips_nor_sets_the_stand_height():
+    """review 9: a 1 s pause while carrying the board low ended the placement as unreachable for good, and its
+    height became the stand's base (h0) for the rest of the placement"""
+    g = gguide("0.75 m")
+    assert feed(g, [at(*AT_FEET)] * 4) == []                       # 1.5 s at rest at the feet, then carried on
+    assert not g.done and g.h0 is None
+    assert feed(g, [at(-1.0, 0.9 + 0.1 * i) for i in range(6)], t0=2.0) == []
+    s = feed(g, [at(-0.9, 0.9)] * 4, t0=10.0)                      # on the stand: 10 cm too low, within reach
+    assert [(x.kind, x.text) for x in s] == [("correction", "Raise the board. At least 10 centimetres.")]
+    assert g.h0 == pytest.approx(-0.9, abs=1e-6)
+
+
+def test_unreachable_needs_two_separate_rests_or_three_seconds():
+    g = gguide("0.75 m")
+    assert feed(g, [at(*AT_FEET)] * 4) == []
+    assert feed(g, [at(-1.2, 0.45 + 0.1 * i) for i in range(4)], t0=2.0) == []      # moved, then at rest again
+    s = feed(g, [at(*AT_FEET)] * 4, t0=10.0)
+    assert [x.kind for x in s] == ["unreachable"] and g.done
+    g = gguide("0.75 m")
+    s = feed(g, [at(*AT_FEET)] * 8, dt=0.5)                        # one rest: said after 3 s, not 1 s
+    assert [x.kind for x in s] == ["unreachable"] and s[0].t == pytest.approx(place.UNREACHABLE_LONG_S)
 
 
 def test_a_board_too_low_but_within_the_stands_reach_is_raised_first():
@@ -329,7 +352,7 @@ def follow(g, dh, dxy, pitch=PITCH, steps=6):
     """an operator who does exactly what the guide says (the stand's height in whole 10 cm steps): the texts"""
     texts, t = [], 0.0
     for _ in range(steps):
-        s = feed(g, [at(dh, dxy, pitch)] * 4, t0=t)
+        s = feed(g, [at(dh, dxy, pitch)] * 8, t0=t)            # 3.5 s at rest: long enough for "out of reach"
         t += 10.0
         if not s:
             break
@@ -460,7 +483,7 @@ def test_an_unreachable_placement_is_logged_and_the_trial_moves_on_at_once(tmp_p
     tr.start(0.0)
     says = []
     t = 0.0
-    for _ in range(8):
+    for _ in range(25):
         t += 0.15
         says += tr.update(t, at(*AT_FEET))
     assert [s.text for s in says][:2] == ["This one is out of reach. Skipping.",
