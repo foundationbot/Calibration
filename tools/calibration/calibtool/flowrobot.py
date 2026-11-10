@@ -108,6 +108,15 @@ def planner_next(planner_, accept_m=0.15, tol_deg=10.0):
     return plan_next
 
 
+def safe_planner_next(build):
+    """(plan_next, None), or (None, the error) when the planner cannot be built: a session without extras is a
+    session; calibd dying at start with the motors on is not (10 Nov, phantom10: the URDF missing from the kit)"""
+    try:
+        return planner_next(build()), None
+    except Exception as e:  # noqa: BLE001
+        return None, f"{type(e).__name__}: {e}"
+
+
 def pipeline_fit_decide(rig_path, live_config, out_name, gates=None, jobs=1, live_fit=None):
     """flow.Robot.fit_decide on the robot: the split of the capture-time labels, replay.evaluate (step 45, step 66 of
     new and live, decide.score, decide.verdict with the default required edges) and, on DEPLOY, step 71's KB4T OKVIS

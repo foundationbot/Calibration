@@ -1040,7 +1040,11 @@ def _full_flow(prof, m, d, dirs, cap, pools, rig, size, res, probes, dry_run, se
     # the extras planner (10 Nov: never wired, so no extra placement was ever asked for): the head from the live OKVIS
     # config at the collection size, the neck chain, the board
     from calibtool import placement as pl, planner as pn
-    plan_next = flowrobot.planner_next(pn.Planner(pl.head_from_okvis(live_path, size), pl.chain(), board))
+    plan_next, why = flowrobot.safe_planner_next(
+        lambda: pn.Planner(pl.head_from_okvis(live_path, size), pl.chain(), board))
+    if why:
+        m.store.event("planner_unavailable", t=time.time(), why=why)
+        print(f"calibd: no extras planner ({why}); the session runs without extra placements", flush=True)
     robot = flowrobot.build(
         prof, session=session, dirs=dirs, capture=cap, detect_pair=submit_pair,
         producer_yaml=res.snapshot.get("producer_yaml"), probes=probes, baseline=res.baseline, obs_box=d.obs_box,

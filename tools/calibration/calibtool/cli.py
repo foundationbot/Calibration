@@ -20,6 +20,7 @@ import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 
 from calibtool import daemon, paths, profile as prof_mod, tui
 
@@ -44,11 +45,17 @@ def ssh_argv(p, line) -> list:
             "-o", "ConnectTimeout=10", p.host, line]
 
 
+URDF_REL = "config/foundation_rig/20250206_phantom_mk1.urdf"     # the neck chain's robot model (placement.URDF)
+
+
 def bootstrap(p, run=subprocess.run):
-    run(ssh_argv(p, f"mkdir -p {kit_dir(p)}"), check=True, timeout=60)
+    urdf_dir = f"{p.root}/kit/{Path(URDF_REL).parent}"
+    run(ssh_argv(p, f"mkdir -p {kit_dir(p)} {urdf_dir}"), check=True, timeout=60)
     src = [str(paths.CAL / d) for d in KIT_DIRS]
     run(["rsync", "-a", "--delete", "--exclude=__pycache__", "--exclude=tests", "--exclude=results",
          "--exclude=*.npz", *src, f"{p.host}:{kit_dir(p)}/"], check=True, timeout=300)
+    # 10 Nov: the planner's neck chain reads the URDF from the repo's config/ (the calib image carries it too)
+    run(["rsync", "-a", str(paths.CAL.parents[1] / URDF_REL), f"{p.host}:{urdf_dir}/"], check=True, timeout=120)
 
 
 def _json_out(r):

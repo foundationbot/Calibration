@@ -41,6 +41,11 @@ def test_bootstrap_rsyncs_code_only():
     for d in ("calibtool", "scripts", "config"):
         assert any(x.endswith(f"tools/calibration/{d}") for x in r), d
     assert "--exclude=__pycache__" in r and "--exclude=tests" in r
+    # 10 Nov: the planner's neck chain reads the robot URDF; the kit lacked it and calibd died at start
+    u = calls[2]
+    assert u[0] == "rsync" and u[-2].endswith("config/foundation_rig/20250206_phantom_mk1.urdf")
+    assert u[-1] == "root@phantom10:/tmp/calibtool-m2/kit/config/foundation_rig/"
+    assert "/tmp/calibtool-m2/kit/config/foundation_rig" in calls[0][-1] and "mkdir -p" in calls[0][-1]
 
 
 class FakeRun:

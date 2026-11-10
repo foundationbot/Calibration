@@ -201,6 +201,16 @@ def test_planner_next_turns_the_top_suggestion_into_a_placement_target():
     assert t2.name != t.name                    # every extra is its own placement (holds are clustered by it)
 
 
+def test_a_planner_that_cannot_be_built_leaves_the_session_without_extras():
+    """10 Nov: building the planner raised (the URDF missing from the kit) and calibd died at start, motors on"""
+    def boom():
+        raise FileNotFoundError("no such file: 20250206_phantom_mk1.urdf")
+    nxt, err = fr.safe_planner_next(boom)
+    assert nxt is None and "FileNotFoundError" in err and "urdf" in err
+    nxt, err = fr.safe_planner_next(lambda: SimpleNamespace(suggest=lambda d, k=1: [], model=None))
+    assert callable(nxt) and err is None
+
+
 def test_planner_next_says_nothing_is_short():
     col = SimpleNamespace(targets=None, tallies=lambda: None,
                           coverage=lambda t: SimpleNamespace(deficits=lambda targets: []))
