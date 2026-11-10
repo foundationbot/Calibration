@@ -819,6 +819,33 @@ def test_a_turned_head_goes_to_the_middle_before_a_placement_is_guided(tmp_path)
     assert i_home < i_intro and "Step back. Starting in 5." in texts[i_home:i_intro]
 
 
+def test_the_next_placement_waits_until_the_board_has_moved(tmp_path):
+    """10 Nov, phantom11: the board left at 0.61 m for the 0.5 m placement was in the 0.75 m band too: "Placement 2
+    of 6" was judged "Good" at once and its grid repeated the same spot"""
+    s = Session(tmp_path, keys=FULL_KEYS)
+    calls = {"n": 0}
+    spot = {"p": np.array([0.0, 0.1, 0.9])}
+
+    def board_obs():
+        calls["n"] += 1
+        return True, SimpleNamespace(z=1.0, centroid=(640.0, 400.0), n_tags=30, cut=(), p=spot["p"])
+    s.robot_side.board_obs = board_obs
+    moved = []
+
+    def hook():
+        texts = [x.text for x in s.says]
+        if fl.NEXT_SPOT_TEXT in texts and not moved:
+            moved.append(calls["n"])
+            spot["p"] = np.array([0.3, 0.1, 1.2])          # the operator carries the board to the next spot
+    s.op.hooks.append(hook)
+    s.run()
+    assert s.m.phase == "DONE", s.kinds()[-15:]
+    texts = [x.text for x in s.says]
+    assert fl.NEXT_SPOT_TEXT in texts and moved
+    i2 = next(i for i, t in enumerate(texts) if t.startswith("Placement 2"))
+    assert texts.index(fl.NEXT_SPOT_TEXT, i2) > i2
+
+
 def test_a_straight_head_is_not_moved_before_guiding(tmp_path):
     s = Session(tmp_path, keys=FULL_KEYS).run()
     assert not any(x.text.startswith("The head is turned") for x in s.says)

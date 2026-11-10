@@ -114,6 +114,12 @@ FLAT_TEXT = "Put the board flat on the floor in front of the robot. Then step ba
 FINISH_TEXT = "The session is done. Press D to disable the motors, or K to keep them on."
 HOME_TOL_DEG = 3.0          # the head counts as straight within this of neck 0/0 (the guidance assumes it)
 HOME_TEXT = "The head is turned. Moving it to the middle."
+# 10 Nov, phantom11: the board left where the last grid saw it was accepted at once for the next placement (its band
+# overlapped); a placement is judged only after the board moved NEW_SPOT_M from the last placed spot or was out of
+# view for NEW_SPOT_GONE_S (carried)
+NEW_SPOT_M = 0.15
+NEW_SPOT_GONE_S = 1.0
+NEXT_SPOT_TEXT = "Move the board to the next spot first."
 EXTRAS_PER_E = 2            # E: this many more extra placements, then the fit and the decision again
 OVERRIDE_MIN_JUDGED = 5     # X: never accepts fewer judged regions than this (the rule is decide.Gates.min_judged)
 _JUDGED = re.compile(r"(\d+) judged entries.*?(\d+) needed")
@@ -671,6 +677,8 @@ class FullFlow:
         self._upd(placement={"target": target.name, "kind": kind, "phase": phase})
         self._say("intro", intro)
         t0, paused = self.mono(), 0.0
+        last = getattr(self, "_last_spot", None)
+        moved, gone_t, said_next = last is None, None, False
         while True:
             if self.m.phase == "HOLD":
                 th = self.mono()
@@ -684,13 +692,34 @@ class FullFlow:
                     self._event("placement_cant", placement=target.name)
                     return "unreachable"
             fresh, obs = self.robot.board_obs()
+            if fresh is not False and not moved:
+                p = None if obs is None else getattr(obs, "p", None)
+                if obs is None:
+                    gone_t = self.mono() if gone_t is None else gone_t
+                    moved = self.mono() - gone_t >= NEW_SPOT_GONE_S
+                elif p is None:
+                    moved = True                    # no 3-D position to compare (no board pose): judge as before
+                else:
+                    gone_t = None
+                    moved = float(np.linalg.norm(np.asarray(p, float) - last)) > NEW_SPOT_M
+                if moved:
+                    self._event("board_moved_on", placement=target.name)
+                elif not said_next:
+                    said_next = True
+                    self._say("correction", NEXT_SPOT_TEXT)
+                    self._event("board_not_moved", placement=target.name)
+                fresh = fresh if moved else False
             if fresh is not False:
                 miss = None if obs is not None or self.robot.board_miss is None else self.robot.board_miss()
                 s = g.update(self.clock(), obs, miss)
                 if s is not None:
                     self.emit(s)
+                if obs is not None and getattr(obs, "p", None) is not None:
+                    self._spot_seen = np.asarray(obs.p, float)
             if g.done:
                 self.near_z = getattr(g, "near_z", None)
+                if getattr(self, "_spot_seen", None) is not None:
+                    self._last_spot = self._spot_seen
                 return g.result or "placed"
             if self.place_timeout_s is not None and self.mono() - t0 - paused > self.place_timeout_s:
                 self._say("skip", place.SKIP_TEXT)
