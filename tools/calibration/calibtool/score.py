@@ -18,12 +18,20 @@ import lensscore  # noqa: E402
 import stereofit as sf  # noqa: E402
 
 
+def _solver(model):
+    """the solve to call: stereofit.solve when CALIB_SOLVER=fast routes it to calibtool.solver anyway (lensscore.score's
+    hook), so callers and tests that patch stereofit.solve (step 66's NO RESULT guards) see every scoring solve on
+    either path; calibtool.solver.solve when called directly"""
+    return sf.solve if sf.fast_solver(model) is not None else solver.solve
+
+
 def _solve_fixed(d, model, intr, C, poses, scale):
     """lensscore._solve_fixed on the fast solver"""
-    r = solver.solve(d, model, intr, C, poses, free_intr=False, free_C=False, scale=scale, max_nfev=sf.MAX_NFEV)
+    solve = _solver(model)
+    r = solve(d, model, intr, C, poses, free_intr=False, free_C=False, scale=scale, max_nfev=sf.MAX_NFEV)
     if not r["success"]:
-        r = solver.solve(d, model, intr, C, r["poses"], free_intr=False, free_C=False, scale=scale,
-                         max_nfev=sf.MAX_NFEV, ls0=r["log_scale"])
+        r = solve(d, model, intr, C, r["poses"], free_intr=False, free_C=False, scale=scale, max_nfev=sf.MAX_NFEV,
+                  ls0=r["log_scale"])
     return r
 
 

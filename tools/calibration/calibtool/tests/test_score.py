@@ -135,3 +135,18 @@ def test_fast_switch_keeps_scipy_for_free_intrinsics_of_other_models(monkeypatch
         d = data.select(ok)
         sf.solve(d, "RADTAN", rt, S.C_TRUE, poses[ok], max_nfev=3, rounds=1)
     assert seen["scipy"] == 1 and seen["fast"] == 0
+
+
+def test_under_the_switch_scoring_solves_still_go_through_stereofit_solve(monkeypatch):
+    """step 66's NO RESULT guards and lensscore's restart tests patch stereofit.solve: under CALIB_SOLVER=fast the
+    fast scorer's solves must pass through it too (they then reach calibtool.solver by stereofit's hook)"""
+    monkeypatch.setenv(solver.ENV, "fast")
+    seen = _spy(monkeypatch)
+    calls, real = [], sf.solve
+
+    def spy(*a, **k):
+        calls.append(k["scale"])
+        return real(*a, **k)
+    monkeypatch.setattr(sf, "solve", spy)
+    ls.score("KB4T", [S.I0, S.I1], S.C_TRUE, _data())
+    assert calls == [False, True] and seen["fast"] == 2 and seen["scipy"] == 0 and seen["fast_score"] == 1
