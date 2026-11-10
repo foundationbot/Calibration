@@ -242,3 +242,43 @@ def heldout(sweep: Sweep, R_live=None) -> HeldOut:
         out.new_p90_deg, out.live_p90_deg = float(np.percentile(new, 90)), float(np.percentile(live, 90))
         out.n_poses = int(len(new))
     return out
+
+
+# ---------------------------------------------------------------- the third angle
+
+
+@dataclass
+class Observability:
+    """how well the sweep sees rotations of R about each camera-frame axis (small rotations R -> R @ Exp(w))"""
+    up_cam: np.ndarray          # mean board normal ("up") in camera 0
+    singular: np.ndarray        # singular values of d(stacked cross products)/dw, w in rad, largest first
+    weak_axis: np.ndarray       # the least observable rotation axis (camera frame), oriented along up_cam
+    ratio: float                # smallest / largest singular value: 0 = unobservable
+    weak_sigma_deg: float       # formal 1-sigma of a rotation about weak_axis, if it were fitted
+    gap_change_deg: dict        # median gap change for +step_deg about "gravity", "camera x", "camera z"
+
+
+def _cross_residuals(sweep, R):
+    return np.cross(sweep.up_imu @ R, sweep.normal).ravel()
+
+
+def observability(sweep: Sweep, R, step_deg=1.0, eps=1e-6) -> Observability:
+    """the third angle, measured: SVD of the 3-angle Jacobian at R and the median-gap response to +step_deg about up
+    (gravity), camera x and camera z"""
+    R = np.asarray(R, float)
+    J = np.empty((3 * len(sweep), 3))
+    for k in range(3):
+        ax = np.eye(3)[k]
+        Rp = R @ axis_rotation(ax, np.degrees(eps))
+        Rm = R @ axis_rotation(ax, -np.degrees(eps))
+        J[:, k] = (_cross_residuals(sweep, Rp) - _cross_residuals(sweep, Rm)) / (2 * eps)
+    _, sv, vt = np.linalg.svd(J, full_matrices=False)
+    up = sweep.normal.mean(axis=0)
+    up = up / np.linalg.norm(up)
+    weak = vt[-1] if vt[-1] @ up >= 0 else -vt[-1]
+    rms = np.sqrt(np.median(_cross_residuals(sweep, R) ** 2))
+    weak_sigma = float(np.degrees(rms / sv[-1])) if sv[-1] > 0 else float("inf")
+    base = np.median(floor_gap_deg(sweep, R))
+    change = {name: float(np.median(floor_gap_deg(sweep, R @ axis_rotation(ax, step_deg))) - base)
+              for name, ax in (("gravity", up), ("camera x", [1.0, 0, 0]), ("camera z", [0, 0, 1.0]))}
+    return Observability(up, sv, weak, float(sv[-1] / sv[0]), weak_sigma, change)

@@ -185,3 +185,29 @@ def test_heldout_live_rotation_argument():
 def test_heldout_single_column():
     h = imu.heldout(synthetic(imu.rot_xz(0.5, -0.3), yaws=(0,)))
     assert h.columns == [] and np.isnan(h.new_median_deg) and np.isnan(h.live_median_deg)
+
+
+# ---------------------------------------------------------------- task 4: the third angle
+
+
+def test_observability_weak_axis_is_up():
+    s = synthetic(noise_deg=0.02)
+    ob = imu.observability(s, R_CFG)
+    up = s.normal.mean(axis=0)
+    up /= np.linalg.norm(up)
+    assert np.allclose(ob.up_cam, up)
+    assert abs(ob.weak_axis @ up) > 0.99
+    assert ob.ratio < 0.3 and ob.singular[0] >= ob.singular[1] >= ob.singular[2]
+    assert ob.weak_sigma_deg > 0
+
+
+def test_single_pitch_row_is_unobservable():
+    ob = imu.observability(synthetic(pitches=(17,)), R_CFG)
+    assert ob.ratio < 1e-6
+
+
+def test_gap_change_about_gravity_is_small():
+    ob = imu.observability(synthetic(noise_deg=0.02), R_CFG)
+    assert set(ob.gap_change_deg) == {"gravity", "camera x", "camera z"}
+    assert ob.gap_change_deg["gravity"] < 0.3 * ob.gap_change_deg["camera x"]
+    assert ob.gap_change_deg["camera x"] > 0.5
