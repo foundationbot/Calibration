@@ -328,12 +328,23 @@ def _sh(argv, timeout=10):
         return 127, f"{type(e).__name__}: {e}"
 
 
+# robot.env candidates, first existing wins: OKVIS's host config dir (phantom10, 9 Nov) before the older location
+ROBOT_ENV_PATHS = ("/etc/phantomos/okvis/robot.env", "/etc/phantom/robot.env")
+
+
+def _first_file(paths):
+    for p in ([paths] if isinstance(paths, str) else paths):
+        if Path(p).is_file():
+            return Path(p)
+    return None
+
+
 class RobotProbes(dict):
     """the probes on the robot: kube (producer.Kube), capture (a running capture.Capture), lock_info () -> (ok, text),
     run (argv, timeout) -> (rc, text)"""
 
     def __init__(self, prof, kube, capture, lock_info, run=_sh, shm="/dev/shm", sysfs="/sys/bus/usb/devices",
-                 head_json="/etc/phantom/head_camera.json", robot_env="/etc/phantom/robot.env"):
+                 head_json="/etc/phantom/head_camera.json", robot_env=ROBOT_ENV_PATHS):
         super().__init__()
         from calibtool import motors, storage
         self.prof, self.kube, self.capture, self.run = prof, kube, capture, run
@@ -347,7 +358,7 @@ class RobotProbes(dict):
             "pods": self._pods,
             "producer_spec": kube.get_yaml,
             "head_camera_json": lambda: Path(head_json).read_text(),
-            "robot_env": lambda: Path(robot_env).read_text() if Path(robot_env).is_file() else None,
+            "robot_env": lambda: (lambda f: f.read_text() if f else None)(_first_file(robot_env)),
             "okvis": self._okvis,
             "usb": lambda: usb_speeds(sysfs),
             "frames": self._frames,

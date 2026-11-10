@@ -229,3 +229,18 @@ def test_policy_pod_names():
              "okvis/nav-agent-gfpf8", "positronic/vla-cli-42xrc", "x/phantom-locomotion-abc", "x/omni-wbc-1"]
     assert pf.policy_pods(names) == ["positronic/ghost-wbc-teleop-bsjrv", "positronic/foundation-vla-mbf94",
                                      "x/phantom-locomotion-abc", "x/omni-wbc-1"]
+
+
+def test_robot_env_is_read_from_the_robots_actual_path(tmp_path):
+    """phantom10 keeps robot.env at /etc/phantomos/okvis/robot.env (OKVIS's host config dir), not /etc/phantom: the
+    preflight snapshot of robot.env (the deploy rollback's input) was empty there (9 Nov)"""
+    real = tmp_path / "phantomos" / "okvis" / "robot.env"
+    real.parent.mkdir(parents=True)
+    real.write_text("OKVIS_CALIBRATION=/etc/okvis/x.yaml\n")
+
+    class _Kube:
+        def get_yaml(self):
+            return ""
+    p = pf.RobotProbes(None, _Kube(), None, lambda: (True, ""), robot_env=(str(tmp_path / "missing.env"), str(real)))
+    assert p["robot_env"]() == "OKVIS_CALIBRATION=/etc/okvis/x.yaml\n"
+    assert pf.ROBOT_ENV_PATHS[0] == "/etc/phantomos/okvis/robot.env"
