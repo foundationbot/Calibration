@@ -374,3 +374,69 @@ def test_correction_is_relative_to_live():
     assert np.allclose(R_live @ v.correction, v.R_new, atol=1e-12)
     assert np.allclose(v.R_new, R_CFG @ v.fit.correction, atol=1e-12)
     assert any("sweep ran with" in r for r in v.reasons)
+
+
+# ---------------------------------------------------------------- task 7: phantom10 (files: phantom11) 6 Nov
+# The sweep ran with the 5 Nov rscfix config's cam0 rotation (== npz R_SC). The kit's mkfinal.py applied the fitted
+# rotation to the 6 Nov lens config (kit/fit1280/..._20261106_1280.yaml, same cam0 T_SC as rscfix, new lens and stereo
+# pose) and wrote ..._20261106_1280_imu.yaml. rscfix's stereo pose is the 5 Nov lens's: 0.19 deg from the 6 Nov one.
+
+RECORDED_DEG = (0.320, 0.112)        # the _imu config's header: +0.320 about camera x, +0.112 about camera z
+P10 = "p10/kit/neckcal/imucam_1280.npz"
+P10_RNEW = "p10/kit/neckcal/imucam_1280_Rnew_nb.npy"
+P10_PRE = "p10/kit/fit1280/phantom11_stereo_kb4t_20261106_1280.yaml"
+P10_IMU = "p10/etc-okvis/phantom11_stereo_kb4t_20261106_1280_imu.yaml"
+P10_RSCFIX = "p10/etc-okvis/phantom11_stereo_kb4t_20261105_1280_rscfix.yaml"
+
+
+@pytest.fixture
+def p10(data_root):
+    need = [data_root / p for p in (P10, P10_RNEW, P10_PRE, P10_IMU, P10_RSCFIX)]
+    if not all(p.is_file() for p in need):
+        pytest.skip("phantom10's 6 Nov sweep and configs are not in CALIBTOOL_DATA")
+    s = imu.load_sweep(need[0])
+    return dict(sweep=s, fit=imu.fit(s), Rnew=np.load(need[1]), pre=need[2].read_text(), imu=need[3].read_text(),
+                rscfix=need[4].read_text())
+
+
+def test_p10_fit_reproduces_recorded(p10):
+    f = p10["fit"]
+    assert len(p10["sweep"]) == 15
+    assert np.abs(f.angles_deg - RECORDED_DEG).max() < 0.01, f.angles_deg
+    assert imu.rotation_angle_deg(imu.R_new(p10["sweep"], f), p10["Rnew"]) < 0.01
+    assert np.abs(imu.R_new(p10["sweep"], f) - p10["Rnew"]).max() < 1e-6
+
+
+def test_p10_apply_reproduces_imu_config(p10):
+    N0, N1 = imu.t_sc(imu.apply(p10["pre"], p10["fit"].correction))
+    I0, I1 = imu.t_sc(p10["imu"])
+    assert np.abs(N0[:3, :3] - I0[:3, :3]).max() < 1e-6 and np.abs(N1[:3, :3] - I1[:3, :3]).max() < 1e-6
+    assert np.abs(N0 - I0).max() < 1e-6 and np.abs(N1 - I1).max() < 1e-6
+
+
+def test_p10_apply_on_rscfix_cam0(p10):
+    text = imu.apply(p10["rscfix"], p10["fit"].correction)
+    N0, N1 = imu.t_sc(text)
+    I0, I1 = imu.t_sc(p10["imu"])
+    R0, R1 = imu.t_sc(p10["rscfix"])
+    assert np.abs(N0[:3, :3] - I0[:3, :3]).max() < 1e-6
+    assert np.array_equal(N0[:3, 3], R0[:3, 3])
+    assert np.allclose(np.linalg.inv(N0) @ N1, np.linalg.inv(R0) @ R1, atol=1e-12)
+    assert 0.1 < imu.rotation_angle_deg(N1[:3, :3], I1[:3, :3]) < 0.3        # the lens's stereo pose, not the fit
+
+
+def test_p10_heldout_and_verdict(p10):
+    s = p10["sweep"]
+    v = imu.verdict(s, R_live=imu.cam0_rotation(p10["rscfix"]))
+    assert v.deploy, v.reasons
+    assert v.heldout.new_median_deg < v.heldout.live_median_deg
+    assert np.abs(imu.R_new(s, v.fit) - imu.cam0_rotation(p10["imu"])).max() < 1e-6
+    again = imu.verdict(s, R_live=imu.cam0_rotation(p10["imu"]))
+    assert not again.deploy, again.reasons
+    print("\n".join(["vs rscfix (live then):"] + v.reasons + ["vs the _imu config (live now):"] + again.reasons))
+
+
+def test_p10_third_angle(p10):
+    ob = imu.observability(p10["sweep"], imu.R_new(p10["sweep"], p10["fit"]))
+    assert abs(ob.weak_axis @ ob.up_cam) > 0.99
+    assert ob.gap_change_deg["gravity"] < 0.1 and ob.gap_change_deg["camera x"] > 0.5
