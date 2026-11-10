@@ -69,6 +69,15 @@ MOVE_Z_FRAC = 0.03       # a distance change above this counts as the board movi
 MOVE_H_M = 0.05          # so does a height change above this (a board raised or lowered on its stand)
 SHRINK_M = 0.03          # the same correction counts as smaller when its amount fell by more than this
 REPEAT_S = 30.0          # the same instruction is repeated at most once, after this long unchanged
+GAP_S = 3.0              # after a prompt has been spoken, the operator gets this long to act before the next one
+WORD_S, SENTENCE_S = 0.55, 0.45   # estimated speaking time per word / extra per sentence at the slow rate (-95)
+
+
+def speech_s(text) -> float:
+    """estimated seconds to speak `text` at the TUI's slow rate with its pauses (10 Nov trial: 'Not yet' came right
+    after the first sentence)"""
+    words = text.split()
+    return WORD_S * len(words) + SENTENCE_S * sum(1 for w in words if w[-1:] in ".!?")
 STEEPEST_DEG = 75.0      # a board further below / above the camera than this, seen from the camera: under the head
 MAX_OFF_AXIS_DEG = 30.0  # the board's centre at most this far from the optical axis (image: +-40 deg tall)
 HEIGHT_STEP_M = 0.01     # the stand's range is searched in these steps
@@ -237,6 +246,7 @@ class PlacementGuide:
         s = Say(next(self.ids), float(t), kind, text)
         self.says.append(s)
         self._spoken_at = t
+        self._quiet_until = float(t) + speech_s(text) + GAP_S
         return s
 
     def _up(self):
@@ -272,6 +282,8 @@ class PlacementGuide:
             return None
         if t - self._start[0] < self.still_s:
             return None
+        if t < getattr(self, "_quiet_until", float("-inf")):
+            return None                 # the last prompt is still being spoken / the operator is still acting on it
         if self._spoken_at is not None:
             # already spoke in this still stretch: repeat the same instruction at most once, after repeat_s
             if t - self._spoken_at < self.repeat_s or self._repeats >= 1:

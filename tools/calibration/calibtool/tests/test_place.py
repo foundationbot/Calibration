@@ -172,6 +172,19 @@ def test_a_near_placement_with_the_board_low_asks_to_raise_it_toward_the_head():
     assert "high, near the head" in place.intro(t, 2, 6)
 
 
+def test_no_new_prompt_until_the_last_one_was_spoken_and_the_operator_had_time():
+    """10 Nov trial: 'Not yet' came right after the first sentence, before the operator could act. Nothing is said
+    until the last prompt's estimated speaking time plus GAP_S has passed, even if the board moved and rested."""
+    g = guide()                                                     # target 1.1 m
+    first = feed(g, [obs(z=1.6)] * 3)                               # says the correction at t=1.0
+    assert len(first) == 1
+    t1 = first[0].t
+    quick = feed(g, [obs(z=1.55, u=660)] * 4, t0=t1 + 0.5)          # moved a little and rested at once
+    assert quick == []
+    later = feed(g, [obs(z=1.55, u=660)] * 4, t0=t1 + place.speech_s(first[0].text) + place.GAP_S + 0.1)
+    assert len(later) == 1 and later[0].text.startswith("Not yet.")
+
+
 def test_lost_board_prompt_once():
     g = guide(lost_s=6.0)
     says = feed(g, [None] * 30)
