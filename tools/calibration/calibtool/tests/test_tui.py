@@ -172,3 +172,11 @@ def test_a_daemon_that_stopped_stepping_is_flagged():
     c.t += 0.2
     t.step(json.dumps(state(step_n=18)))
     assert "not stepping" not in out[-1]
+
+
+def test_a_tui_that_lost_control_says_so():
+    t, sent, out, sp, c = make()
+    t.step(json.dumps(state(client={"id": 1, "claimed": True, "controlling": True})))
+    assert "control" not in out[-1].split("\n")[2]
+    t.step(json.dumps(state(client={"id": 1, "claimed": True, "controlling": False})))
+    assert "NOT NORMAL: another TUI attached later and has control" in out[-1]

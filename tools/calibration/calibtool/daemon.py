@@ -248,6 +248,12 @@ class Server:
         self._sock = None
         self._stop = threading.Event()
         self._threads = []
+        # one controlling TUI: the newest client to send a heartbeat or key; the others' heartbeats and keys do not
+        # count (review 7: a stale second TUI kept the deadman satisfied), except A (abort is live from any TUI)
+        self._ids = itertools.count(1)
+        self._claimed = set()
+        self.controller = None
+        self._ctl = threading.Lock()
 
     def start(self):
         try:
@@ -276,11 +282,14 @@ class Server:
             self._threads.append(t)
 
     def _client(self, c):
-        self.m.store.event("client_attached", t=self.m.clock())
+        cid = next(self._ids)
+        self.m.store.event("client_attached", t=self.m.clock(), client=cid)
         buf = b""
         try:
             while not self._stop.is_set():
-                c.sendall((json.dumps(self.m.snapshot(), default=_json_default) + "\n").encode())
+                snap = self.m.snapshot()
+                snap["client"] = {"id": cid, "claimed": cid in self._claimed, "controlling": self.controller == cid}
+                c.sendall((json.dumps(snap, default=_json_default) + "\n").encode())
                 end = time.monotonic() + self.period
                 while not self._stop.is_set():
                     left = end - time.monotonic()
@@ -295,26 +304,49 @@ class Server:
                     buf += data
                     while b"\n" in buf:
                         line, buf = buf.split(b"\n", 1)
-                        self._handle(line)
+                        self._handle(line, cid)
         except (OSError, ValueError):
             return
         finally:
-            self.m.store.event("client_detached", t=self.m.clock())
+            with self._ctl:
+                if self.controller == cid:
+                    self.controller = None
+            self.m.store.event("client_detached", t=self.m.clock(), client=cid)
             try:
                 c.close()
             except OSError:
                 pass
 
-    def _handle(self, line):
+    def _claim(self, cid) -> bool:
+        """a client's heartbeat or key: its first one makes it the controller (the newest TUI wins), and one sent
+        while nobody controls takes control back -> whether cid controls now"""
+        with self._ctl:
+            if cid not in self._claimed or self.controller is None:
+                self._claimed.add(cid)
+                if self.controller != cid:
+                    self.controller = cid
+                    self.m.store.event("controller", t=self.m.clock(), client=cid)
+            return self.controller == cid
+
+    def _handle(self, line, cid=0):
         try:
             msg = json.loads(line)
         except json.JSONDecodeError:
             return
-        if "hb" in msg:
-            self.m.heartbeat()
-        if "key" in msg:
-            self.m.heartbeat()
-            self.m.key(msg["key"])
+        if "hb" in msg or "key" in msg:
+            ctl = self._claim(cid)
+            if "hb" in msg and ctl:
+                self.m.heartbeat()
+            if "key" in msg:
+                k = str(msg["key"]).upper()
+                if ctl:
+                    self.m.heartbeat()
+                    self.m.key(k)
+                elif k == "A":
+                    self.m.key(k)
+                else:
+                    self.m.store.event("key_ignored", t=self.m.clock(), key=k, client=cid,
+                                       why=f"client {self.controller} has control")
         if msg.get("cmd") == "stop" and self.on_stop:
             self.m.store.event("stop_requested", t=self.m.clock())
             self.on_stop()

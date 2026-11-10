@@ -688,3 +688,57 @@ def test_the_deadman_runs_on_a_monotonic_clock(tmp_path):
     mono.t += 5.0
     m.tick()
     assert m.phase == "HOLD"
+
+
+def _until(cond, timeout=3.0):
+    assert _wait_for(cond, timeout)
+
+
+def _last_line(f, n=3):
+    st = None
+    for _ in range(n):
+        st = json.loads(f.readline())
+    return st
+
+
+def test_only_the_newest_tui_controls_but_any_can_abort(tmp_path):
+    """review 7: with two TUIs attached, a stale one's heartbeat kept the deadman satisfied and its keys counted"""
+    c = Clock()
+    m = machine(tmp_path, c)
+    m.to("READY", "x")
+    sock = tmp_path / "calibd.sock"
+    srv = dm.Server(sock, m, period_s=0.02)
+    srv.start()
+    try:
+        s1, f1 = _client(sock)
+        s1.sendall(b'{"hb": 1}\n')
+        _until(lambda: m.state["attached"])
+        s2, f2 = _client(sock)
+        s2.sendall(b'{"hb": 1}\n')
+        _until(lambda: srv.controller == 2)
+        assert _last_line(f1)["client"] == {"id": 1, "claimed": True, "controlling": False}
+        assert _last_line(f2)["client"]["controlling"] is True
+        s1.sendall(b'{"key": "T"}\n')            # the old TUI's key does not count
+        _until(lambda: "key_ignored" in kinds(m.store))
+        assert m.phase == "READY"
+        s2.sendall(b'{"key": "T"}\n')
+        _until(lambda: m.phase == "TRIAL")
+        c.t += 6
+        s1.sendall(b'{"hb": 2}\n')               # only the old TUI still beats: that is no live link
+        time.sleep(0.1)
+        m.tick()
+        assert m.phase == "HOLD"
+        f2.close()
+        s2.close()                              # the controlling TUI leaves: the old one may take over
+        _until(lambda: srv.controller is None)
+        s1.sendall(b'{"hb": 3}\n')
+        _until(lambda: srv.controller == 1)
+        s3, f3 = _client(sock)
+        s3.sendall(b'{"hb": 1}\n')
+        _until(lambda: srv.controller == 3)
+        s1.sendall(b'{"key": "A"}\n')            # abort counts from any TUI
+        _until(lambda: m.phase == "ABORTED")
+        s1.close()
+        s3.close()
+    finally:
+        srv.stop()

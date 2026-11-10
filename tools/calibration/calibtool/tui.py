@@ -180,19 +180,23 @@ class Tui:
         return st
 
     def notes(self, st) -> list:
-        """the laptop's own NOT NORMAL lines: calibd's step counter not advancing while its state keeps coming (its
-        loop stopped: review 3)"""
+        """the laptop's own NOT NORMAL lines: this TUI not in control (another attached later), calibd's step counter
+        not advancing while its state keeps coming (its loop stopped: review 3)"""
+        out = []
+        cl = st.get("client") or {}
+        if cl.get("claimed") and cl.get("controlling") is False:
+            out.append("another TUI attached later and has control: keys here are ignored (A still aborts)")
         n, now = st.get("step_n"), self.clock()
         if n is None:
-            return []
+            return out
         if n != self._step_n:
             self._step_n, self._step_seen = n, now
-            return []
+            return out
         idle = now - self._step_seen
         if idle > NOT_STEPPING_S:
-            return [f"calibd not stepping: its loop has not advanced for {idle:.0f} s (the prompts and the trial are "
-                    "stopped; check calibd.log)"]
-        return []
+            out.append(f"calibd not stepping: its loop has not advanced for {idle:.0f} s (the prompts and the trial "
+                       "are stopped; check calibd.log)")
+        return out
 
     def heartbeat(self):
         t = self.clock()
