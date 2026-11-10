@@ -7,6 +7,13 @@
     script NAME [ARGS...]  run pipeline script tools/calibration/scripts/NAME.py with ARGS, as `python NAME.py ARGS`
     MODULE [ARGS...]       run calibtool.MODULE as a program (`python -m calibtool.MODULE ARGS`), e.g. livecfg,
                            protocol, and calibd's `daemon` once it lands (plan section 3)
+    restore --if-stale-hours H --root DIR [--dry-run]
+                           the stale-lease self-restore (calibtool.selfrestore): a session's lease older than H hours,
+                           no calibd holding the lock and no TUI for H hours -> the producer as saved and OKVIS back;
+                           otherwise nothing (safe every 10 minutes)
+    install-restore-timer --root DIR [--hours H] [--dry-run]
+                           the systemd service + timer (every 10 min) running `restore`, written to /etc/systemd/system
+                           and enabled; uninstall-restore-timer [--dry-run] removes them
 
 Stdlib only at import: devel's pytest-only CI job collects tools/, and this file must not need numpy to load."""
 import importlib.util
@@ -128,6 +135,10 @@ def main(argv):
     if cmd == "check":
         return check(rest)
     sys.path.insert(0, str(CAL))
+    if cmd in ("restore", "install-restore-timer", "uninstall-restore-timer"):
+        from calibtool import selfrestore
+        return {"restore": selfrestore.main_restore, "install-restore-timer": selfrestore.main_install,
+                "uninstall-restore-timer": selfrestore.main_uninstall}[cmd](rest)
     if cmd == "script":
         if not rest:
             print("usage: python -m calibtool script NAME [ARGS...]", file=sys.stderr)

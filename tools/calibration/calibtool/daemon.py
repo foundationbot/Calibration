@@ -240,6 +240,7 @@ class Machine:
     def heartbeat(self):
         with self._lock:
             self.last_hb = self.mono()
+            self.state["last_hb_t"] = self.clock()      # saved with the next step: the stale-lease restore reads it
             if not self.state["attached"]:
                 self.state["attached"] = True
                 self.store.event("tui_heartbeat", t=self.clock())

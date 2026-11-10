@@ -65,6 +65,8 @@ On a host without a docker CLI, the same settings fit a pod: `hostNetwork: true`
 | `check [--no-dma]` | The runtime self-check. Exits 0 only if every item passes; the `/dev/shm` line is information. `--no-dma` skips `dma_ipc` on a machine without it |
 | `script NAME [ARGS...]` | Runs `tools/calibration/scripts/NAME.py ARGS` |
 | `MODULE [ARGS...]` | Runs `calibtool.MODULE` as a program, e.g. `livecfg`, `protocol`, and `daemon` (calibd) once it lands |
+| `restore --if-stale-hours H --root DIR [--dry-run]` | The stale-lease self-restore (`calibtool/selfrestore.py`): a session's producer lease older than H hours, no calibd holding the lock and no TUI for H hours -> the producer as saved, then OKVIS started again; anything else -> nothing (exit 0). A session that started a deploy, or has no saved producer spec, is refused (exit 1, nothing sent) |
+| `install-restore-timer --root DIR [--hours H] [--dry-run]` / `uninstall-restore-timer [--dry-run]` | Write (remove) `calibtool-restore.service` + `.timer` (every 10 min) in /etc/systemd/system and enable (disable) the timer; ExecStart is the interpreter and kit the command ran from |
 | `--help` | This list |
 
 `CALIBTOOL_DATA` names the stored-session data root for replays (`-e CALIBTOOL_DATA=/data/calib/<dir>` together with
