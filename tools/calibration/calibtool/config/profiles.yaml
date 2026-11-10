@@ -1,0 +1,18 @@
+# calibd runtime per robot (calibtool M2). One entry per bot name of robots.yaml:
+#   python, pydeps   the robot-side interpreter and the folder holding dma_ipc (M2: the hand-made kit venv; the CI-built
+#                    calib image replaces both, design plan 10.3)
+#   root             the robot folder calibd keeps its kit, lock and sessions under (M2 read-only runs: /tmp/calibtool-m2,
+#                    the only folder the agent may write; a real session: /data/calib)
+#   left, right      DMA camera queues of the LEFT / RIGHT head camera (verified live in preflight, never trusted from
+#                    head_camera.json)
+#   producer         namespace / deployment of the camera producer
+#   motor_tool       the fixed dma_motor_motion (with the 'targets' signal)
+profiles:
+  P10:
+    python: /root/p11-cal/venv/bin/python
+    pydeps: /root/p11-cal/pydeps
+    root: /tmp/calibtool-m2
+    left: 3
+    right: 0
+    producer: {namespace: dma-video, deployment: producer}
+    motor_tool: /root/p11-cal/dma_motor_motion
