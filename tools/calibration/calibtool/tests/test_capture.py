@@ -275,3 +275,134 @@ def test_latest_age_is_the_time_since_the_newest_pair():
     assert cap.latest_age() == pytest.approx(2.5)
     cap.step()
     assert cap.latest_age() == pytest.approx(0.0)
+
+
+# ------------------------------------------------------------------ re-attach: retried, after a stall, on a new segment
+
+class Tick:
+    def __init__(self, t=0.0, dt=0.04):
+        self.t, self.dt = t, dt
+
+    def __call__(self):
+        return self.t
+
+
+def _long_script(n, t0=1000 * MS, period=40 * MS):
+    return {3: [fr(3, i, t0 + i * period, i % 256) for i in range(n)],
+            0: [fr(0, i, t0 + i * period + 14_000, i % 256) for i in range(n)]}
+
+
+def _steps(cap, clk, n):
+    for _ in range(n):
+        clk.t += clk.dt
+        cap.step()
+
+
+def test_reattach_is_retried_with_backoff_while_reads_stay_empty():
+    """review 5: one re-attach at exactly 25 None reads, never again"""
+    clk = Tick()
+    src = FakeSource({3: [cp.NONE_READ] * 2000, 0: _long_script(2000)[0]})
+    src.at = []
+    src.reattach = lambda cam: (src.reattached.append(cam), src.at.append(clk.t))
+    cap = cp.Capture(src, 3, 0, clock=clk)
+    _steps(cap, clk, int(20 / clk.dt))           # 20 s of empty reads on queue 3
+    assert src.reattached and set(src.reattached) == {3}
+    gaps = [b - a for a, b in zip(src.at, src.at[1:])]
+    assert len(src.at) >= 4 and gaps == sorted(gaps) and max(gaps) <= cp.REATTACH_MAX_S + 0.1, src.at
+    assert cap.counters[3].reattaches == len(src.at)
+
+
+def test_reattach_when_frames_stop_without_empty_reads():
+    """review 5: after the producer recreates its segments the old consumer reads 'nothing new' (None), never
+    NONE_READ, so the run-of-empty-reads rule never fired"""
+    clk = Tick()
+    sc = _pairs_script(10)
+    src = FakeSource(sc)
+    cap = cp.Capture(src, 3, 0, clock=clk)
+    _steps(cap, clk, 10)
+    assert src.reattached == []
+    _steps(cap, clk, int((cp.STALL_REATTACH_S + 0.2) / clk.dt))
+    assert sorted(set(src.reattached)) == [0, 3]
+    src.script = _pairs_script(20, t0=5000 * MS)  # frames again: no more re-attaching
+    n = len(src.reattached)
+    _steps(cap, clk, 20)
+    assert len(src.reattached) == n
+
+
+def test_reattach_at_once_when_the_shm_segment_is_recreated():
+    clk = Tick()
+    sc = _long_script(200)
+    src = FakeSource(sc)
+    flag = {"changed": False}
+    src.changed = lambda cam: flag["changed"] and cam == 3
+    src.reattach = lambda cam: (src.reattached.append(cam), flag.update(changed=False))
+    cap = cp.Capture(src, 3, 0, clock=clk)
+    _steps(cap, clk, 10)
+    flag["changed"] = True
+    _steps(cap, clk, int(1.2 / clk.dt))
+    assert src.reattached == [3]
+
+
+def _shm_dma(tmp_path, block=None):
+    """a fake dma_ipc whose segments are files in tmp_path; VideoMetaQueue blocks on `block` (an Event) when given"""
+    made = {"queues": 0, "waits": []}
+
+    class Consumer:
+        def next(self, timeout):
+            return None
+
+    class Q:
+        def __init__(self, name, create=False, wait=True):
+            made["waits"].append(wait)
+            if block is not None and made["queues"] >= 2:
+                block.wait(10)
+            made["queues"] += 1
+
+        def make_consumer(self, max_lag=8):
+            return Consumer()
+
+    class Pool:
+        def __init__(self, name, create=False):
+            pass
+    for c in (3, 0):
+        for n in (f"video_meta_cam{c}", f"video_frames_cam{c}"):
+            (tmp_path / n).write_bytes(b"x")
+    mod = types.SimpleNamespace(VideoMetaQueue=Q, VideoFramePool=Pool,
+                                video_meta_queue_name=lambda c: f"/video_meta_cam{c}",
+                                video_frame_pool_name=lambda c: f"/video_frames_cam{c}")
+    return mod, made
+
+
+def test_dma_cameras_notice_a_recreated_segment(tmp_path):
+    mod, made = _shm_dma(tmp_path)
+    cams = cp.DmaCameras(mod, 3, 0, shm_dir=tmp_path)
+    assert not cams.changed(3) and not cams.changed(0)
+    seg = tmp_path / "video_meta_cam3"
+    seg.unlink()
+    (tmp_path / "keep").write_bytes(b"y")       # the inode is not reused for the new file
+    seg.write_bytes(b"new")
+    assert cams.changed(3) and not cams.changed(0)
+    assert cams.reattach(3) is True
+    assert not cams.changed(3)
+    assert made["waits"][-1] is False           # a re-attach never waits for the producer
+
+
+def test_a_hanging_reattach_does_not_block_the_reader(tmp_path):
+    """review 5: _attach ran with wait=True inside the capture thread"""
+    release = threading.Event()
+    mod, made = _shm_dma(tmp_path, block=release)
+    cams = cp.DmaCameras(mod, 3, 0, shm_dir=tmp_path, attach_timeout=0.2)
+    t0 = time.monotonic()
+    assert cams.reattach(3) is False
+    assert time.monotonic() - t0 < 1.0
+    assert cams.reattach(3) is False            # the first attempt still hangs: no second helper
+    assert made["queues"] == 2
+    release.set()
+    for _ in range(100):
+        if made["queues"] == 3:
+            break
+        time.sleep(0.01)
+    time.sleep(0.05)
+    old = cams.q[3]
+    cams.read(3, 0.0)                           # the reader adopts the late attach
+    assert cams.q[3] is not old

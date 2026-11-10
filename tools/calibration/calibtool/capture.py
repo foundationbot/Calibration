@@ -9,23 +9,33 @@ capture stamp (PairMatcher, tolerance 0.5 ms: the section-8 sync limit) and hand
   subscribe()   bounded queues filled with put_nowait: a full queue drops the pair (counted in sub_dropped), so a slow
                 detector never stalls the reader
   grab(n)       the next n pairs after the call (a hold's capture)
-A camera whose reads come back None REATTACH_AFTER times in a row gets its own consumer re-attached (source.reattach,
-counted); the health watch decides about a producer restart if that does not help.
+A camera gets its own consumer re-attached (source.reattach, counted) when its reads come back NONE_READ REATTACH_AFTER
+times in a row, when no frame came for STALL_REATTACH_S (a producer that recreated its segments leaves the old consumer
+reading 'nothing new'), or when source.changed(cam) says its shm segment was recreated (checked every second); while
+the condition holds it is retried after 1, 2, 4, 8, 8... s. The health watch decides about a producer restart if that
+does not help.
 
 DmaCameras is the source over dma_ipc on the robot (step 08's Cams, per-read instead of per-batch): NV12 frames, Y
 plane = the first w*h bytes. dma_ipc is passed in (imported by the caller on the robot only)."""
 import collections
+import os
 import queue
 import statistics
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
 TOL_NS = 500_000                # left/right capture stamps further apart than this do not pair (section 8: 0.5 ms)
 KEEP = 6                        # unmatched frames kept per camera
 REATTACH_AFTER = 25             # None reads in a row (1 s at 25 fps) before the camera's consumer is re-attached
+STALL_REATTACH_S = 2.0          # ... or no frame at all for this long (a recreated segment reads 'nothing new')
+REATTACH_FIRST_S = 1.0          # retries while the condition holds: after 1 s, doubling up to REATTACH_MAX_S
+REATTACH_MAX_S = 8.0
+SEGMENT_CHECK_S = 1.0           # how often the source is asked whether its shm segments were recreated
+ATTACH_TIMEOUT_S = 2.0          # a re-attach that takes longer goes on in its own thread; the reader does not wait
 FPS_WINDOW = 50
 SYNC_WINDOW = 100
 
@@ -102,6 +112,7 @@ class FrameCounters:
 
     def __init__(self):
         self.frames = self.none_reads = self.none_run = self.seq_gaps = self.repeats = self.reattaches = 0
+        self.last_reattach = None       # why the last re-attach was asked for
         self.last_seq = self.last_t_ns = None
         self.last_frame_wall = None
         self._ts = collections.deque(maxlen=FPS_WINDOW)
@@ -130,6 +141,7 @@ class FrameCounters:
     def as_dict(self, now) -> dict:
         return {"frames": self.frames, "none_reads": self.none_reads, "none_run": self.none_run,
                 "seq_gaps": self.seq_gaps, "repeats": self.repeats, "reattaches": self.reattaches,
+                "last_reattach": self.last_reattach,
                 "last_seq": self.last_seq, "last_t_ns": self.last_t_ns, "fps": round(self.fps(), 2),
                 "since_frame_s": None if self.last_frame_wall is None else round(now - self.last_frame_wall, 3)}
 
@@ -168,6 +180,9 @@ class Capture:
         self._thread = None
         self._stop = threading.Event()
         self.error = None
+        self._t0 = None                 # clock() of the first poll
+        self._retry = {c: [None, REATTACH_FIRST_S] for c in (self.left, self.right)}   # [next attempt, wait]
+        self._seg_at = {c: None for c in (self.left, self.right)}
 
     # -------------------------------------------------------------- one poll
 
@@ -175,18 +190,48 @@ class Capture:
         for cam in (self.left, self.right):
             r = self.source.read(cam, self.read_timeout)
             now = self.clock()
+            if self._t0 is None:
+                self._t0 = now
             c = self.counters[cam]
-            if r is None:
-                continue
             if r is NONE_READ:
                 c.none_read(now)
-                if c.none_run == REATTACH_AFTER:
-                    self.source.reattach(cam)
-                    c.reattaches += 1
-                continue
-            c.frame(r, now)
-            for p in self.matcher.push(r):
-                self._deliver(p)
+            elif r is not None:
+                c.frame(r, now)
+                self._retry[cam] = [None, REATTACH_FIRST_S]
+                for p in self.matcher.push(r):
+                    self._deliver(p)
+            self._maybe_reattach(cam, now)
+
+    def _maybe_reattach(self, cam, now):
+        """re-attach the camera's consumer when its reads are empty, its frames stopped or its segment was recreated;
+        retried with backoff while that holds (review 5: one attempt at exactly the 25th empty read, never again)"""
+        c = self.counters[cam]
+        last = c.last_frame_wall if c.last_frame_wall is not None else self._t0
+        why = None
+        if c.none_run >= REATTACH_AFTER:
+            why = "empty_reads"
+        elif now - last >= STALL_REATTACH_S:
+            why = "no_frames"
+        elif self._seg_at[cam] is None or now - self._seg_at[cam] >= SEGMENT_CHECK_S:
+            self._seg_at[cam] = now
+            changed = getattr(self.source, "changed", None)
+            try:
+                if changed is not None and changed(cam):
+                    why = "segment_recreated"
+            except OSError:
+                pass
+        if why is None:
+            return
+        nxt, wait = self._retry[cam]
+        if nxt is not None and now < nxt:
+            return
+        self._retry[cam] = [now + wait, min(wait * 2, REATTACH_MAX_S)]
+        c.reattaches += 1
+        c.last_reattach = why
+        try:
+            self.source.reattach(cam)
+        except Exception as e:  # noqa: BLE001  (retried; the counters and the health watch say it)
+            c.last_reattach = f"{why}: {type(e).__name__}: {e}"
 
     def _deliver(self, p: Pair):
         self.pair_stats.add(p)
@@ -284,25 +329,78 @@ class Capture:
 
 
 class DmaCameras:
-    """the camera source over dma_ipc (module d): one read-only consumer + frame pool per camera"""
+    """the camera source over dma_ipc (module d): one read-only consumer + frame pool per camera. The first attach
+    waits for the producer (start-up); a re-attach never blocks the reader: it runs in a helper thread with
+    attach_timeout, asks the queue not to wait (wait=False), and a helper that finishes late is adopted by the next
+    read. changed(c): the camera's shm segments (shm_dir/<name>) are other files than at attach (the producer
+    recreated them)."""
 
-    def __init__(self, d, left, right, max_lag=8):
-        self.d, self.max_lag = d, max_lag
+    def __init__(self, d, left, right, max_lag=8, shm_dir="/dev/shm", attach_timeout=ATTACH_TIMEOUT_S):
+        self.d, self.max_lag, self.shm_dir, self.attach_timeout = d, max_lag, Path(shm_dir), attach_timeout
         self.cams = (int(left), int(right))
-        self.q, self.p = {}, {}
+        self.q, self.p, self.ident = {}, {}, {}
+        self._helpers, self._ready = {}, {}
+        self._lock = threading.Lock()
+        self.attach_errors = {}
         for c in self.cams:
-            self._attach(c)
+            self._install(c, self._open(c, wait=True))
 
-    def _attach(self, c):
+    def _ident(self, c):
+        out = []
+        for name in (self.d.video_meta_queue_name(c), self.d.video_frame_pool_name(c)):
+            try:
+                st = os.stat(self.shm_dir / str(name).lstrip("/"))
+                out.append((st.st_dev, st.st_ino))
+            except OSError:
+                out.append(None)
+        return tuple(out)
+
+    def _open(self, c, wait):
         d = self.d
-        self.q[c] = d.VideoMetaQueue(d.video_meta_queue_name(c), create=False, wait=True).make_consumer(
-            max_lag=self.max_lag)
-        self.p[c] = d.VideoFramePool(d.video_frame_pool_name(c), create=False)
+        ident = self._ident(c)
+        q = d.VideoMetaQueue(d.video_meta_queue_name(c), create=False, wait=wait).make_consumer(max_lag=self.max_lag)
+        return q, d.VideoFramePool(d.video_frame_pool_name(c), create=False), ident
 
-    def reattach(self, c):
-        self._attach(int(c))
+    def _install(self, c, r):
+        self.q[c], self.p[c], self.ident[c] = r
+
+    def _adopt(self, c) -> bool:
+        with self._lock:
+            r = self._ready.pop(c, None)
+        if r is None:
+            return False
+        self._install(c, r)
+        return True
+
+    def _helper(self, c):
+        try:
+            r = self._open(c, wait=False)
+        except Exception as e:  # noqa: BLE001  (the segment is not there yet: retried by the reader)
+            self.attach_errors[c] = f"{type(e).__name__}: {e}"
+            return
+        with self._lock:
+            self._ready[c] = r
+
+    def reattach(self, c, timeout=None) -> bool:
+        """-> True when the new consumer is in place; False while it is pending or failed (retried by the caller)"""
+        c = int(c)
+        self._adopt(c)
+        with self._lock:
+            h = self._helpers.get(c)
+            if h is not None and h.is_alive():
+                return False                    # an earlier attempt still hangs: no second helper
+            h = threading.Thread(target=self._helper, args=(c,), name=f"attach-{c}", daemon=True)
+            self._helpers[c] = h
+        h.start()
+        h.join(self.attach_timeout if timeout is None else timeout)
+        return self._adopt(c)
+
+    def changed(self, c) -> bool:
+        return self._ident(int(c)) != self.ident.get(int(c))
 
     def read(self, c, timeout):
+        if self._ready:
+            self._adopt(c)
         m = self.q[c].next(timeout)
         if m is None:
             return None

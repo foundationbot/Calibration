@@ -196,3 +196,17 @@ def test_a_stale_imu_sample_is_not_silence():
         assert w.observe(t, good(imu_head=100, imu_t=0.0)) == []        # the same old reading: no judgement
     assert w.observe(5.0, good(imu_head=600, imu_t=5.0)) == []
     assert codes(w.observe(6.5, good(imu_head=600, imu_t=6.5))) == ["imu_silent"]
+
+
+def test_desync_comes_first_even_when_the_reader_already_reattached():
+    """review 5: capture re-attaches at the 25th empty read, so the first sample the watch sees already has
+    reattaches == 1, and the old rule skipped 'desync' and asked for a producer restart at once"""
+    w = watch()
+    e = w.observe(0.0, good(cams={"3": cam(none_run=25, reattaches=1), "0": cam()}))
+    assert codes(e) == ["desync"]
+    assert w.observe(0.5, good(cams={"3": cam(none_run=40, reattaches=1), "0": cam()})) == []
+    e = w.observe(1.5, good(cams={"3": cam(none_run=60, reattaches=2), "0": cam()}))
+    assert codes(e) == ["desync_persists"]
+    w.observe(2.0, good())
+    e = w.observe(3.0, good(cams={"3": cam(none_run=25, reattaches=3), "0": cam()}))
+    assert codes(e) == ["desync"]               # a new episode starts over

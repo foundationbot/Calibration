@@ -9,7 +9,7 @@ marks a restart the tool itself runs, so the producer changing under it is not "
 
 Rules (condition -> event code, level, action):
   reads None on a queue REATTACH_AFTER times in a row        desync, warn, reattach
-  ... still None after the tool re-attached                    desync_persists, warn, producer_restart
+  ... still None after a re-attach later in that episode      desync_persists, warn, producer_restart
   no new frame on a queue for FREEZE_S                         freeze, warn, producer_restart
   ... a freeze within 10 min of a producer restart             + hardware, suspect
   fps < 0.7 x baseline while load < 1.5 x baseline             fps_drop, warn
@@ -76,6 +76,7 @@ class Watch:
         self._own = False
         self._producer = dict(self.baseline.get("producer") or {})
         self._sync_restart_t = None
+        self._desync_ra = {}                                # queue -> its re-attach count when the episode began
 
     # -------------------------------------------------------------- bookkeeping
 
@@ -114,10 +115,16 @@ class Watch:
         for q, c in sorted((s.get("cams") or {}).items()):
             nr, ra = int(c.get("none_run") or 0), int(c.get("reattaches") or 0)
             desync = nr >= REATTACH_AFTER
-            out += self._episode(("desync", q), desync and ra == 0, lambda q=q, nr=nr: [Event(
+            # the reader re-attaches at the 25th empty read, so the episode's first sample may already count one
+            # re-attach (review 5): "persists" = a re-attach later in this episode did not help
+            if desync:
+                ra0 = self._desync_ra.setdefault(q, ra)
+            else:
+                ra0 = self._desync_ra.pop(q, ra)
+            out += self._episode(("desync", q), desync, lambda q=q, nr=nr: [Event(
                 t, "warn", "desync", f"Camera queue {q}: the last {nr} frame reads came back empty (frame pool out "
                 f"of step); re-attaching the tool's own reader.", "reattach")])
-            out += self._episode(("desync_persists", q), desync and ra > 0, lambda q=q: [Event(
+            out += self._episode(("desync_persists", q), desync and ra > ra0, lambda q=q: [Event(
                 t, "warn", "desync_persists", f"Camera queue {q}: reads still empty after re-attaching; the producer "
                 "needs a restart.", "producer_restart")])
             since = c.get("since_frame_s")
