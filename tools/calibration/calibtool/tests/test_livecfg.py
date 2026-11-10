@@ -50,7 +50,8 @@ def okvis_yaml(dist_type="radialtangential", dist=(-0.25, 0.046, -2.8e-4, -3.1e-
 """)
     rf = "" if resize is None else f"    resize_factor: {resize}  # -> 640x400 for the whole VIO\n"
     return ("%YAML:1.0\n# a test config; focal_length: [1, 2] in a comment is not a key\ncameras:\n" + "\n".join(cams)
-            + "\nimu_parameters:\n    use: true\n    T_BS:\n        [1.0, 0.0, 0.0, 0.0,\n         0.0, 1.0, 0.0, 0.0,\n"
+            + "\nimu_parameters:\n    use: true\n    T_BS:\n"
+            "        [1.0, 0.0, 0.0, 0.0,\n         0.0, 1.0, 0.0, 0.0,\n"
             "         0.0, 0.0, 1.0, 0.0,\n         0.0, 0.0, 0.0, 1.0]\n\nfrontend_parameters:\n" + rf
             + "    detection_threshold: 42.0\n")
 
