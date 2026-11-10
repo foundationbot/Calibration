@@ -303,3 +303,23 @@ def test_step16_split_joins_back_by_t0(name, data_root):
         assert np.isfinite(s.pairs["neck_yaw_rad"][idx]).all() and np.isfinite(s.pairs["neck_pitch_rad"][idx]).all()
     both = np.r_[fit["img_t0"], test["img_t0"]]
     assert len(set(both.tolist())) == len(both) <= s.n_pairs
+
+
+def test_subset_keeps_the_given_holds_only():
+    """Session.subset: the pairs and corners of the given holds, takes in the same order, a take without kept holds
+    left out; pair stamps, poses and corners unchanged (what the replay fits when it stops at the stop rule)"""
+    from calibtool.session import Session
+    s = Session.from_files([("a", synth_take([0, 1, 2, 3], t_start=0, seed=1)),
+                            ("b", synth_take([0, 1, 2], t_start=10**12, seed=2)),
+                            ("c", synth_take([0, 1], t_start=2 * 10**12, seed=3))], name="three")
+    hs = list(s.holds())
+    keep = [h.hold for h in hs[:5]]                     # all of a, the first hold of b
+    sub = s.subset(keep)
+    assert sub.take_order == ["a", "b"]
+    m = np.isin(s.pairs["hold"], keep)
+    assert sub.n_pairs == int(m.sum())
+    assert sub.pairs["t0"].tolist() == s.pairs["t0"][m].tolist()
+    assert sub.pairs["pose"].tolist() == s.pairs["pose"][m].tolist()
+    assert sub.to_npz_dict()["det_u"].tolist() == s.to_npz_dict(m)["det_u"].tolist()
+    assert [(h.take, h.pose) for h in sub.holds()] == [(h.take, h.pose) for h in hs[:5]]
+    assert "three" in sub.name

@@ -28,7 +28,7 @@ P21_BOTTOM_LEFT = "Left camera, bottom-left corner: 50 corners vs 588 in the bot
 DEFAULT, ALL4 = "required_edges=left,right,bottom", "required_edges=all"     # the report's two verdicts
 REPORT_KEYS = {"session", "robot", "assignment", "exclude_takes", "take_order", "capture_order", "placements",
                "final", "suggestions", "split", "fit", "validate_new", "validate_live", "live", "stats", "paired",
-               "verdicts", "timings"}
+               "verdicts", "timings", "stop", "targets", "per_hold"}
 
 
 def _load_test_module(name):
@@ -181,6 +181,87 @@ def test_collection_needs_no_files(rig, tmp_path, monkeypatch):
     col = rp.Collection(rig, rp.capture_labeler(rig), pp=(rig.resolution[0] / 2, rig.resolution[1] / 2))
     snaps = rp.feed(col, assign.capture_holds(s))
     assert len(snaps) == 3 and list(tmp_path.iterdir()) == []
+
+
+# ---------------------------------------------------------------- the stop rule
+
+
+def only_pairs(n):
+    """targets met as soon as the FIT pairs reach n (every other target 0)"""
+    return cv.Targets.for_per_hold(3, pairs_min=n, third_min=0, rim_min=0, far_pairs_min=0, strip_min={},
+                                   judged_min=0, side_holds=0, far_band_min=0)
+
+
+def fit_pairs_in_capture_order(rig, s):
+    """FIT pairs (step 16's split, near pairs of FIT holds) after each hold, capture order"""
+    z = cv.session_z(s, rig)
+    a = cv.split16_assignment(s, z)
+    near = np.nan_to_num(z, nan=np.inf) <= 3.0
+    return list(np.cumsum([int((near[h.pairs]).sum()) if a[h.hold] == "FIT" else 0 for h in s.holds()]))
+
+
+def test_stop_point_is_the_first_hold_that_meets_the_rule(rig):
+    rp = replay()
+    s = Session.from_files(synth_files(rig.board), name="synth")
+    cum = fit_pairs_in_capture_order(rig, s)
+    n = cum[-1] // 2
+    want = next(i for i, c in enumerate(cum) if c >= n)
+    hs = list(s.holds())
+    col = rp.Collection.for_session(s, rig, "split16", targets=only_pairs(n))
+    snaps = rp.feed(col, assign.capture_holds(s))
+    st = col.stop
+    assert st is not None and st.index == want + 1 and st.hold == hs[want].hold
+    assert (st.placement, st.pose) == (hs[want].take, hs[want].pose)
+    assert st.placement_index == CAPTURE.index(hs[want].take) + 1
+    assert np.isfinite(st.neck_pitch_deg) and np.isfinite(st.neck_yaw_deg)
+    met = [x.stop_met for x in snaps]
+    assert met == sorted(met) and met[-1] and met[st.placement_index - 1] and not any(met[:st.placement_index - 1])
+    col = rp.Collection.for_session(s, rig, "split16", targets=only_pairs(10**6))
+    snaps = rp.feed(col, assign.capture_holds(s))
+    assert col.stop is None and not any(x.stop_met for x in snaps)
+
+
+def test_stop_rule_uses_the_labels_finish_would_leave(rig):
+    """the capture-time assignment holds holds back while one placement feeds an entry; if the session stopped now,
+    finish() would release some to TEST: the stop rule counts with those labels (the split it would write)"""
+    rp = replay()
+    s = TA.synth_session(rig.board, [("P1", [("centre", 0.5, 2)] * 14)])
+    col = rp.Collection.for_session(s, rig, "capture", targets=only_pairs(0))
+    rp.feed(col, assign.capture_holds(s))
+    assert col.stop_labels() == col.labeler.labels_if_finished() != col.labels()
+    t = col.tallies(col.stop_labels())
+    assert t["test"].entries[("centre", (0.4, 0.6))] == 7
+
+
+def test_run_stops_at_the_rule(rig, tmp_path):
+    """stop_at_rule=True: the session is cut at the stop point (the holds fed until the rule was met) and everything
+    after (snapshots, planner, split) runs on that part; without it the report still says where the rule was met"""
+    rp = replay()
+    st = synth_stored(rig, tmp_path)
+    s = rp.load_session(st)
+    cum = fit_pairs_in_capture_order(rig, s)
+    n = cum[-1] // 2
+    want = next(i for i, c in enumerate(cum) if c >= n) + 1
+    full = rp.run(st, assignment="split16", out_dir=tmp_path / "full", fit=False, targets=only_pairs(n))
+    assert full["stop"]["index"] == want and full["stop"]["holds_total"] == len(cum)
+    assert full["stop"]["stopped"] is False and full["placements"][-1]["holds"] == len(cum)
+    cut = rp.run(st, assignment="split16", out_dir=tmp_path / "cut", fit=False, targets=only_pairs(n),
+                 stop_at_rule=True)
+    assert cut["stop"]["stopped"] is True and cut["stop"]["index"] == want
+    assert cut["placements"][-1]["holds"] == want and cut["placements"][-1]["stop_met"]
+    assert cut["capture_order"] == CAPTURE[:full["stop"]["placement_index"]]
+    assert cut["targets"]["pairs_min"] == n and cut["per_hold"] == 3
+    md = (tmp_path / "cut" / "report.md").read_text()
+    assert "Stop rule met" in md
+    never = rp.run(st, assignment="split16", out_dir=tmp_path / "never", fit=False, targets=only_pairs(10**6),
+                   stop_at_rule=True)
+    assert never["stop"]["index"] is None and never["placements"][-1]["holds"] == len(cum)
+
+
+def test_run_targets_default_to_the_stored_sessions_per_hold(rig, tmp_path):
+    js = replay().run(synth_stored(rig, tmp_path), out_dir=tmp_path / "o", fit=False)
+    assert js["per_hold"] == cv.STORED_PER_HOLD == 3
+    assert js["targets"]["pairs_min"] == cv.Targets.for_per_hold(3).pairs_min
 
 
 # ---------------------------------------------------------------- run(): the report (no fit)

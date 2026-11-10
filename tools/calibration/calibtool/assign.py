@@ -51,6 +51,7 @@ class CaptureHold:
     placement: str
     t0: int
     data: dict
+    pose: int = -1              # the pose index within the placement's grid (-1: not known)
 
 
 def capture_holds(session):
@@ -58,7 +59,7 @@ def capture_holds(session):
     for h in session.holds():
         m = np.zeros(session.n_pairs, bool)
         m[h.pairs] = True
-        yield CaptureHold(hold=h.hold, placement=h.take, t0=h.t0, data=session.to_npz_dict(m))
+        yield CaptureHold(hold=h.hold, placement=h.take, t0=h.t0, data=session.to_npz_dict(m), pose=h.pose)
 
 
 @dataclass
@@ -172,21 +173,32 @@ class Assigner:
                                          captured=label, held_back=held)
         return label
 
-    def finish(self):
-        """close the session: release held-back holds of entries short of their share (rule 3). Idempotent"""
-        if self.finished:
-            return
-        self.finished = True
-        if not self.release_at_end:
-            return
+    def _releases(self) -> list:
+        """the holds finish() would release to TEST now (rule 3)"""
+        if self.finished or not self.release_at_end:
+            return []
+        out = []
         for ids in self._entries.values():
             rows = [self.holds[i] for i in ids]
             need = math.ceil(len(rows) / self.holdout_every) - sum(r.label == TEST for r in rows)
             hb = [r for r in rows if r.held_back]
             need = min(need, len(hb))
-            for i in range(need):
-                r = hb[int((i + 0.5) * len(hb) / need)]
-                r.label, r.released = TEST, True
+            out += [hb[int((i + 0.5) * len(hb) / need)] for i in range(need)]
+        return out
+
+    def finish(self):
+        """close the session: release held-back holds of entries short of their share (rule 3). Idempotent"""
+        rel = self._releases()
+        self.finished = True
+        for r in rel:
+            r.label, r.released = TEST, True
+
+    def labels_if_finished(self) -> dict:
+        """{hold: FIT | TEST} as finish() would leave them if the session ended now; changes nothing (the stop rule
+        judges the split it would write)"""
+        out = {h: i.label for h, i in self.holds.items()}
+        out.update({r.hold: TEST for r in self._releases()})
+        return out
 
     def entry_counts(self) -> dict:
         """{entry: EntryCount} with the current labels (final after finish())"""

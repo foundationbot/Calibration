@@ -116,6 +116,17 @@ class Session:
             out[k] = remap[col] if k == "det_img" else col
         return out
 
+    def subset(self, holds, name=None):
+        """a Session of the given holds (global ids) only: their pairs and corners, the takes in the same order (a take
+        with none of them left out), each take's pose indices kept (hold ids are re-offset by step 16's rule)"""
+        keep = np.isin(self.pairs["hold"], np.asarray(list(holds), np.int64))
+        files = []
+        for t in self.take_order:
+            m = keep & (self.pairs["take"] == t)
+            if m.any():
+                files.append((t, self.to_npz_dict(m, hold="pose")))
+        return Session.from_files(files, name=name or f"{self.name} ({int(keep.sum())} of {self.n_pairs} pairs)")
+
     def index_of_t0(self, t0):
         """pair rows of left stamps t0 (KeyError naming the first stamp not in the session)"""
         try:

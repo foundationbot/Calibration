@@ -322,6 +322,22 @@ def test_which_held_back_holds_are_released(rig, target, captured, released):
     assert sorted(h.hold for h in a.holds.values() if h.label == "TEST") == sorted(captured + released)
 
 
+@pytest.mark.parametrize("release_at_end", [True, False])
+def test_labels_if_finished_previews_finish_without_closing(rig, release_at_end):
+    """what finish() would leave if the session ended now (the stop rule's labels): the same labels, nothing changed,
+    and the session still open; after finish() the final labels"""
+    s = synth_session(rig.board, [("P1", [("centre", 0.5, 2)] * 14), ("P2", [("left", 0.75, 2)] * 3)])
+    a, seen = run(rig, s, release_at_end=release_at_end)
+    before = {h: i.label for h, i in a.holds.items()}
+    preview = a.labels_if_finished()
+    assert {h: i.label for h, i in a.holds.items()} == before and not a.finished
+    a.finish()
+    assert preview == {h: i.label for h, i in a.holds.items()}
+    assert a.labels_if_finished() == preview
+    if release_at_end:
+        assert preview != before
+
+
 def test_observe_after_finish_is_refused(rig):
     from calibtool import assign
     s = synth_session(rig.board, [("P1", [("centre", 0.5, 2)] * 2)])

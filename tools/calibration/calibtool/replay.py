@@ -24,12 +24,17 @@ simulated placements add, every pair of a grid), with the FIT pair count for the
 REGION_TALLY = "fit" counts the regions over FIT corners instead.
 
 Labels are capture-time ones in each snapshot (what the operator would have seen then); the assignment's finish()
-(assign rule 3) can still move held-back holds to TEST, so the report also carries the final coverage."""
+(assign rule 3) can still move held-back holds to TEST, so the report also carries the final coverage.
+
+The stop rule (coverage.Targets, Coverage.stop_met: no blocking deficit) is checked after every hold with the labels
+finish() would leave if the session ended there (the split it would write); the first hold that meets it is
+Collection.stop (a StopPoint). run(stop_at_rule=True) cuts the session there and fits only that part. Targets default
+to Targets.for_per_hold(per_hold), per_hold = the stored sessions' 3 pairs per pose."""
 import json
 import math
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -109,6 +114,23 @@ def _empty_tally(size) -> cv.FitTally:
 
 
 @dataclass
+class StopPoint:
+    """the first hold after which the stop rule was met"""
+    index: int                  # holds fed by then (1, 2, ...)
+    hold: int
+    placement: str
+    placement_index: int        # 1, 2, ...: the placement's place in capture order
+    pose: int                   # the pose index within the placement's grid (-1: not known)
+    neck_pitch_deg: float       # measured neck angles of the hold (mean over its pairs; nan without them)
+    neck_yaw_deg: float
+
+    def as_dict(self) -> dict:
+        return {"index": self.index, "hold": self.hold, "placement": self.placement,
+                "placement_index": self.placement_index, "pose": self.pose, "neck_pitch_deg": self.neck_pitch_deg,
+                "neck_yaw_deg": self.neck_yaw_deg}
+
+
+@dataclass
 class Snapshot:
     index: int                  # 1, 2, ...: placements so far
     placement: str
@@ -124,12 +146,13 @@ class Snapshot:
     deficits: list              # coverage.Deficit, most important first
     sentences: list             # coverage.sentences(deficits)
     progress: str               # one line
+    stop_met: bool = False      # the stop rule has been met by the end of this placement (Collection.stop)
 
     def as_dict(self) -> dict:
         return {"index": self.index, "placement": self.placement, "placement_holds": self.placement_holds,
                 "placement_board_holds": self.placement_board_holds, "placement_pairs": self.placement_pairs,
                 "holds": self.holds, "pairs": self.pairs, "fit_pairs": self.fit_pairs, "test_pairs": self.test_pairs,
-                "progress": self.progress, "sentences": list(self.sentences),
+                "progress": self.progress, "stop_met": self.stop_met, "sentences": list(self.sentences),
                 "deficits": [deficit_dict(d) for d in self.deficits], "ready": [region_str(e) for e in self.ready],
                 "tallies": tallies_dict(self.tallies)}
 
@@ -155,7 +178,9 @@ class Collection:
         self._d16 = paths.import_script("16_split_distance")
         self._holds = {}            # hold id -> _HoldCov, in add order
         self._open = []             # hold ids added since the last snapshot
+        self._places = []           # placements in capture order
         self.snapshots = []
+        self.stop = None            # StopPoint: the first hold after which the stop rule was met
 
     @classmethod
     def for_session(cls, session, rig, assignment="capture", **kw):
@@ -208,6 +233,15 @@ class Collection:
         label = self.labeler.observe(hold)
         self._holds[hc.hold] = hc
         self._open.append(hc.hold)
+        if not self._places or self._places[-1] != hc.placement:
+            self._places.append(hc.placement)
+        if self.stop is None and self.stop_met():
+            d = hold.data
+            with np.errstate(invalid="ignore"):
+                pitch = float(np.degrees(np.nanmean(d["img_pitch"]))) if "img_pitch" in d else math.nan
+                yaw = float(np.degrees(np.nanmean(d["img_yaw"]))) if "img_yaw" in d else math.nan
+            self.stop = StopPoint(len(self._holds), hc.hold, hc.placement, len(self._places),
+                                  int(getattr(hold, "pose", -1)), pitch, yaw)
         return label
 
     # ------------------------------------------------------------ state
@@ -215,9 +249,20 @@ class Collection:
     def labels(self) -> dict:
         return labels_of(self.labeler)
 
-    def tallies(self) -> dict:
-        """{"all": FitTally of every pair, "fit": FitTally of the FIT pairs, "test": TestTally}, current labels"""
-        lab = self.labels()
+    def stop_labels(self) -> dict:
+        """the labels finish() would leave if the session ended now (an Assigner's held-back holds released; a fixed
+        labeler's own): what the stop rule counts"""
+        f = getattr(self.labeler, "labels_if_finished", None)
+        return f() if f else self.labels()
+
+    def stop_met(self) -> bool:
+        """the stop rule (coverage.Coverage.stop_met) on the labels the split would get now"""
+        return self.coverage(self.tallies(self.stop_labels())).stop_met(self.targets)
+
+    def tallies(self, labels=None) -> dict:
+        """{"all": FitTally of every pair, "fit": FitTally of the FIT pairs, "test": TestTally}; labels: {hold: FIT |
+        TEST} (default: the current ones)"""
+        lab = self.labels() if labels is None else labels
         out_all, out_fit = _empty_tally(self.size), _empty_tally(self.size)
         entries, bands = {}, {b: 0 for b in cv.FAR_BANDS}
         for h, hc in self._holds.items():
@@ -261,7 +306,7 @@ class Collection:
         ready = self.ready(t)
         snap = Snapshot(len(self.snapshots) + 1, name, len(mine), sum(h.board for h in mine),
                         sum(h.n_pairs for h in mine), c["holds"], c["pairs"], c["fit_pairs"], c["test_pairs"], t,
-                        ready, defs, cv.sentences(defs), "")
+                        ready, defs, cv.sentences(defs), "", self.stop is not None)
         snap.progress = progress_line(snap, self.targets)
         self.snapshots.append(snap)
         self._open = []
@@ -296,9 +341,10 @@ def feed(col: Collection, holds, log=None) -> list:
     return snaps
 
 
-def plan(deficits, head: pl.Head, board, pp=None, k=3, chain_=None) -> list:
+def plan(deficits, head: pl.Head, board, pp=None, k=3, chain_=None, pairs_per_pose=None) -> list:
     """the planner's next k placements (planner.Suggestion) for these deficits"""
-    return pn.Planner(head, chain_ or pl.chain(), board, pp=pp).suggest(deficits, k=k)
+    kw = {} if pairs_per_pose is None else {"pairs_per_pose": pairs_per_pose}
+    return pn.Planner(head, chain_ or pl.chain(), board, pp=pp, **kw).suggest(deficits, k=k)
 
 
 # ---------------------------------------------------------------- words and JSON
@@ -316,7 +362,7 @@ def region_str(r) -> str:
 def deficit_dict(d: cv.Deficit) -> dict:
     return {"kind": d.kind, "cam": d.cam, "region": region_str(d.region), "have": d.have, "want": d.want,
             "ref_region": None if d.ref_region is None else region_str(d.ref_region), "ref_have": d.ref_have,
-            "weight": d.weight, "sentence": cv.sentence(d)}
+            "weight": d.weight, "blocks": d.blocks, "sentence": cv.sentence(d)}
 
 
 def _corner_dict(t: cv.CornerTally) -> dict:
@@ -354,8 +400,8 @@ def _js(o):
     """JSON-ready: tuples to lists, numpy to Python, non-finite floats to None, Paths to str"""
     if isinstance(o, dict):
         return {str(k): _js(v) for k, v in o.items()}
-    if isinstance(o, (list, tuple, set)):
-        return [_js(v) for v in (sorted(o, key=str) if isinstance(o, set) else o)]
+    if isinstance(o, (list, tuple, set, frozenset)):
+        return [_js(v) for v in (sorted(o, key=str) if isinstance(o, (set, frozenset)) else o)]
     if isinstance(o, np.ndarray):
         return _js(o.tolist())
     if isinstance(o, (np.integer,)):
@@ -518,12 +564,14 @@ def load_session(stored, exclude_takes=()) -> Session:
 
 
 def run(stored, assignment="capture", out_dir=None, gates=None, exclude_takes=(), *, fit=True, targets=None, k=3,
-        jobs=2, head=None, log=None) -> dict:
+        jobs=2, head=None, log=None, stop_at_rule=False, per_hold=cv.STORED_PER_HOLD) -> dict:
     """replay a stored session (sessions.StoredSession or its name; anything with name, robot, rig_path, take_order,
     corner_files, live_config, live_model) -> the report (dict, as written to out_dir/report.json; report.md beside
     it). assignment: "capture" (assign.Assigner) | "split16" (step 16's split, the recorded runs'). fit=False stops
     after the planner (no split written, no fit). head: placement.Head for the planner (default: from the live
-    config). jobs: processes at a time in the fit/validate part"""
+    config). jobs: processes at a time in the fit/validate part. per_hold: pairs per pose of the session's corner
+    files (targets default to coverage.Targets.for_per_hold(per_hold); the planner simulates that many pairs a pose).
+    stop_at_rule: cut the session at the stop rule's point (Collection.stop; the whole session when never met)"""
     t_all = time.time()
     if isinstance(stored, str):
         stored = sessions.get(stored)
@@ -538,13 +586,21 @@ def run(stored, assignment="capture", out_dir=None, gates=None, exclude_takes=()
     t = time.time()
     session = load_session(stored, exclude_takes)
     rig = pipeline.load_rig(stored.rig_path)
+    targets = targets or cv.Targets.for_per_hold(per_hold)
     col = Collection.for_session(session, rig, assignment, targets=targets)
-    snaps = feed(col, assign.capture_holds(session), log=log)
+    holds = list(assign.capture_holds(session))
+    snaps = feed(col, holds, log=None if stop_at_rule else log)
+    stop = {**(col.stop.as_dict() if col.stop else {"index": None}), "holds_total": len(holds), "stopped": False}
+    if stop_at_rule and col.stop is not None:
+        session = session.subset([h.hold for h in holds[:col.stop.index]], name=f"{session.name} (stop rule)")
+        col = Collection.for_session(session, rig, assignment, targets=targets)
+        snaps = feed(col, assign.capture_holds(session), log=log)
+        stop["stopped"] = True
     tm["collect_s"] = time.time() - t
 
     t = time.time()
     head = head or pl.head_from_okvis(stored.live_config, rig.resolution)
-    sug = plan(snaps[-1].deficits, head, rig.board, pp=col.pp, k=k)
+    sug = plan(snaps[-1].deficits, head, rig.board, pp=col.pp, k=k, pairs_per_pose=per_hold)
     tm["plan_s"] = time.time() - t
     final = col.finish()
 
@@ -555,7 +611,8 @@ def run(stored, assignment="capture", out_dir=None, gates=None, exclude_takes=()
            "validate_new": None, "validate_live": None,
            "live": {"config": str(stored.live_config), "model": getattr(stored, "live_model", None), "scorable": None,
                     "error": None},
-           "stats": None, "paired": None, "verdicts": None, "timings": tm}
+           "stats": None, "paired": None, "verdicts": None, "timings": tm, "stop": stop, "per_hold": per_hold,
+           "targets": asdict(targets)}
     if fit:
         t = time.time()
         sd = out_dir / "split"
@@ -592,6 +649,13 @@ def render_md(rep: dict) -> str:
             L.append(f"  - {s}")
         if len(p["sentences"]) > MD_SENTENCES:
             L.append(f"  - (+{len(p['sentences']) - MD_SENTENCES} more in report.json)")
+    st = rep.get("stop") or {}
+    if st.get("index"):
+        L += ["", f"Stop rule met after hold {st['index']} of {st['holds_total']}: placement {st['placement_index']} "
+                  f"({st['placement']}), pose {st['pose']} (neck pitch {st['neck_pitch_deg']:+.1f}, yaw "
+                  f"{st['neck_yaw_deg']:+.1f} deg)" + ("; the session was cut there." if st["stopped"] else ".")]
+    else:
+        L += ["", f"Stop rule not met in the {st.get('holds_total', 0)} holds."]
     f = rep["final"]
     L += ["", f"At the end (assignment closed): {f['pairs']:,} pairs, FIT {f['fit_pairs']:,}, TEST "
               f"{f['test_pairs']:,}; {f['released_to_test']} held-back holds released to TEST; held-out entries "

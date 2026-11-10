@@ -8,7 +8,7 @@ the stored takes' first poses, 9 Nov 2026: upright p21 -0.08..-0.50 m, p10 -0.11
 tilted p21 dtiltleft -0.85 m, p10 n6_tiltL/R -1.19/-1.16 m).
 
 Each candidate is simulated over the 49-pose neck grid (pitch -24..24 deg step 8 x yaw -34..34 deg in 7 steps) with
-the placement model (placement.BoardModel): per pose, both cameras' predicted corners (x PAIRS_PER_POSE stereo pairs),
+the placement model (placement.BoardModel): per pose, both cameras' predicted corners (x pairs_per_pose stereo pairs),
 the far pairs, and the step-66 entry / far band of the camera-0 board. suggest() picks greedily by weighted deficit
 reduction (each deficit's gain capped at what it is short, divided by its target, times its weight, coverage.Targets:
 edge strips 3, corner boxes 2, the rest mostly 1), updating the deficits after each pick."""
@@ -17,6 +17,7 @@ from dataclasses import dataclass, field, replace
 import numpy as np
 
 from calibtool import coverage as cv, placement as pl
+from calibtool.protocol import PER_HOLD
 
 DISTANCES = (0.5, 0.75, 1.1, 1.6, 2.0)
 BEARINGS = (-40, -20, 0, 20, 40)
@@ -25,7 +26,8 @@ UPRIGHT_DZ = -0.35
 TILT_DZ = -1.0
 GRID_PITCH = tuple(float(v) for v in np.arange(-24, 25, 8))
 GRID_YAW = tuple(float(v) for v in np.linspace(-34, 34, 7))
-PAIRS_PER_POSE = 3          # stereo pairs kept per still pose (the stored takes: up to 3)
+PAIRS_PER_POSE = PER_HOLD   # stereo pairs kept per still pose: the protocol's 2 (Planner(pairs_per_pose=3) for the
+                            # stored sessions' 3)
 TEST_FRAC = 0.5             # share of a placement's holds that go to TEST (holdout_every = 2)
 
 
@@ -160,8 +162,9 @@ class Planner:
     """candidates simulated over the grid for one head (placement.Head), neck chain and board"""
 
     def __init__(self, head: pl.Head, chain_, board, pp=None, upright_dz=UPRIGHT_DZ, tilt_dz=TILT_DZ,
-                 cands=None):
+                 cands=None, pairs_per_pose=None):
         self.head, self.chain, self.board = head, chain_, board
+        self.pairs_per_pose = int(pairs_per_pose or PAIRS_PER_POSE)
         K = head.cams[0].K
         self.pp = (float(K[0, 2]), float(K[1, 2])) if pp is None else tuple(pp)
         self.upright_dz, self.tilt_dz = upright_dz, tilt_dz
@@ -186,16 +189,16 @@ class Planner:
                 poses.append(PoseSim((p, y), False, _empty_fit(), {}, {}))
                 continue
             size = self.head.cams[0].size
-            cams = {0: _scaled(cv.corner_tally(p0.uv[:, 0], p0.uv[:, 1], size), PAIRS_PER_POSE)}
+            cams = {0: _scaled(cv.corner_tally(p0.uv[:, 0], p0.uv[:, 1], size), self.pairs_per_pose)}
             if len(self.head.cams) > 1:
                 p1 = m.predict(qp, qy, 1)
                 t1 = cv.corner_tally(p1.uv[:, 0], p1.uv[:, 1], self.head.cams[1].size) if p1.detected else \
                     cv.corner_tally(np.zeros(0), np.zeros(0), size)
-                cams[1] = _scaled(t1, PAIRS_PER_POSE)
+                cams[1] = _scaled(t1, self.pairs_per_pose)
             else:
                 cams[1] = cv.corner_tally(np.zeros(0), np.zeros(0), size)
-            far = PAIRS_PER_POSE if cv.FAR_FIT[0] <= p0.z < cv.FAR_FIT[1] else 0
-            fit = cv.FitTally(cams, far, PAIRS_PER_POSE)
+            far = self.pairs_per_pose if cv.FAR_FIT[0] <= p0.z < cv.FAR_FIT[1] else 0
+            fit = cv.FitTally(cams, far, self.pairs_per_pose)
             entries, bands = {}, {}
             b = int(lenscells.dist_bin(p0.z)[0])
             if b >= 0:
