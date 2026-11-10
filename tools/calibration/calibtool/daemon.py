@@ -35,8 +35,19 @@ import time
 from pathlib import Path
 
 DEADMAN_S = 5.0
-ACTIVE = frozenset({"TRIAL"})
-TERMINAL = frozenset({"DONE", "ABORTED"})
+# the full session's phases (M5, flow.py drives them; --session-mode full). ACTIVE ones need the TUI heartbeat: the
+# operator's link is the deadman wherever the robot moves, could move next (guidance -> countdown -> grid) or deploys
+FLOW_PHASES = ("MOTORS", "SETUP", "PLACE", "GRID", "FIT", "IMU_PLACE", "IMU_SWEEP", "DECIDE", "DEPLOY_SIZE",
+               "CHECK_PLACE", "CHECK_GRID", "DEPLOY", "POST_PLACE", "POSTCHECK", "REPORT", "FINISH")
+ACTIVE = frozenset({"TRIAL", "MOTORS", "PLACE", "GRID", "IMU_PLACE", "IMU_SWEEP", "CHECK_PLACE", "CHECK_GRID", "DEPLOY",
+                    "POST_PLACE", "POSTCHECK"})
+TERMINAL = frozenset({"DONE", "ABORTED", "STOPPED_LOUD"})
+# the keys a phase hands to the flow (anything else is dropped and logged): Y enables the motors only in MOTORS (and
+# retries a deploy the operator was asked about), 1/2/? choose the deploy size, C = "can't put it there", R = roll back
+# on purpose, D = disable the motors (twice: the warning first), K = keep them on
+PHASE_KEYS = {"MOTORS": "Y", "PLACE": "C", "IMU_PLACE": "C", "CHECK_PLACE": "C", "POST_PLACE": "C",
+              "DEPLOY_SIZE": "12?", "DEPLOY": "YR", "POSTCHECK": "R", "REPORT": "R", "FINISH": "DKR", "DONE": "D",
+              "ABORTED": "D", "STOPPED_LOUD": "D"}
 STEP_S = 0.15            # 9 Nov trial: guidance felt laggy at 0.5 s, then 0.25 s; guide_corners on a 1280x800 frame
                          # takes ~30 ms single-threaded (Moonstone; phantom10 measured in the report)
 SAYS_KEEP = 8            # the recent prompts kept in the state: a step can make two (an end and the next intro)
@@ -170,7 +181,8 @@ class Machine:
             raise FileNotFoundError(f"no state.json in {store.dir}")
         m = cls(store, clock, deadman_s=deadman_s, _state=st, mono=mono)
         before = st["phase"]
-        if before in ACTIVE:
+        if before in ACTIVE or (st.get("mode") == "full" and before in FLOW_PHASES):
+            # a full session comes back in HOLD from every flow phase: the robot may be half-way through a change
             st["held_from"], st["phase"] = before, "HOLD"
         elif before in ("PREFLIGHT", "READY", "BLOCKED"):
             st["phase"] = "PREFLIGHT"
@@ -210,8 +222,9 @@ class Machine:
             if self.phase in TERMINAL or phase == self.phase:
                 return
             self.store.event("phase", t=self.clock(), frm=self.phase, to=phase, why=why)
-            if self.phase in ACTIVE and phase not in ACTIVE and self.pending_keys:
-                for k in self.pending_keys:     # a key meant for the trial is not kept for after a HOLD
+            if self.pending_keys and (self.state.get("mode") == "full" or
+                                      (self.phase in ACTIVE and phase not in ACTIVE)):
+                for k in self.pending_keys:     # a key belongs to the phase it was pressed in (not kept over a HOLD)
                     self.store.event("key_dropped", t=self.clock(), key=k, phase=phase, why=f"left {self.phase}")
                 self.pending_keys = []
             self.state["phase"] = phase
@@ -248,11 +261,23 @@ class Machine:
             if changed:
                 self.save()
 
+    def hold(self, why):
+        """the flow's own HOLD (a foreign command, a missed pose, a refused arm): left only by G, like the deadman's"""
+        with self._lock:
+            if self.phase in TERMINAL or self.phase == "HOLD":
+                return
+            self.state["held_from"], self.state["hold_reason"] = self.phase, str(why)
+            self.store.event("hold", t=self.clock(), phase=self.phase, why=str(why))
+            self.to("HOLD", str(why))
+
     def key(self, k):
         k = str(k).upper()
         with self._lock:
             self.store.event("key", t=self.clock(), key=k, phase=self.phase)
+            full = self.state.get("mode") == "full"
             if self.phase in TERMINAL:
+                if full and k in PHASE_KEYS.get(self.phase, ""):
+                    self.pending_keys.append(k)
                 return
             if k == "A":
                 self.to("ABORTED", "abort key")
@@ -262,11 +287,28 @@ class Machine:
                 elif self.phase == "HOLD" and self.live() and self.state.get("held_from"):
                     back = self.state["held_from"]
                     self.store.event("resumed_by_operator", t=self.clock(), to=back)
-                    self.state["held_from"] = None
+                    self.state["held_from"], self.state["hold_reason"] = None, None
                     self.to(back, "G with the TUI attached")
-            elif k == "T":
+            elif k == "T" and not full:
                 if self.phase == "READY":
                     self.to("TRIAL", "T: placement trial")
+            elif k == "M" and full and self.phase == "READY":
+                if self.state.get("motion_gate_green") is True:
+                    self.to("MOTORS", "M: motor screen")
+                else:
+                    self.store.event("motors_refused", t=self.clock(), why="the preflight motion gate is not green",
+                                     failed=[c["name"] for c in self.state.get("checks") or ()
+                                             if c.get("gate") == "motion" and c.get("status") == "fail"])
+            elif k == "O" and full:
+                self.state["okvis_check"] = False
+                self.store.event("okvis_check_skipped", t=self.clock(), phase=self.phase)
+                self.save()
+            elif full:
+                if k in PHASE_KEYS.get(self.phase, ""):
+                    self.pending_keys.append(k)
+                else:
+                    self.store.event("key_dropped", t=self.clock(), key=k, phase=self.phase,
+                                     why=f"{k} does nothing in {self.phase}")
             elif self.phase in ACTIVE:
                 self.pending_keys.append(k)
             else:

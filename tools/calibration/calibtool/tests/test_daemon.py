@@ -811,3 +811,119 @@ def test_status_says_live_only_when_the_socket_answers(tmp_path, capsys):
         assert out["live"] is True and out["kit"] == dm.kit_hash()
     finally:
         srv.stop()
+
+
+# ------------------------------------------------------------------ full session mode (M5): phases and keys
+
+def full(tmp_path, clock=None, motion_green=True):
+    m = machine(tmp_path, clock, mode="full", read_only=False)
+    m.state["motion_gate_green"] = motion_green
+    m.to("READY", "preflight green")
+    m.heartbeat()
+    return m
+
+
+def test_m_enters_motors_only_with_the_motion_gate_green(tmp_path):
+    m = full(tmp_path / "a", motion_green=False)
+    m.key("M")
+    assert m.phase == "READY"
+    assert "motors_refused" in kinds(m.store)
+    m2 = full(tmp_path / "b")
+    m2.key("M")
+    assert m2.phase == "MOTORS"
+
+
+def test_m_and_t_belong_to_their_modes(tmp_path):
+    m = full(tmp_path / "a")
+    m.key("T")
+    assert m.phase == "READY"                     # no placement trial inside a full session
+    w = machine(tmp_path / "b")
+    w.state["motion_gate_green"] = True
+    w.to("READY", "x")
+    w.key("M")
+    assert w.phase == "READY"                     # a watch/trial session never enters MOTORS
+
+
+@pytest.mark.parametrize("phase,key", [("MOTORS", "Y"), ("DEPLOY_SIZE", "1"), ("DEPLOY_SIZE", "2"),
+                                       ("DEPLOY_SIZE", "?"), ("PLACE", "C"), ("POSTCHECK", "R"), ("FINISH", "D"),
+                                       ("FINISH", "K"), ("DEPLOY", "Y")])
+def test_flow_keys_count_only_in_their_phase(tmp_path, phase, key):
+    m = full(tmp_path)
+    m.to(phase, "test")
+    m.key(key)
+    assert m.take_keys() == [key]
+    m.to("FIT", "test")
+    m.key(key)
+    assert m.take_keys() == []
+    assert kinds(m.store)[-1] == "key_dropped"
+
+
+def test_y_outside_motors_never_reaches_the_flow(tmp_path):
+    m = full(tmp_path)
+    for ph in ("READY", "PLACE", "GRID", "IMU_SWEEP", "DECIDE", "POSTCHECK"):
+        m.to(ph, "test")
+        m.key("Y")
+        assert m.take_keys() == [], ph
+
+
+def test_keys_pending_are_dropped_on_any_phase_change(tmp_path):
+    m = full(tmp_path)
+    m.to("DEPLOY_SIZE", "x")
+    m.key("2")
+    m.to("FIT", "x")
+    m.to("DEPLOY_SIZE", "x")
+    assert m.take_keys() == []
+
+
+def test_o_opts_out_of_the_okvis_check_at_any_time(tmp_path):
+    m = full(tmp_path)
+    m.to("GRID", "x")
+    m.key("O")
+    assert m.state["okvis_check"] is False
+    assert "okvis_check_skipped" in kinds(m.store)
+
+
+def test_d_counts_after_the_session_ended(tmp_path):
+    for end in ("DONE", "ABORTED", "STOPPED_LOUD"):
+        m = full(tmp_path / end)
+        m.to(end, "x")
+        m.key("D")
+        m.key("G")
+        assert m.take_keys() == ["D"], end
+        assert m.phase == end
+
+
+def test_the_new_motion_phases_need_a_heartbeat(tmp_path):
+    for ph in ("MOTORS", "PLACE", "GRID", "IMU_SWEEP", "CHECK_GRID", "DEPLOY", "POSTCHECK"):
+        c = Clock()
+        m = full(tmp_path / ph, c)
+        m.to(ph, "x")
+        c.t += 5.1
+        m.tick()
+        assert m.phase == "HOLD" and m.state["held_from"] == ph
+    for ph in ("DECIDE", "DEPLOY_SIZE", "FIT"):
+        c = Clock()
+        m = full(tmp_path / ph, c)
+        m.to(ph, "x")
+        c.t += 60
+        m.tick()
+        assert m.phase == ph
+
+
+def test_hold_by_the_flow_keeps_where_it_came_from(tmp_path):
+    m = full(tmp_path)
+    m.to("GRID", "x")
+    m.hold("another program commands the motors")
+    assert m.phase == "HOLD" and m.state["held_from"] == "GRID"
+    assert m.state["hold_reason"] == "another program commands the motors"
+    m.key("G")
+    assert m.phase == "GRID" and m.state["hold_reason"] is None
+
+
+@pytest.mark.parametrize("phase", ["MOTORS", "SETUP", "PLACE", "GRID", "FIT", "IMU_SWEEP", "DECIDE", "DEPLOY_SIZE",
+                                   "DEPLOY", "POSTCHECK", "FINISH"])
+def test_a_full_session_resumes_every_flow_phase_in_hold(tmp_path, phase):
+    m = full(tmp_path)
+    m.to(phase, "x")
+    m2 = dm.Machine.resume(dm.Store(tmp_path / "s1"), Clock())
+    assert m2.phase == "HOLD" and m2.state["held_from"] == phase
