@@ -17,7 +17,8 @@ accepted in FAR_ACCEPT_M, too far beyond FAR_REFUSE_BEYOND_M) and the tilted one
 Tolerance is loose for defaults: a capture counts toward the band it measured (protocol.band_of), so any distance in
 the target's nominal band is accepted.
 
-Trial(targets, log_path) runs the timed trials: an intro per placement, the guide until "Good", key C = "can't put it
+Trial(targets, log_path) runs the timed trials (an existing log is read back: a restarted calibd continues with the
+next placement): an intro per placement, the guide until "Good", key C = "can't put it
 there" (logged unreachable), a timeout (failed); trial.jsonl gets one line per placement (seconds from the intro to the
 board coming to rest, result, prompts spoken); summary() = success rate and seconds against the 60 s budget (design
 10.4)."""
@@ -210,6 +211,13 @@ class Trial:
         self.records = []
         self.finished = False
         self.says = []
+        if self.log_path.is_file():         # a restarted calibd: continue after the placements already logged
+            for ln in self.log_path.read_text().splitlines():
+                try:
+                    self.records.append(json.loads(ln))
+                except json.JSONDecodeError:
+                    continue
+            self.i = min(len(self.records), len(self.targets)) - 1
 
     def _next(self, t):
         self.i += 1

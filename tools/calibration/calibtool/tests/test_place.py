@@ -195,3 +195,17 @@ def test_trial_state_is_json_ready(tmp_path):
     tr.start(0.0)
     json.dumps(tr.state())
     assert tr.state()["index"] == 1 and tr.state()["of"] == 6
+
+
+def test_a_trial_resumes_after_the_logged_placements(tmp_path):
+    """a calibd restarted under the same session (crash, reboot) continues with the next placement, not the first"""
+    log = tmp_path / "trial.jsonl"
+    targets = [place.target("0.5 m"), place.target("1.1 m"), place.target("far")]
+    tr = place.Trial(targets, log, focal=F, size=(W, H))
+    tr.start(0.0)
+    tr.key(5.0, "C")
+    tr2 = place.Trial(targets, log, focal=F, size=(W, H))
+    s = tr2.start(100.0)
+    assert s.kind == "intro" and s.text.startswith("Placement 2 of 3")
+    assert [r["result"] for r in tr2.records] == ["unreachable"]
+    assert tr2.state()["index"] == 2
