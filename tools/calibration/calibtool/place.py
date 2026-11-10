@@ -298,6 +298,14 @@ class PlacementGuide:
         self._last_key, self._last_err = key, err
         return self._say(t, kind, text)
 
+    def interrupted(self):
+        """the trial was interrupted (HOLD, a stalled camera): the board may have moved meanwhile, so the rest, the
+        lost timer and the feedback on the last instruction start over (h0, the stand's base, is kept)"""
+        self._start = self._spoken_at = self._lost_since = None
+        self._lost_said = False
+        self._last_key = self._last_err = None
+        self._repeats = 0
+
     def bearing_deg(self, obs) -> float:
         """+ toward the robot's left (image left), neck at home"""
         return -math.degrees(math.atan2(obs.centroid[0] - self.pp[0], self.f))
@@ -411,6 +419,7 @@ class Trial:
         self.i = -1
         self.guide = None
         self.t_intro = None
+        self.paused_s = 0.0             # the current placement's time in HOLD (or with the camera stalled)
         self.t_last = None
         self.records = []
         self.finished = False
@@ -459,7 +468,23 @@ class Trial:
         self.guide = PlacementGuide(tg, self.focal, self.size, ids=self.ids, up=self._up, stand=self.stand,
                                     **self.guide_kw)
         self.t_intro = t
+        self.paused_s = 0.0
         s = Say(next(self.ids), float(t), "intro", intro(tg, self.i + 1, len(self.targets)))
+        self.says.append(s)
+        return [s]
+
+    def resume(self, t, paused_s, say_intro=True) -> list:
+        """after an interruption of paused_s (HOLD, a stalled camera): the placement's clock is shifted by it (a 200 s
+        HOLD is not a timeout), the guide starts its rest over, and the current intro is said again"""
+        if self.finished or self.guide is None:
+            return []
+        self.t_intro += float(paused_s)
+        self.paused_s += float(paused_s)
+        self.t_last = t
+        self.guide.interrupted()
+        if not say_intro:
+            return []
+        s = Say(next(self.ids), float(t), "intro", intro(self.targets[self.i], self.i + 1, len(self.targets)))
         self.says.append(s)
         return [s]
 
@@ -474,6 +499,7 @@ class Trial:
         rec = {"target": self.targets[self.i].name, "distance_m": self.targets[self.i].distance_m, "result": result,
                "seconds": round((rest_t if rest_t is not None else t) - self.t_intro, 2),
                "prompts": len(g.says) if g else 0, "t_intro": self.t_intro, "t_end": t,
+               "paused_s": round(self.paused_s, 2),
                "z_m": None if g is None or g.last_obs is None else round(float(g.last_obs.z), 3),
                "dh_m": None if geom is None else round(geom[0], 3),
                "dxy_m": None if geom is None else round(geom[1], 3)}

@@ -422,3 +422,55 @@ def test_a_restarted_calibd_keeps_talking_to_the_tui(tmp_path):
     assert len(sp.said) > n_said and sp.said[-1].startswith("Placement 2 of 3."), sp.said
     old = [e["say"]["id"] for e in m2.store.events() if e["kind"] == "say"]
     assert len(old) == len(set(old))            # prompt ids unique across both runs
+
+
+def _hold(d, cap, c, seconds):
+    """no heartbeat: the deadman holds, then `seconds` pass in HOLD"""
+    _run(d, cap, c, dm.DEADMAN_S + 0.3, hb=False)
+    assert d.m.phase == "HOLD"
+    _run(d, cap, c, seconds, hb=False)
+
+
+def test_keys_pressed_outside_the_trial_are_dropped_not_replayed_after_g(tmp_path):
+    """review 4: two C pressed in HOLD were queued and replayed after G, skipping two placements"""
+    c = Clock()
+    m = machine(tmp_path, c)
+    d, cap, tr = _trial_daemon(tmp_path, m, c, ["1.6 m", "1.1 m", "far"], timeout_s=180.0)
+    d.preflight_done(pf.Result([], {}, {}))
+    m.heartbeat()
+    m.key("T")
+    _run(d, cap, c, 1.0)
+    _hold(d, cap, c, 1.0)
+    m.key("C")
+    m.key("C")
+    m.heartbeat()
+    m.key("G")
+    _run(d, cap, c, 1.0)
+    assert m.phase == "TRIAL" and tr.records == [] and tr.state()["index"] == 1
+    assert [e["key"] for e in m.store.events() if e["kind"] == "key_dropped"] == ["C", "C"]
+    m.key("C")                                  # in TRIAL it still works
+    _run(d, cap, c, 0.3)
+    assert [r["result"] for r in tr.records] == ["unreachable"]
+
+
+def test_hold_time_does_not_count_against_the_placement_and_g_repeats_the_intro(tmp_path):
+    """review 4: a 200 s HOLD -> 'Skipping this one.' at once after G; and nobody said again what to place"""
+    c = Clock()
+    m = machine(tmp_path, c)
+    d, cap, tr = _trial_daemon(tmp_path, m, c, ["1.6 m", "1.1 m"], timeout_s=20.0)
+    d.preflight_done(pf.Result([], {}, {}))
+    m.heartbeat()
+    m.key("T")
+    _run(d, cap, c, 2.0)
+    _hold(d, cap, c, 200.0)
+    m.heartbeat()
+    m.key("G")
+    _run(d, cap, c, 1.0)
+    texts = [x["text"] for x in m.state["says"]]
+    assert "Skipping this one." not in texts
+    assert texts[-1].startswith("Placement 1 of 2."), texts
+    assert sum(x.startswith("Placement 1 of 2.") for x in texts) == 2
+    assert m.state["trial"]["since_intro_s"] < 9.0          # 2 s + the 5 s deadman + 1 s: not the 200 s
+    _run(d, cap, c, 18.0)                       # the placement's own 20 s still run out
+    assert tr.records and tr.records[0]["result"] == "timeout"
+    assert tr.records[0]["paused_s"] == pytest.approx(200.3, abs=0.5)

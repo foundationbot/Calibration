@@ -163,6 +163,10 @@ class Machine:
             if self.phase in TERMINAL or phase == self.phase:
                 return
             self.store.event("phase", t=self.clock(), frm=self.phase, to=phase, why=why)
+            if self.phase in ACTIVE and phase not in ACTIVE and self.pending_keys:
+                for k in self.pending_keys:     # a key meant for the trial is not kept for after a HOLD
+                    self.store.event("key_dropped", t=self.clock(), key=k, phase=phase, why=f"left {self.phase}")
+                self.pending_keys = []
             self.state["phase"] = phase
             if phase == "ABORTED":
                 self.state["status"] = "aborted"
@@ -213,8 +217,12 @@ class Machine:
             elif k == "T":
                 if self.phase == "READY":
                     self.to("TRIAL", "T: placement trial")
-            else:
+            elif self.phase in ACTIVE:
                 self.pending_keys.append(k)
+            else:
+                # review 4: two C pressed in HOLD were replayed after G and skipped two placements
+                self.store.event("key_dropped", t=self.clock(), key=k, phase=self.phase,
+                                 why="trial keys count only during the trial")
 
     def take_keys(self) -> list:
         with self._lock:
@@ -361,6 +369,7 @@ class Daemon:
         self._last_t0 = None            # the left stamp of the last pair sent to detection (each pair once)
         self._last_sample = None
         self._trial_started = False
+        self._paused_at = None          # when the running trial was last interrupted (HOLD, a stalled camera)
         self.stop_flag = threading.Event()
         # prompt ids continue after the ones a previous run of this session spoke (Machine.resume keeps the max)
         self.ids = itertools.count(int(machine.state.get("say_id_max") or 0) + 1)
@@ -470,6 +479,13 @@ class Daemon:
                 self._trial_started = True
                 self._say(self.trial.start(t))
                 self.m.store.event("trial_gravity", t=t, gravity=self.trial.gravity_status())
+            elif self._paused_at is not None:
+                # back from HOLD: the time away does not count against the placement, and the operator hears again
+                # what to place (review 4)
+                self.m.store.event("trial_resumed", t=t, paused_s=round(t - self._paused_at, 2))
+                for s in self.trial.resume(t, t - self._paused_at):
+                    self._say(s)
+            self._paused_at = None
             for k in self.m.take_keys():
                 for s in self.trial.key(t, k):
                     self._say(s)
@@ -481,6 +497,8 @@ class Daemon:
                 self.m.store.event("trial_summary", t=t, summary=self.trial.summary())
                 self.m.to("DONE", "placement trial finished")
         elif self.trial is not None:
+            if self._trial_started and not self.trial.finished and self._paused_at is None:
+                self._paused_at = t
             # always the trial's own state: a stored line from before a restart is stale (9 Nov: "placement 2 of 6")
             st["trial"] = self.trial.state(t)
         st["banner"] = self.banner()
