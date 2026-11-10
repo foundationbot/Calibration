@@ -35,7 +35,8 @@ STALL_REATTACH_S = 2.0          # ... or no frame at all for this long (a recrea
 REATTACH_FIRST_S = 1.0          # retries while the condition holds: after 1 s, doubling up to REATTACH_MAX_S
 REATTACH_MAX_S = 8.0
 SEGMENT_CHECK_S = 1.0           # how often the source is asked whether its shm segments were recreated
-ATTACH_TIMEOUT_S = 2.0          # a re-attach that takes longer goes on in its own thread; the reader does not wait
+ATTACH_TIMEOUT_S = 0.25         # a re-attach that takes longer goes on in its own thread (the reader polls both
+                                # cameras: a long wait on one would stall the other); the next read adopts it
 FPS_WINDOW = 50
 SYNC_WINDOW = 100
 
