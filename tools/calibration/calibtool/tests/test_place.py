@@ -14,9 +14,9 @@ F = 568.0
 W, H = 1280, 800
 
 
-def obs(z=1.1, u=640.0, v=400.0, cut=()):
+def obs(z=1.1, u=640.0, v=400.0, cut=(), n_tags=35):
     c = np.array([u, v])
-    return detect.BoardObs(c, z, 35, 140, bool(cut), tuple(cut), c - 150, c + 150)
+    return detect.BoardObs(c, z, n_tags, 4 * n_tags, bool(cut), tuple(cut), c - 150, c + 150)
 
 
 def guide(target=None, **kw):
@@ -121,6 +121,20 @@ def test_bearing_target_corrects_sideways():
     assert s.kind == "correction" and s.text.startswith("Move the board to your right.")
     u = 640 - F * np.tan(np.radians(20))                 # + bearing = robot's left = image left
     assert feed(guide(t), [obs(u=u)] * 4)[0].kind == "good"
+
+
+def test_a_board_seen_at_a_steep_angle_is_asked_to_tilt_back():
+    """9 Nov trial: the head looks steeply down; a vertical board in full view read 8 of 35 tags and the tool fell
+    silent. Few tags with the board in view -> tilt it back to face the head (before distance corrections)."""
+    s = feed(guide(), [obs(z=1.19, n_tags=8)] * 4)
+    assert len(s) == 1 and s[0].kind == "correction"
+    assert s[0].text == "Tilt the board back. Face it to the robot's head."
+
+
+def test_few_tags_jitter_still_counts_as_resting():
+    """with few tags the centroid jitters by more than still_px; it must still be judged"""
+    seq = [obs(z=1.19, n_tags=8, u=640 + (9 if i % 2 else -9)) for i in range(6)]
+    assert len(feed(guide(), seq)) == 1
 
 
 def test_lost_board_prompt_once():

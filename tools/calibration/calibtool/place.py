@@ -33,6 +33,8 @@ from calibtool import protocol
 
 STILL_S = 1.0
 STILL_PX = 6.0
+FEW_TAGS = 20          # of 35: fewer readable tags with the board in view = seen too obliquely (9 Nov trial: 8)
+FEW_TAGS_STILL_PX = 25.0   # few tags make the centroid jitter; stillness is judged more loosely then
 LOST_S = 6.0
 REPEAT_S = 20.0
 TIMEOUT_S = 180.0
@@ -146,7 +148,8 @@ class PlacementGuide:
             return None
         self._lost_since, self._lost_said = None, False
         c = obs.centroid
-        if self._start is None or math.hypot(c[0] - self._start[1][0], c[1] - self._start[1][1]) > self.still_px:
+        tol = self.still_px if obs.n_tags >= FEW_TAGS else max(self.still_px, FEW_TAGS_STILL_PX)
+        if self._start is None or math.hypot(c[0] - self._start[1][0], c[1] - self._start[1][1]) > tol:
             self._start = (t, (float(c[0]), float(c[1])))
             self._spoken_at = None
             return None
@@ -179,6 +182,8 @@ class PlacementGuide:
             # by 30 cm"), so up/down says the minimum; sideways stays approximate
             amount = "At least" if side in ("top", "bottom") else "About"
             return "correction", f"{first} {amount} {move} centimetres."
+        if obs.n_tags < FEW_TAGS and not t.tilted:
+            return "correction", "Tilt the board back. Face it to the robot's head."
         lo, hi = t.accept
         z = obs.z
         if t.refuse_beyond_m is not None and z > t.refuse_beyond_m:
