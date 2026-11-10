@@ -21,6 +21,7 @@ CLI (on the robot): python -m calibtool.daemon {start|run|attach|stop|status} --
 [--trial]. start spawns `run` in its own session (setsid) and returns once the socket answers."""
 import argparse
 import fcntl
+import itertools
 import json
 import os
 import select
@@ -135,6 +136,11 @@ class Machine:
             st["phase"] = "PREFLIGHT"
         st["attached"] = False
         st["pid"] = os.getpid()
+        # the prompts of the dead run are history: a TUI must not take them for new ones, and the new run numbers its
+        # prompts after them (review 1: the TUI skips ids it has spoken, and a new run counting from 1 went unheard)
+        st["say_id_max"] = max([int(st.get("say_id_max") or 0)] + [int(x["id"]) for x in st.get("says") or ()
+                                                                    if x and x.get("id") is not None])
+        st["say"], st["says"], st["board"] = None, [], None
         store.event("resumed", t=clock(), phase_before=before, phase=st["phase"])
         m.save()
         return m
@@ -356,6 +362,10 @@ class Daemon:
         self._last_sample = None
         self._trial_started = False
         self.stop_flag = threading.Event()
+        # prompt ids continue after the ones a previous run of this session spoke (Machine.resume keeps the max)
+        self.ids = itertools.count(int(machine.state.get("say_id_max") or 0) + 1)
+        if trial is not None:
+            trial.use_ids(self.ids)
 
     def preflight_done(self, res):
         from calibtool import health, preflight as pf
@@ -444,6 +454,7 @@ class Daemon:
     def _say(self, s):
         d = s.as_dict()
         self.m.state["say"] = d
+        self.m.state["say_id_max"] = max(int(self.m.state.get("say_id_max") or 0), int(d["id"]))
         self.m.state["says"] = (list(self.m.state.get("says") or []) + [d])[-SAYS_KEEP:]
         self.m.store.event("say", t=s.t, say=d)
 

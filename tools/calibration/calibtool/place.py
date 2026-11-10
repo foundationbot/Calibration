@@ -424,6 +424,11 @@ class Trial:
                     continue
             self.i = min(len(self.records), len(self.targets)) - 1
 
+    def use_ids(self, ids):
+        """the prompt-id counter to number from (calibd's: ids stay unique across a restart, so a TUI that skips the
+        ids it has spoken keeps speaking); call before start()"""
+        self.ids = ids
+
     def _up(self):
         g = self.gravity
         if g is None:

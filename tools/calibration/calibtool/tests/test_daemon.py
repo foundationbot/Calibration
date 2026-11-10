@@ -360,3 +360,65 @@ def test_every_say_of_a_step_reaches_the_state_and_the_trial_line_is_current(tmp
 
 def test_step_period_is_fast_enough_for_the_guide():
     assert dm.STEP_S <= 0.15
+
+
+# ------------------------------------------------------------------ review fixes (9 Nov night)
+
+class SaidSpeaker:
+    def __init__(self):
+        self.said = []
+
+    def say(self, text):
+        self.said.append(text)
+
+
+def _trial_daemon(tmp_path, m, c, targets, to_obs=lambda det: None, timeout_s=3.0, **kw):
+    cap = cp.Capture(FakeSource(), 3, 0, clock=c)
+    cap.step()
+    cap.step()
+    tr = place.Trial([place.target(n) for n in targets], tmp_path / "trial.jsonl", timeout_s=timeout_s)
+    d = dm.Daemon(m, cap, detector=lambda pair: _done((None, None)), to_obs=to_obs, sampler=lambda: {}, trial=tr,
+                  clock=c, **kw)
+    return d, cap, tr
+
+
+def _run(d, cap, c, seconds, tui_=None, hb=True, dt=0.15):
+    for _ in range(int(round(seconds / dt))):
+        c.t += dt
+        if hb:
+            d.m.heartbeat()
+        cap.step()
+        cap.step()
+        d.step()
+        if tui_ is not None:
+            tui_.step(json.dumps(d.m.snapshot()))
+
+
+def test_a_restarted_calibd_keeps_talking_to_the_tui(tmp_path):
+    """review 1: after a calibd restart the old prompts stayed in state.json and the new trial numbered its prompts from
+    1 again, so the TUI (which skips ids it has spoken) never spoke again"""
+    from calibtool import tui
+    c = Clock()
+    m = machine(tmp_path, c)
+    d, cap, tr = _trial_daemon(tmp_path, m, c, ["1.6 m", "1.1 m", "far"])
+    d.preflight_done(pf.Result([], {}, {}))
+    sp = SaidSpeaker()
+    t = tui.Tui(lambda s: None, sp, out=lambda s: None)
+    m.heartbeat()
+    m.key("T")
+    _run(d, cap, c, 3.5, t)                     # intro 1, timeout: skip + intro 2
+    assert sp.said[-1].startswith("Placement 2 of 3.")
+    n_said = len(sp.said)
+    del d, m                                    # calibd dies
+    c.t += 30
+    m2 = dm.Machine.resume(dm.Store(tmp_path / "s1"), c)
+    assert m2.state["say"] is None and not m2.state["says"] and m2.state["board"] is None
+    d2, cap2, tr2 = _trial_daemon(tmp_path, m2, c, ["1.6 m", "1.1 m", "far"])
+    m2.heartbeat()
+    _run(d2, cap2, c, 0.3, t)
+    assert m2.phase == "HOLD"
+    m2.key("G")
+    _run(d2, cap2, c, 0.3, t)
+    assert len(sp.said) > n_said and sp.said[-1].startswith("Placement 2 of 3."), sp.said
+    old = [e["say"]["id"] for e in m2.store.events() if e["kind"] == "say"]
+    assert len(old) == len(set(old))            # prompt ids unique across both runs
