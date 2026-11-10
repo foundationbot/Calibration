@@ -110,3 +110,177 @@ def _project_jac_generic(model, intr, P):
         um = lensmodel.project(model, intr, (P - e).reshape(-1, 3)).reshape(uv.shape)
         dP[..., j] = (up - um) / (2 * h[..., None])
     return uv, dP, None
+
+
+# ---------------------------------------------------------------- rotations
+
+
+def expmap(r):
+    """rotation vectors (..., 3) -> matrices (..., 3, 3) (Rodrigues, stereofit.rotmat's formula)"""
+    r = np.asarray(r, float)
+    th = np.linalg.norm(r, axis=-1)
+    k = r / np.where(th > 1e-12, th, 1.0)[..., None]
+    K = np.zeros(r.shape[:-1] + (3, 3))
+    K[..., 0, 1], K[..., 0, 2], K[..., 1, 2] = -k[..., 2], k[..., 1], -k[..., 0]
+    K[..., 1, 0], K[..., 2, 0], K[..., 2, 1] = k[..., 2], -k[..., 1], k[..., 0]
+    s, c = np.sin(th)[..., None, None], np.cos(th)[..., None, None]
+    R = np.eye(3) + s * K + (1 - c) * (K @ K)
+    R[th < 1e-12] = np.eye(3)
+    return R
+
+
+def rotvec(R):
+    """matrices (n, 3, 3) -> rotation vectors (n, 3): rigmath.log_rot vectorised (no angle threshold: the
+    antisymmetric part under 90 deg, the symmetric part over it)"""
+    R = np.asarray(R, float).reshape(-1, 3, 3)
+    w = 0.5 * np.stack([R[:, 2, 1] - R[:, 1, 2], R[:, 0, 2] - R[:, 2, 0], R[:, 1, 0] - R[:, 0, 1]], -1)
+    s = np.linalg.norm(w, axis=1)
+    c = (np.trace(R, axis1=1, axis2=2) - 1.0) / 2.0
+    a = np.arctan2(s, c)
+    out = w * np.where(s > 0, a / np.where(s > 0, s, 1.0), 1.0)[:, None]
+    big = c <= 0.0
+    if big.any():
+        Rb = R[big]
+        B = (Rb + np.transpose(Rb, (0, 2, 1))) / 2.0 - c[big, None, None] * np.eye(3)
+        k = np.argmax(np.diagonal(B, axis1=1, axis2=2), axis=1)
+        n = B[np.arange(len(k)), :, k]
+        n /= np.linalg.norm(n, axis=1)[:, None]
+        sgn = np.where(np.einsum("ij,ij->i", n, w[big]) >= 0.0, 1.0, -1.0)
+        out[big] = (a[big] * sgn)[:, None] * n
+    return out
+
+
+def _skew(v):
+    """vectors (..., 3) -> cross-product matrices (..., 3, 3)"""
+    K = np.zeros(v.shape[:-1] + (3, 3))
+    K[..., 0, 1], K[..., 0, 2], K[..., 1, 2] = -v[..., 2], v[..., 1], -v[..., 0]
+    K[..., 1, 0], K[..., 2, 0], K[..., 2, 1] = v[..., 2], -v[..., 1], v[..., 0]
+    return K
+
+
+# ---------------------------------------------------------------- the problem
+
+
+class State:
+    """the solve's parameters: intr (2, ni), C (4, 4), board rotations R (n, 3, 3), translations t (n, 3), log scales
+    ls (n,)"""
+
+    def __init__(self, intr, C, R, t, ls):
+        self.intr, self.C, self.R, self.t, self.ls = intr, C, R, t, ls
+
+    @classmethod
+    def start(cls, intr, C, poses, ls=None):
+        poses = np.asarray(poses, float).reshape(-1, 6)
+        n = len(poses)
+        return cls(np.array([np.asarray(v, float) for v in intr]), np.array(C, float), expmap(poses[:, :3]),
+                   poses[:, 3:].copy(), np.zeros(n) if ls is None else np.asarray(ls, float).copy())
+
+    def poses(self):
+        return np.c_[rotvec(self.R), self.t]
+
+    def step(self, dg, dp, free_intr, free_C, scale):
+        """the state moved by the global step dg (intrinsics of both cameras, then the stereo pose's rotation and
+        translation) and the per-pair steps dp (n, 6|7: rotation, translation, log scale)"""
+        intr, C, i = self.intr, self.C, 0
+        if free_intr:
+            ni = intr.shape[1]
+            intr = intr + np.asarray(dg[:2 * ni]).reshape(2, ni)
+            i = 2 * ni
+        if free_C:
+            D = np.eye(4)
+            D[:3, :3], D[:3, 3] = expmap(dg[i:i + 3]), dg[i + 3:i + 6]
+            C = C @ D
+        R = expmap(dp[:, :3]) @ self.R
+        ls = self.ls + dp[:, 6] if scale else self.ls
+        return State(intr, C, R, self.t + dp[:, 3:6], ls)
+
+
+class Problem:
+    """the corners of a stereofit.Data packed per pair (n pairs x M slots, padded): residuals and Jacobian blocks"""
+
+    def __init__(self, data, model):
+        self.model, self.n, self.N = model, int(data.n), len(data.P)
+        order = np.argsort(data.pair, kind="stable")
+        pair = data.pair[order]
+        counts = np.bincount(pair, minlength=self.n)
+        self.M = M = max(int(counts.max()) if len(counts) else 1, 1)
+        start = np.r_[0, np.cumsum(counts)[:-1]]
+        idx = np.full((self.n, M), -1)
+        idx[pair, np.arange(len(order)) - start[pair]] = order
+        self.idx, self.valid = idx, idx >= 0
+        safe = np.where(self.valid, idx, 0)
+        self.P = np.where(self.valid[..., None], data.P[safe], 0.0)
+        self.uv = data.uv[safe]
+        self.cam1 = self.valid & (data.cam[safe] == 1)
+        self.cam0 = self.valid & (data.cam[safe] == 0)
+
+    def padded(self, per_corner):
+        """a per-corner bool (N,) -> (n, M), False in the padding"""
+        return self.valid & np.asarray(per_corner, bool)[np.where(self.valid, self.idx, 0)]
+
+    def residuals(self, st):
+        """residuals (N, 2) in the data's corner order, clamps included (stereofit.residuals)"""
+        r = self.linearise(st, False, False, False, self.valid, jac=False).reshape(self.n, self.M, 2)
+        out = np.empty((self.N, 2))
+        out[self.idx[self.valid]] = r[self.valid]
+        return out
+
+    def linearise(self, st, free_intr, free_C, scale, w, jac=True, pairs=None):
+        """residuals (n, 2M) times the weight w (n, M) and, with jac, the Jacobian: global block (n, 2M, G) (both
+        cameras' intrinsics if free_intr, then the stereo pose if free_C) and per-pair block (n, 2M, 6|7). pairs:
+        only these pairs (index array)"""
+        sel = slice(None) if pairs is None else pairs
+        P, uv, c0, c1 = self.P[sel], self.uv[sel], self.cam0[sel], self.cam1[sel]
+        R, t, ls, w = st.R[sel], st.t[sel], st.ls[sel], w[sel]
+        n, M = P.shape[:2]
+        Q = (P * np.exp(ls)[:, None, None]) @ np.transpose(R, (0, 2, 1))       # R (P e^ls)
+        Pc0 = Q + t[:, None, :]
+        Rc, tc = st.C[:3, :3], st.C[:3, 3]
+        Ci = np.linalg.inv(st.C)                                                # stereofit's camera-1 transform
+        Pc1 = Pc0 @ Ci[:3, :3].T + Ci[:3, 3]
+        Pc = np.where(c1[..., None], Pc1, Pc0)
+        ni = st.intr.shape[1]
+        r = np.zeros((n, M, 2))
+        dP = np.zeros((n, M, 2, 3)) if jac else None
+        dI = np.zeros((n, M, 2, ni)) if jac and free_intr else None
+        for c, m in ((0, c0), (1, c1)):
+            if not m.any():
+                continue
+            if jac:
+                u, dPc, dIc = project_jac(self.model, st.intr[c], Pc[m])
+                dP[m] = dPc
+                if free_intr:
+                    if dIc is None:
+                        raise NotImplementedError(f"free intrinsics need {'/'.join(KB_MODELS)}, not {self.model}")
+                    dI[m] = dIc
+            else:
+                u = lensmodel.project(self.model, st.intr[c], Pc[m])
+            r[m] = u - uv[m]
+        bad = ~np.isfinite(r)
+        r[bad] = 1e3
+        behind = Pc[..., 2] <= 1e-6
+        r[behind] = 1e3
+        ok = w[..., None] & ~bad & ~behind[..., None]                           # (n, M, 2): rows that count
+        r = np.where(w[..., None], r, 0.0)
+        if not jac:
+            return r.reshape(n, 2 * M)
+        dP = np.where(ok[..., None], dP, 0.0)
+        A = np.where(c1[..., None, None], Rc.T, np.eye(3))                      # d Pc / d Pc0
+        dPA = dP @ A                                                            # d uv / d Pc0
+        k = 6 + bool(scale)
+        Jp = np.empty((n, M, 2, k))
+        Jp[..., :3] = -dPA @ _skew(Q)                                           # R <- Exp(dr) R
+        Jp[..., 3:6] = dPA
+        if scale:
+            Jp[..., 6] = (dPA @ Q[..., None])[..., 0]
+        G = 2 * ni * bool(free_intr) + 6 * bool(free_C)
+        Jg = np.zeros((n, M, 2, G))
+        if free_intr:
+            dI = np.where(ok[..., None], dI, 0.0)
+            Jg[..., :ni] = np.where(c0[..., None, None], dI, 0.0)
+            Jg[..., ni:2 * ni] = np.where(c1[..., None, None], dI, 0.0)
+        if free_C:
+            i = 2 * ni * bool(free_intr)
+            JC = np.concatenate([dP @ _skew(Pc1), -dP], axis=-1)                # C <- C [Exp(dr) | dt]
+            Jg[..., i:i + 6] = np.where(c1[..., None, None], JC, 0.0)
+        return r.reshape(n, 2 * M), Jg.reshape(n, 2 * M, G), Jp.reshape(n, 2 * M, k)

@@ -57,3 +57,197 @@ def test_projection_and_its_derivatives_match_lensmodel_and_finite_differences(m
                     for j in range(len(intr))], axis=-1)
     assert dI.shape == (len(P), 2, len(intr))
     assert np.abs(dI - fdI).max() < 1e-5 * np.abs(fdI).max()
+
+
+# ---------------------------------------------------------------- the stereo problem
+
+
+def _scene(seed=4, n_holds=9, noise=0.3, C=None):
+    d = S.views([S.I0, S.I1], S.C_TRUE if C is None else C, n_holds, seed=seed, noise=noise)
+    data = sf.Data(d, S.BOARD)
+    poses, ok = sf.pnp_poses(data, "KB4T", [S.I0, S.I1], S.C_TRUE)
+    assert ok.all()
+    return data, poses
+
+
+def _start(rng, data, poses):
+    """a perturbed calibration and poses, to evaluate the residuals away from their minimum"""
+    intr = [S.I0 * (1 + rng.normal(0, 1e-3, 10)), S.I1 * (1 + rng.normal(0, 1e-3, 10))]
+    C = S.C_TRUE @ np.r_[np.c_[sf.rotmat(rng.normal(0, 2e-3, 3))[0], rng.normal(0, 1e-3, 3)], [[0, 0, 0, 1]]]
+    return intr, C, poses + rng.normal(0, 1e-3, poses.shape), rng.normal(0, 1e-2, data.n)
+
+
+def test_residuals_are_stereofits_including_the_clamps():
+    data, poses = _scene()
+    rng = np.random.default_rng(1)
+    intr, C, poses, ls = _start(rng, data, poses)
+    poses[2, 5] = -1.0                                               # one board behind both cameras: clamped
+    prob = solver.Problem(data, "KB4T")
+    st = solver.State.start(intr, C, poses, ls)
+    x = sf._pack(intr, poses, ls, True, True)
+    want = sf.residuals(np.r_[x[:20], np.zeros(6), x[20:]], data, "KB4T", True, True, True, intr, C).reshape(-1, 2)
+    got = prob.residuals(st)
+    assert (want[data.pair == 2] == 1e3).all()
+    assert np.abs(got - want).max() < 1e-9
+
+
+@pytest.mark.parametrize("free_intr,free_C,scale", [(True, True, True), (True, True, False), (False, True, False),
+                                                    (False, False, True)])
+def test_jacobian_is_finite_differences_of_the_local_updates(free_intr, free_C, scale):
+    data, poses = _scene()
+    rng = np.random.default_rng(2)
+    intr, C, poses, ls = _start(rng, data, poses)
+    poses[3, 5] = -1.0                                               # clamped rows: zero Jacobian
+    prob = solver.Problem(data, "KB4T")
+    st = solver.State.start(intr, C, poses, ls if scale else None)
+    w = prob.valid.copy()
+    r, Jg, Jp = prob.linearise(st, free_intr, free_C, scale, w)
+    G, k = Jg.shape[-1], Jp.shape[-1]
+    assert G == 20 * free_intr + 6 * free_C and k == 6 + scale
+    for j in range(G):
+        e = np.zeros(G)
+        h = 1e-6 * (abs(np.r_[intr[0], intr[1]][j]) if j < 20 * free_intr else 1.0)
+        e[j] = h
+        rp = prob.linearise(st.step(e, np.zeros((data.n, k)), free_intr, free_C, scale), free_intr, free_C, scale, w,
+                            jac=False)
+        rm_ = prob.linearise(st.step(-e, np.zeros((data.n, k)), free_intr, free_C, scale), free_intr, free_C, scale,
+                             w, jac=False)
+        fd = (rp - rm_) / (2 * h)
+        assert np.abs(Jg[..., j] - fd).max() <= 1e-5 * max(1.0, np.abs(fd).max()), j
+    for j in range(k):
+        e = np.zeros((data.n, k))
+        e[:, j] = 1e-6
+        rp = prob.linearise(st.step(np.zeros(G), e, free_intr, free_C, scale), free_intr, free_C, scale, w, jac=False)
+        rm_ = prob.linearise(st.step(np.zeros(G), -e, free_intr, free_C, scale), free_intr, free_C, scale, w,
+                             jac=False)
+        fd = (rp - rm_) / 2e-6
+        assert np.abs(Jp[..., j] - fd).max() <= 1e-5 * max(1.0, np.abs(fd).max()), j
+    assert (Jp[3] == 0).all() and (Jg[3] == 0).all()
+
+
+def test_rotvec_is_rigmaths_log_at_every_angle():
+    rm = importlib.import_module("rigmath")
+    rng = np.random.default_rng(3)
+    ax = rng.normal(size=(50, 3))
+    ax /= np.linalg.norm(ax, axis=1)[:, None]
+    ang = np.r_[0.0, 1e-9, rng.uniform(0, np.pi, 44), np.pi - 1e-7, np.pi, 1.0, 2.0]
+    R = sf.rotmat(ax * ang[:, None])
+    got = solver.rotvec(R)
+    assert np.abs(sf.rotmat(got) - R).max() < 1e-12
+    assert np.abs(got - np.array([rm.log_rot(x) for x in R]))[ang < 3].max() < 1e-12
+
+
+# ---------------------------------------------------------------- the solve against scipy, tight
+
+
+def _tight(monkeypatch):
+    """stereofit.solve with scipy run to ftol = xtol = gtol = 1e-15: the reference"""
+    import functools
+    monkeypatch.setattr(sf, "least_squares", functools.partial(sf.least_squares, ftol=1e-15, xtol=1e-15, gtol=1e-15))
+
+
+def _grid_diff(intr_a, C_a, intr_b, C_b, model="KB4T"):
+    """max pixel difference per camera of camera-0-frame points on a 32 px grid of each image at z 0.5 / 1 / 2 m"""
+    W, H = 1280, 800
+    g = np.stack(np.meshgrid(np.arange(0, W, 32.0), np.arange(0, H, 32.0)), -1).reshape(-1, 2)
+    out = [0.0, 0.0]
+    for c in (0, 1):
+        ray = lensmodel.unproject(model, intr_a[c], g)
+        ray = ray[ray[:, 2] > 0.05]
+        for z in (0.5, 1.0, 2.0):
+            Pc = ray * (z / ray[:, 2:3])
+            P0 = Pc if c == 0 else Pc @ C_a[:3, :3].T + C_a[:3, 3]
+            for cc in (0, 1):
+                pa = P0 if cc == 0 else (P0 - C_a[:3, 3]) @ C_a[:3, :3]
+                pb = P0 if cc == 0 else (P0 - C_b[:3, 3]) @ C_b[:3, :3]
+                ua = lensmodel.project(model, intr_a[cc], pa)
+                ub = lensmodel.project(model, intr_b[cc], pb)
+                m = (pa[:, 2] > 0.05) & (ua[:, 0] >= 0) & (ua[:, 0] < W) & (ua[:, 1] >= 0) & (ua[:, 1] < H)
+                out[cc] = max(out[cc], float(np.abs(ub[m] - ua[m]).max()))
+    return out
+
+
+def _pose_diff(Ca, Cb):
+    rm = importlib.import_module("rigmath")
+    return (1e3 * np.linalg.norm(Ca[:3, 3] - Cb[:3, 3]),
+            float(np.degrees(np.linalg.norm(rm.log_rot(Ca[:3, :3] @ Cb[:3, :3].T)))))
+
+
+@pytest.fixture(scope="module")
+def presolved():
+    """fit_from_nominal's state just before fit_converged: the PnP start and the stereo-pose presolve (scipy)"""
+    data = sf.Data(S.fit_sweep(), S.BOARD)
+    intr0, C0 = sf.nominal_start(S.rig12(), "KB4T")
+    data, poses, _ = sf._pnp_kept(data, "KB4T", intr0, C0, lambda *a: None)
+    pre = sf.solve(data, "KB4T", intr0, C0, poses, free_intr=False, free_C=True, trim_px=np.inf, max_nfev=2000)
+    return data, intr0, pre
+
+
+def test_the_full_fit_reaches_scipys_tight_optimum(presolved, monkeypatch):
+    data, intr0, pre = presolved
+    fast = solver.solve(data, "KB4T", intr0, pre["C"], pre["poses"], max_nfev=2000)
+    _tight(monkeypatch)
+    ref = sf.solve(data, "KB4T", intr0, pre["C"], pre["poses"], max_nfev=20000)
+    assert fast["success"] and fast["nfev"] <= 4 * 2000
+    assert np.array_equal(fast["kept"], ref["kept"])
+    assert max(_grid_diff(ref["intr"], ref["C"], fast["intr"], fast["C"])) < 2e-3
+    dt, dr = _pose_diff(ref["C"], fast["C"])
+    assert dt < 1e-3 and dr < 1e-4
+    assert np.abs(fast["res"] - ref["res"]).max() < 1e-3
+    assert set(fast) == set(ref)
+    assert fast["poses"].shape == ref["poses"].shape and np.abs(fast["log_scale"]).max() == 0
+
+
+def test_the_stereo_pose_presolve_matches_scipy(monkeypatch):
+    data = sf.Data(S.fit_sweep(), S.BOARD)
+    intr0, C0 = sf.nominal_start(S.rig12(), "KB4T")
+    data, poses, _ = sf._pnp_kept(data, "KB4T", intr0, C0, lambda *a: None)
+    fast = solver.solve(data, "KB4T", intr0, C0, poses, free_intr=False, free_C=True, trim_px=np.inf, max_nfev=2000)
+    _tight(monkeypatch)
+    ref = sf.solve(data, "KB4T", intr0, C0, poses, free_intr=False, free_C=True, trim_px=np.inf, max_nfev=20000)
+    assert fast["success"] and fast["kept"].all()
+    dt, dr = _pose_diff(ref["C"], fast["C"])
+    assert dt < 1e-3 and dr < 1e-4
+    assert all(np.array_equal(a, b) for a, b in zip(fast["intr"], intr0))
+
+
+def test_a_cap_too_small_to_converge_is_not_success(presolved):
+    data, intr0, pre = presolved
+    r = solver.solve(data, "KB4T", intr0, pre["C"], pre["poses"], max_nfev=2, rounds=1)
+    assert not r["success"] and r["nfev"] <= 2
+
+
+@pytest.mark.parametrize("scale", [False, True])
+def test_with_the_camera_fixed_each_pair_matches_scipy(monkeypatch, scale):
+    data = sf.Data(S.holdout_sweep(), S.BOARD)
+    intr, C = [S.I0, S.I1], S.C_TRUE
+    poses, ok = sf.pnp_poses(data, "KB4T", intr, C)
+    C = C.copy()
+    C[:3, 3] *= 1.01                                         # board scales away from 1
+    fast = solver.solve(data, "KB4T", intr, C, poses, free_intr=False, free_C=False, scale=scale, max_nfev=2000)
+    _tight(monkeypatch)
+    ref = sf.solve(data, "KB4T", intr, C, poses, free_intr=False, free_C=False, scale=scale, max_nfev=20000)
+    assert fast["success"] and np.array_equal(fast["kept"], ref["kept"])
+    assert np.abs(fast["poses"][:, 3:] - ref["poses"][:, 3:]).max() < 1e-7
+    assert np.abs(sf.rotmat(fast["poses"][:, :3]) - sf.rotmat(ref["poses"][:, :3])).max() < 1e-7
+    assert np.abs(fast["log_scale"] - ref["log_scale"]).max() < 1e-8
+    assert np.array_equal(fast["C"], C)
+
+
+def test_radtan_with_the_camera_fixed_and_refused_with_free_intrinsics(monkeypatch):
+    from calibtool import livecfg
+    data = sf.Data(S.holdout_sweep(), S.BOARD)
+    rt = [np.r_[565.0, 564.0, 642.0, 385.0, -0.01, 0.002, 0.0005, -0.0003],
+          np.r_[567.0, 566.0, 642.5, 383.0, -0.012, 0.003, 0.0001, 0.0002]]
+    with livecfg.radtan_scope():
+        poses, ok = sf.pnp_poses(data, "RADTAN", rt, S.C_TRUE)
+        d = data.select(ok)
+        fast = solver.solve(d, "RADTAN", rt, S.C_TRUE, poses[ok], free_intr=False, free_C=False, scale=True,
+                            max_nfev=2000)
+        _tight(monkeypatch)
+        ref = sf.solve(d, "RADTAN", rt, S.C_TRUE, poses[ok], free_intr=False, free_C=False, scale=True,
+                       max_nfev=20000)
+        with pytest.raises(NotImplementedError):
+            solver.solve(d, "RADTAN", rt, S.C_TRUE, poses[ok], free_intr=True)
+    assert fast["success"] and np.array_equal(fast["kept"], ref["kept"])
+    assert np.abs(fast["log_scale"] - ref["log_scale"]).max() < 1e-7
