@@ -3,6 +3,7 @@ home, nothing moves): the tool watches the board continuously but speaks only on
 thing at a time ("Good. Step back." or one correction), names directions from the operator's side, and never says
 "hold"."""
 import json
+import re
 
 import pytest
 
@@ -48,11 +49,12 @@ def test_silent_while_carried_then_one_say_after_a_second_still():
     assert g.done
 
 
-def test_still_needs_a_full_second():
+def test_still_needs_0_4_s():
+    """9 Nov trial: movement and rest were noticed too slowly (1.0 s, then 0.6 s)"""
     g = guide()
     assert g.update(0.0, obs()) is None
-    assert g.update(0.5, obs()) is None
-    assert g.update(1.0, obs()) is not None
+    assert g.update(0.3, obs()) is None
+    assert g.update(0.4, obs()) is not None
 
 
 def test_one_correction_then_quiet_until_it_moves_and_stops_again():
@@ -137,15 +139,16 @@ def test_few_tags_jitter_still_counts_as_resting():
     assert len(feed(guide(), seq)) == 1
 
 
-def test_feedback_good_when_the_problem_changes_better_when_it_shrinks_not_yet_otherwise():
-    """9 Nov trial: the operator wanted positive feedback, and the same sentence repeated felt like parroting"""
+def test_feedback_good_when_the_problem_changes_remaining_amount_when_it_shrinks_not_yet_otherwise():
+    """9 Nov trial: the operator wanted positive feedback, and the same sentence repeated felt like parroting; after
+    a partial move the tool says what is left ("Not yet. 40 more centimetres closer.")"""
     g = guide()                                                     # target 1.1 m
     s1 = feed(g, [obs(z=1.1, v=40, cut=("top",))] * 4)[0].text       # cut at the top
     assert s1.startswith("Lower the board.")
     s2 = feed(g, [obs(z=1.6)] * 4, t0=10.0)[0].text                  # moved: no longer cut, but too far
     assert s2.startswith("Good. Bring the board closer.")
-    s3 = feed(g, [obs(z=1.45)] * 4, t0=20.0)[0].text                 # moved closer, still too far
-    assert s3.startswith("Better. Keep going. Bring the board closer.")
+    s3 = feed(g, [obs(z=1.45)] * 4, t0=20.0)[0].text                 # moved closer, still too far: what is left
+    assert s3 == "Not yet. 40 more centimetres closer."
     s4 = feed(g, [obs(z=1.5, u=700)] * 4, t0=30.0)[0].text           # moved, but not closer
     assert s4.startswith("Not yet. Bring the board closer.")
     s5 = feed(g, [obs(z=1.1, u=640)] * 4, t0=40.0)[0]
@@ -199,6 +202,139 @@ def test_default_placements():
     assert place.target("far").distance_m == protocol.FAR_ASK_M
 
 
+# ------------------------------------------------------------------ with gravity: height and floor distance
+# 9 Nov trial (phantom10): the head camera is ~1.5 m up and looks steeply down. A board at the robot's feet is already
+# ~1.1 m from the camera; the near placements need it high near the head, which the chair-shaped stand cannot reach
+# (it goes up ~30 cm or down ~40 cm from its usual height, in coarse steps).
+
+PITCH = 50.0                                        # camera pitched 50 deg below the horizon
+STAND = place.Stand(raise_max_m=0.30, lower_max_m=0.40)
+
+
+def up_cam(pitch=PITCH):
+    """'up' in camera coordinates (x right, y down, z forward)"""
+    a = np.radians(pitch)
+    return np.array([0.0, -np.cos(a), -np.sin(a)])
+
+
+def at(dh, dxy, pitch=PITCH, lateral=0.0, n_tags=35, cut=()):
+    """the board centre dh above the camera (m, - below) and dxy in front of it along the floor, as the camera sees
+    it: 3-D centre, depth, and the centroid in the nominal equidistant camera"""
+    a = np.radians(pitch)
+    p = np.array([lateral, -dh * np.cos(a) - dxy * np.sin(a), dxy * np.cos(a) - dh * np.sin(a)])
+    rho = float(np.hypot(p[0], p[1]))
+    k = F * np.arctan2(rho, p[2]) / rho if rho > 0 else 0.0
+    c = np.array([(W - 1) / 2 + k * p[0], (H - 1) / 2 + k * p[1]])
+    return detect.BoardObs(c, float(p[2]), n_tags, 4 * n_tags, bool(cut), tuple(cut), c - 150, c + 150, p)
+
+
+def gguide(name, **kw):
+    return guide(place.target(name), up=up_cam(), stand=STAND, **kw)
+
+
+AT_FEET = (-1.1, 0.45)                              # board centre 0.4 m above the floor, 45 cm in front of the camera
+
+
+def test_a_board_at_the_feet_is_already_in_the_1_1_m_band():
+    o = at(*AT_FEET)
+    assert protocol.band_of(o.z)[0] == 1.1
+    s = feed(gguide("1.1 m"), [o] * 4)
+    assert [x.text for x in s] == ["Good. That one is done. Step back."]
+
+
+@pytest.mark.parametrize("name", ["0.75 m", "0.5 m", "tilted"])
+def test_a_placement_the_stand_cannot_reach_is_skipped_at_once(name):
+    """at the feet the board is 1.1 m below the camera; raised by the stand's 30 cm it is still 0.8 m below, too low
+    for any board 0.75 m from the camera: say so and finish, no 180 s wait"""
+    g = gguide(name)
+    s = feed(g, [at(*AT_FEET)] * 4)
+    assert [(x.kind, x.text) for x in s] == [("unreachable", "This one is out of reach. Skipping.")]
+    assert g.done and g.result == "unreachable"
+
+
+def test_a_board_too_low_but_within_the_stands_reach_is_raised_first():
+    g = gguide("0.75 m")
+    s1 = feed(g, [at(-0.9, 0.9)] * 4)[0]
+    assert (s1.kind, s1.text) == ("correction", "Raise the board. At least 20 centimetres.")
+    s2 = feed(g, [at(-0.6, 0.9)] * 4, t0=10.0)[0].text            # raised 30 cm (one stand step)
+    m = re.fullmatch(r"Good\. Move the board (\d+) centimetres (closer|further back)\. Keep the same height\.", s2)
+    assert m, s2
+    n = int(m.group(1)) / 100.0 * (1 if m.group(2) == "closer" else -1)
+    s3 = feed(g, [at(-0.6, 0.9 - n)] * 4, t0=20.0)
+    assert [x.kind for x in s3] == ["good"]
+
+
+def test_a_far_board_too_high_to_be_seen_at_that_distance_is_lowered():
+    """the camera looks down 50 deg: 1.8 m away, a board only 0.6 m below the camera would sit ~34 deg above the
+    optical axis, at the image's top edge; lowered ~12 cm it is within 30 deg"""
+    s = feed(gguide("far"), [at(-0.6, 0.9)] * 4)[0]
+    assert (s.kind, s.text) == ("correction", "Lower the board. At least 20 centimetres.")
+
+
+@pytest.mark.parametrize("name,dh,dxy", [("1.6 m", -1.1, 0.45), ("1.1 m", -0.6, 2.0), ("far", -0.9, 1.2),
+                                          ("0.75 m", -0.4, 1.7), ("1.1 m", -0.7, 0.3)])
+def test_a_horizontal_correction_keeps_the_height_and_lands_in_the_band(name, dh, dxy):
+    g = gguide(name)
+    s = feed(g, [at(dh, dxy)] * 4)[0].text
+    m = re.fullmatch(r"Move the board (\d+) centimetres (closer|further back)\. Keep the same height\.", s)
+    assert m, s
+    n = int(m.group(1)) / 100.0 * (1 if m.group(2) == "closer" else -1)
+    s2 = feed(g, [at(dh, dxy - n)] * 4, t0=10.0)
+    assert [x.kind for x in s2] == ["good"], [x.text for x in s2]
+
+
+def test_partial_progress_says_what_is_left():
+    """9 Nov trial: after 'move 90 cm closer' and a 60 cm move, say 'Not yet. 30 more centimetres closer.'"""
+    a = np.radians(PITCH)
+    x = (0.75 - 0.4 * np.sin(a)) / np.cos(a)                       # 0.4 m below the camera: depth 0.75 m here
+    g = gguide("0.75 m")
+    s1 = feed(g, [at(-0.4, x + 0.9)] * 4)[0].text
+    assert s1 == "Move the board 90 centimetres closer. Keep the same height."
+    s2 = feed(g, [at(-0.4, x + 0.3)] * 4, t0=10.0)[0].text         # moved 60 cm closer
+    assert s2 == "Not yet. 30 more centimetres closer."
+    s3 = feed(g, [at(-0.4, x + 0.4)] * 4, t0=20.0)[0].text         # moved, but back the wrong way
+    assert s3 == "Not yet. Move the board 40 centimetres closer. Keep the same height."
+    s4 = feed(g, [at(-0.4, x)] * 4, t0=30.0)[0]
+    assert s4.kind == "good" and s4.text == "Good. That one is done. Step back."
+
+
+def test_partial_progress_wording_for_every_direction():
+    g = guide()
+    feed(g, [obs(u=100, cut=("left",))] * 4)                        # cut on the left: move it to your left
+    s = feed(g, [obs(u=40, cut=("left",))] * 4, t0=10.0)            # it went the wrong way: not smaller
+    assert s[0].text.startswith("Not yet. Move the board to your left.")
+    g = guide()
+    feed(g, [obs(u=20, cut=("left",))] * 4)
+    s = feed(g, [obs(u=60, cut=("left",))] * 4, t0=10.0)            # smaller
+    assert re.fullmatch(r"Not yet\. \d+ more centimetres to your left\.", s[0].text), s[0].text
+    g = gguide("0.75 m")
+    feed(g, [at(-1.0, 0.6)] * 4)                                    # too low: raise
+    s = feed(g, [at(-0.85, 0.6)] * 4, t0=10.0)
+    assert re.fullmatch(r"Not yet\. \d+ more centimetres higher\.", s[0].text), s[0].text
+    g = guide()
+    feed(g, [obs(v=40, cut=("top",))] * 4)
+    s = feed(g, [obs(v=4, cut=("top",))] * 4, t0=10.0)
+    assert s[0].text.startswith("Not yet. Lower the board.")
+
+
+def test_a_height_change_counts_as_movement():
+    """a board raised or lowered on the stand: centroid and distance can stay put, the height does not"""
+    o1 = at(-0.6, 1.0)
+    o2 = at(-0.6, 1.0)
+    o2.p = o1.p + 0.06 * up_cam()                                   # 6 cm higher, same centroid and depth
+    g = gguide("1.1 m")
+    assert g.update(0.0, o1) is None
+    assert g.update(0.3, o2) is None                                # moved: the stillness starts again
+    assert g.update(0.45, o2) is None                               # 0.45 s after the first look, 0.15 s still
+    assert g.update(0.75, o2) is not None
+
+
+def test_without_gravity_the_guide_falls_back_to_the_camera_distance():
+    g = guide(place.target("1.6 m"), up=lambda: None, stand=STAND)
+    s = feed(g, [at(*AT_FEET)] * 4)[0].text
+    assert s.startswith("Move the board back. About ")
+
+
 # ------------------------------------------------------------------ the trial
 
 class Clock:
@@ -220,7 +356,7 @@ def test_trial_logs_seconds_and_success(tmp_path):
         t += 0.5
         tr.update(t, o)
     says = []
-    for _ in range(4):
+    for _ in range(3):
         t += 0.5
         s = tr.update(t, obs(z=0.52))
         says += s
@@ -259,3 +395,65 @@ def test_a_trial_resumes_after_the_logged_placements(tmp_path):
     assert s.kind == "intro" and s.text.startswith("Placement 2 of 3")
     assert [r["result"] for r in tr2.records] == ["unreachable"]
     assert tr2.state()["index"] == 2
+
+
+def test_an_unreachable_placement_is_logged_and_the_trial_moves_on_at_once(tmp_path):
+    log = tmp_path / "trial.jsonl"
+    tr = place.Trial([place.target("0.75 m"), place.target("1.1 m")], log, focal=F, size=(W, H),
+                     gravity=lambda: up_cam(), stand=STAND)
+    tr.start(0.0)
+    says = []
+    t = 0.0
+    for _ in range(8):
+        t += 0.15
+        says += tr.update(t, at(*AT_FEET))
+    assert [s.text for s in says][:2] == ["This one is out of reach. Skipping.",
+                                          "Placement 2 of 2. Board 1.1 metres in front of the robot."]
+    rec = [json.loads(x) for x in log.read_text().splitlines()]
+    assert rec[0]["result"] == "unreachable" and rec[0]["seconds"] < 2.0
+
+
+def test_a_timeout_says_it_is_skipping(tmp_path):
+    tr = place.Trial([place.target("1.6 m"), place.target("1.1 m")], tmp_path / "t.jsonl", timeout_s=180.0, focal=F,
+                     size=(W, H))
+    tr.start(0.0)
+    assert tr.update(100.0, None) == []
+    assert [s.kind for s in tr.update(179.0, None)] == ["lost"]
+    says = tr.update(180.5, None)
+    assert [(s.kind, s.text) for s in says] == [("skip", "Skipping this one."),
+                                                ("intro", "Placement 2 of 2. Board 1.1 metres in front of the robot.")]
+    assert tr.records[-1]["result"] == "timeout"
+
+
+def test_the_trial_state_names_the_current_placement(tmp_path):
+    """9 Nov trial: a stale 'placement 2 of 6' line misled the operator and the lead"""
+    log = tmp_path / "trial.jsonl"
+    targets = [place.target("0.5 m"), place.target("1.1 m"), place.target("far")]
+    tr = place.Trial(targets, log, focal=F, size=(W, H))
+    st = tr.state()
+    assert (st["started"], st["index"], st["target"]) == (False, 1, "0.5 m")
+    tr.start(0.0)
+    tr.update(180.5, None)                                          # timeout: placement 2 now
+    st = tr.state(181.0)
+    assert (st["started"], st["index"], st["of"], st["target"]) == (True, 2, 3, "1.1 m")
+    assert st["since_intro_s"] == pytest.approx(0.5) and st["timeout_s"] == 180.0
+    tr2 = place.Trial(targets, log, focal=F, size=(W, H))            # restarted calibd, not started yet
+    st = tr2.state()
+    assert (st["started"], st["index"], st["target"]) == (False, 2, "1.1 m")
+
+
+def test_the_trial_state_carries_gravity_and_the_boards_height(tmp_path):
+    class G:
+        def up(self):
+            return up_cam()
+
+        def status(self):
+            return {"ok": True, "pitch_down_deg": 50.0, "note": "fake"}
+    tr = place.Trial([place.target("1.1 m"), place.target("far")], tmp_path / "t.jsonl", focal=F, size=(W, H),
+                     gravity=G(), stand=STAND)
+    tr.start(0.0)
+    tr.update(0.15, at(-0.6, 2.0))
+    st = tr.state(0.15)
+    json.dumps(st)
+    assert st["gravity"]["pitch_down_deg"] == 50.0
+    assert st["board"]["dh_m"] == pytest.approx(-0.6, abs=1e-3) and st["board"]["dxy_m"] == pytest.approx(2.0, abs=1e-3)
