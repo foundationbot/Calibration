@@ -202,3 +202,18 @@ def test_the_producer_state_survives_a_restart(tmp_path):
     assert p2.changed and p2.spec.size() == (960, 600, 25)
     p2.restore()
     assert k.args[k.args.index("--width") + 1] == "960"
+
+
+def test_an_attached_recorder_writes_each_command_as_it_happens(tmp_path):
+    r = sc.Recorder(dry_run=True)
+    r.add("motors", ["dma_cmd_client", "enable-motors"])
+    r.attach(tmp_path / "commands.txt")
+    r.add("neck", ["dma_motor_motion", "NeckPitch=1,NeckYaw=2"])
+    lines = (tmp_path / "commands.txt").read_text().splitlines()
+    assert lines[0].startswith("# DRY RUN") and lines[1:] == ["[motors] dma_cmd_client enable-motors",
+                                                             "[neck] dma_motor_motion NeckPitch=1,NeckYaw=2"]
+    again = sc.Recorder(dry_run=True)                # a restarted calibd appends after what the crashed one wrote
+    again.attach(tmp_path / "commands.txt")
+    again.note("calibd restarted")
+    lines = (tmp_path / "commands.txt").read_text().splitlines()
+    assert len([x for x in lines if x.startswith("# DRY RUN")]) == 1 and lines[-1] == "# calibd restarted"

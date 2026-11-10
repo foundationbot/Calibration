@@ -33,12 +33,31 @@ class Recorder:
     def __init__(self, dry_run=False):
         self.dry_run = dry_run
         self.entries = []           # (source, argv or None, input or None, note or None)
+        self.path = None
+
+    def attach(self, path):
+        """write every entry to path as it is added (a crash loses nothing); an existing file is appended to"""
+        self.path = Path(path)
+        new = not self.path.is_file()
+        with open(self.path, "a") as f:
+            if new:
+                f.write(self._head() + "\n")
+            for ln in self._lines(self.entries):
+                f.write(ln + "\n")
+        return self.path
+
+    def _append(self, entry):
+        self.entries.append(entry)
+        if self.path is not None:
+            with open(self.path, "a") as f:
+                f.write(self._lines([entry])[0] + "\n")
+                f.flush()
 
     def add(self, source, argv, input=None):
-        self.entries.append((str(source), [str(a) for a in argv], input, None))
+        self._append((str(source), [str(a) for a in argv], input, None))
 
     def note(self, text, source="session"):
-        self.entries.append((str(source), None, None, str(text)))
+        self._append((str(source), None, None, str(text)))
 
     def hook(self, source):
         """a log callable for deploy.Remote(log=...)"""
@@ -55,8 +74,12 @@ class Recorder:
         return [a for s, a, _, _ in self.entries if a is not None and (source is None or s == source)]
 
     def lines(self) -> list:
+        return self._lines(self.entries)
+
+    @staticmethod
+    def _lines(entries) -> list:
         out = []
-        for s, a, inp, note in self.entries:
+        for s, a, inp, note in entries:
             if a is None:
                 out.append(f"# {note}")
                 continue
@@ -66,10 +89,12 @@ class Recorder:
             out.append(ln)
         return out
 
-    def text(self) -> str:
-        head = ("# DRY RUN: nothing below was sent to the robot; these are the commands the session would send, in "
+    def _head(self) -> str:
+        return ("# DRY RUN: nothing below was sent to the robot; these are the commands the session would send, in "
                 "order" if self.dry_run else "# the commands this session sent to the robot, in order")
-        return "\n".join([head] + self.lines()) + "\n"
+
+    def text(self) -> str:
+        return "\n".join([self._head()] + self.lines()) + "\n"
 
     def write(self, path):
         p = Path(path)
