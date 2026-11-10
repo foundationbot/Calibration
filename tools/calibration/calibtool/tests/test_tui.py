@@ -103,7 +103,15 @@ def test_spd_say_argv():
     calls = []
     sp = tui.SpdSay(path="/usr/bin/spd-say", run=lambda argv, **kw: calls.append(argv))
     sp.say("Good. Step back.")
-    assert calls == [["/usr/bin/spd-say", "-w", "-l", "en-us", "-t", "male1", "-r", "-85", "Good. Step back."]]
+    assert calls == [["/usr/bin/spd-say", "-w", "-x", "-l", "en-us", "-t", "male1", "-r", "-85",
+                      "<speak>Good. <break time='600ms'/> Step <break time='300ms'/> back. <break time='600ms'/></speak>"]]
+
+
+def test_ssml_pauses_escape_and_count():
+    s = tui.ssml_with_pauses("Lower the board. About 10 cm & more", 250, 700)
+    assert s.startswith("<speak>") and s.endswith("</speak>")
+    assert s.count("<break time='250ms'/>") == 7 and s.count("<break time='700ms'/>") == 1
+    assert "&amp;" in s and " & " not in s
 
 
 def test_silent_speaker():

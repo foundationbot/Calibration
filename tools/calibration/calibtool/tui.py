@@ -73,13 +73,28 @@ def render(state, width=100) -> str:
     return "\n".join(L)
 
 
+def ssml_with_pauses(text, word_ms=300, sentence_ms=600) -> str:
+    """the text as SSML with a pause after every word and a longer one after every sentence (9 Nov trial: the
+    operator asked for more pause between words; spd-say has no word-gap option, but -x takes SSML breaks)"""
+    from xml.sax.saxutils import escape
+    out = []
+    for w in text.split():
+        end = w[-1] in ".!?"
+        out.append(escape(w) + f" <break time='{sentence_ms if end else word_ms}ms'/>")
+    return "<speak>" + " ".join(out) + "</speak>"
+
+
 class SpdSay:
-    def __init__(self, path="/usr/bin/spd-say", run=subprocess.run, rate=-85, lang="en-us", voice="male1"):
-        # 9 Nov trial: rate -10 was too fast and unclear; the operator asked for slower twice (-45, -70 still fast)
+    def __init__(self, path="/usr/bin/spd-say", run=subprocess.run, rate=-85, lang="en-us", voice="male1",
+                 word_ms=300, sentence_ms=600):
+        # 9 Nov trial: rate -10 was too fast and unclear; the operator asked for slower twice (-45, -70 still fast),
+        # then for pauses between words
         self.path, self.run, self.rate, self.lang, self.voice = path, run, rate, lang, voice
+        self.word_ms, self.sentence_ms = word_ms, sentence_ms
 
     def say(self, text):
-        self.run([self.path, "-w", "-l", self.lang, "-t", self.voice, "-r", str(self.rate), text], timeout=60)
+        self.run([self.path, "-w", "-x", "-l", self.lang, "-t", self.voice, "-r", str(self.rate),
+                  ssml_with_pauses(text, self.word_ms, self.sentence_ms)], timeout=90)
 
 
 class Silent:
