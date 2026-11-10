@@ -227,7 +227,7 @@ class PiperSay:
     'ridiculously artificial' (10 Nov). Text -> wav with piper (length_scale > 1 = slower), then played. Opt-in:
     make_speaker("piper") falls back to SpdSay when the binary or the model is missing."""
 
-    def __init__(self, binary=None, model=None, player="/usr/bin/pw-play", run=subprocess.run, length_scale=1.15,
+    def __init__(self, binary=None, model=None, player="/usr/bin/pw-play", run=subprocess.run, length_scale=1.3,
                  sentence_silence=0.45, wav=None):
         self.binary = Path(binary or PIPER_DIR / "piper" / "piper")
         self.model = Path(model or PIPER_DIR / "en_US-lessac-medium.onnx")
