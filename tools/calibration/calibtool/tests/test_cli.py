@@ -142,3 +142,18 @@ def test_headless_renders_n_states_heartbeats_and_closes():
     n = cli.run_tui(link, speaker=None, headless=3, out=out.append)
     assert n == 3 and len(out) == 3 and link.closed
     assert any('"hb"' in s for s in link.sent)
+
+
+def test_a_full_session_starts_calibd_in_full_mode():
+    r = FakeRun([json.dumps({"session": "S1", "pid": 42, "sock": "/x"})])
+    cli.start(P(), mode="full", dry_run=True, run=r)
+    line = r.calls[0][-1]
+    assert "--session-mode full" in line and "--dry-run" in line and "--trial" not in line
+    r = FakeRun([json.dumps({"live": False}), json.dumps({"session": "S2", "pid": 7, "sock": "/y"})])
+    assert cli.start_or_attach(P(), None, run=r, kit=K, mode="full") == "S2"
+    assert "--session-mode full" in r.calls[-1][-1] and "--dry-run" not in r.calls[-1][-1]
+
+
+def test_full_and_trial_do_not_mix():
+    with pytest.raises(SystemExit):
+        cli.main(["P10", "--full", "--trial", "--no-sync", "--headless", "1"])

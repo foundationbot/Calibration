@@ -229,3 +229,52 @@ def test_the_tui_hands_the_prompt_kind_to_the_speaker():
     t = tui.Tui(lambda s: None, K(), clock=Clock(), out=lambda s: None)
     t.step(json.dumps(state(say={"id": 3, "t": 99.5, "kind": "intro", "text": "Placement 2 of 6."})))
     assert got == [("Placement 2 of 6.", "intro")]
+
+
+# ---------------------------------------------------------------- the full session's screens (M5)
+
+
+def full(phase, **kw):
+    return state(phase=phase, mode="full", read_only=False, banner=(), trial=None, **kw)
+
+
+def test_full_session_keys_follow_the_phase():
+    assert "M = motors" in tui.render(full("READY")) and "T = start" not in tui.render(full("READY"))
+    assert "Y = " in tui.render(full("MOTORS"))
+    assert "1 / 2 = deploy size" in tui.render(full("DEPLOY_SIZE"))
+    assert "D = disable" in tui.render(full("FINISH")) and "K = keep" in tui.render(full("FINISH"))
+    assert "O = skip the OKVIS check" in tui.render(full("GRID"))
+    assert "G = continue" in tui.render(full("HOLD", held_from="GRID"))
+    assert "A = abort" in tui.render(full("GRID"))
+
+
+def test_motors_screen_lists_the_pre_enable_checks_and_the_result():
+    r = tui.render(full("MOTORS", motors={"checks": [{"name": "estop", "status": "fail", "detail": "e-stop engaged",
+                                                      "gate": "motion"}], "detail": "not enabling: estop",
+                                          "refused": True}))
+    assert "estop" in r and "e-stop engaged" in r and "not enabling: estop" in r
+
+
+def test_grid_screen_shows_the_countdown_and_the_pose():
+    r = tui.render(full("GRID", countdown=3, placement={"target": "0.75 m", "kind": "default"},
+                        grid={"placement": "0.75 m", "pose": 4, "of": 49,
+                              "last": {"command": [8.0, -11.0], "measured": [8.4, -11.0], "tags_l": 30,
+                                       "found": True}}))
+    assert "STARTING IN 3" in r and "pose 4 of 49" in r and "0.75 m" in r
+
+
+def test_deploy_size_screen_offers_the_options_and_the_facts():
+    ds = {"prev": [960, 600], "options": [{"key": "1", "label": "960x600, the previous default (recommended)"},
+                                          {"key": "2", "label": "1280x800"}],
+          "help": ["Configs on this robot naming the live calibration: /etc/phantom/vla/rig.env"], "chosen": None}
+    r = tui.render(full("DEPLOY_SIZE", deploy_size=ds, decision={"decision": "DEPLOY", "reasons": ["new better"]}))
+    assert "1: 960x600" in r and "2: 1280x800" in r and "vla/rig.env" in r and "DEPLOY" in r
+
+
+def test_postcheck_deploy_and_finish_screens():
+    r = tui.render(full("FINISH", deploy={"ok": True, "detail": "deployed and verified", "rollback_script": "/x/rb.sh"},
+                        postcheck={"decision": {"rollback": False, "reasons": ["post-check passed"]}},
+                        motors_prompt="D = disable the motors (the warning comes first), K = keep them on",
+                        motors_on=True))
+    assert "deployed and verified" in r and "/x/rb.sh" in r and "post-check passed" in r
+    assert "MOTORS ON" in r and "the warning comes first" in r

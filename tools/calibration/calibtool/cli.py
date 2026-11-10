@@ -1,6 +1,6 @@
 """`calib <robot>`: the laptop entry point (design plan sections 3, 10.3).
 
-calib phantom10 [--trial] [--session ID] [--replace] [--headless N] [--no-speech] [--stop] [--status] [--say TEXT]
+calib phantom10 [--trial | --full [--dry-run]] [--session ID] [--replace] [--headless N] [--no-speech] [--stop] [--status] [--say TEXT]
 [--no-sync]
   - asks calibd's status first (live = its socket answers, with the kit hash it runs): a live session running this
     kit is attached as it is; one running other code, or another session, is refused unless --replace stops it;
@@ -56,8 +56,11 @@ def _json_out(r):
     return json.loads(out[-1]) if out else {}
 
 
-def start(p, session=None, trial=False, run=subprocess.run) -> dict:
-    args = (["--session", session] if session else []) + (["--trial"] if trial else [])
+def start(p, session=None, trial=False, run=subprocess.run, mode=None, dry_run=False) -> dict:
+    """mode "full": the whole calibration session (M5: motors, grids, deploy); dry_run: its robot changes recorded
+    in <session>/commands.txt, none sent"""
+    args = (["--session", session] if session else []) + (["--trial"] if trial else []) + (
+        ["--session-mode", "full"] if mode == "full" else []) + (["--dry-run"] if dry_run else [])
     r = run(ssh_argv(p, remote(p, "start", *args)), capture_output=True, text=True, timeout=90)
     return _json_out(r)
 
@@ -68,7 +71,8 @@ def status(p, session=None, run=subprocess.run) -> dict:
     return _json_out(r) or {}
 
 
-def start_or_attach(p, session=None, trial=False, run=subprocess.run, kit=None, replace=False, sync=None) -> str:
+def start_or_attach(p, session=None, trial=False, run=subprocess.run, kit=None, replace=False, sync=None, mode=None,
+                    dry_run=False) -> str:
     """the session to attach to: a live one running this kit as it is; a dead one restarted under its id (it resumes in
     HOLD); else a new one. A live calibd running other code (the kit changed since it started), or another session
     running when a new one is asked for, is refused unless replace (then it is stopped first). Liveness = the session
@@ -92,7 +96,7 @@ def start_or_attach(p, session=None, trial=False, run=subprocess.run, kit=None, 
             raise RuntimeError(f"could not stop calibd of session {running}: {r}")
     if sync is not None:
         sync()
-    res = start(p, session=session, trial=trial, run=run)
+    res = start(p, session=session, trial=trial, run=run, mode=mode, dry_run=dry_run)
     if res.get("error") or not res.get("session"):
         raise RuntimeError(f"calibd did not start: {res}")
     return res["session"]
@@ -186,6 +190,10 @@ def main(argv=None):
     ap.add_argument("robot", help="host name (phantom10) or bot name (P10)")
     ap.add_argument("--session", default=None, help="re-attach to (or restart) this session")
     ap.add_argument("--trial", action="store_true", help="placement-trial mode (neck at home, nothing moves)")
+    ap.add_argument("--full", action="store_true",
+                    help="the whole calibration session (motors, neck grids, deploy): M5")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="with --full: every robot change recorded in the session's commands.txt, none sent")
     ap.add_argument("--headless", type=int, default=0, help="render N states and leave (no keys)")
     ap.add_argument("--no-speech", action="store_true")
     ap.add_argument("--no-sync", action="store_true", help="do not copy the kit to the robot")
@@ -195,6 +203,10 @@ def main(argv=None):
     ap.add_argument("--status", action="store_true")
     ap.add_argument("--say", default=None, help="speak this once on the laptop and leave (speech test)")
     a = ap.parse_args(argv)
+    if a.full and a.trial:
+        ap.error("--full and --trial are different sessions: pick one")
+    if a.dry_run and not a.full:
+        ap.error("--dry-run is for a --full session")
     speaker = tui.Silent() if a.no_speech else tui.SpdSay()
     if a.say:
         speaker.say(a.say)
@@ -209,7 +221,7 @@ def main(argv=None):
         return 0
     try:
         sid = start_or_attach(p, a.session, a.trial, replace=a.replace, sync=None if a.no_sync else
-                              (lambda: bootstrap(p)))
+                              (lambda: bootstrap(p)), mode="full" if a.full else None, dry_run=a.dry_run)
     except RuntimeError as e:
         print(f"calib: {e}", file=sys.stderr)
         return 2

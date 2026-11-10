@@ -21,7 +21,36 @@ KEYS = "A = abort | G = continue after HOLD | T = start the placement trial | C 
 MARK = {"ok": "ok  ", "warn": "WARN", "fail": "FAIL", "info": "info"}
 
 
+LEAVE = "Q = leave (calibd keeps running)"
+OKVIS_OPT = "O = skip the OKVIS check"
+_GUIDE = f"C = can't put it there | {OKVIS_OPT} | A = abort"
+_MOVING = f"A = abort (the pose in progress finishes, then nothing more moves) | {OKVIS_OPT}"
+_AFTER = "D = disable the motors (twice: the warning first)"
+FULL_KEYS = {"PREFLIGHT": "A = abort", "BLOCKED": "A = abort",
+             "READY": f"M = motors (the enable screen) | {OKVIS_OPT} | A = abort",
+             "MOTORS": "Y = the robot hangs on the gantry and nobody is at its head: enable the motors | A = abort",
+             "SETUP": f"{OKVIS_OPT} | A = abort", "PLACE": _GUIDE, "IMU_PLACE": _GUIDE, "CHECK_PLACE": _GUIDE,
+             "POST_PLACE": _GUIDE, "GRID": _MOVING, "IMU_SWEEP": _MOVING, "CHECK_GRID": _MOVING,
+             "HOLD": "G = continue (after a countdown) | A = abort", "FIT": f"{OKVIS_OPT} | A = abort",
+             "DECIDE": "A = abort", "DEPLOY_SIZE": "1 / 2 = deploy size | ? = this robot's facts | A = abort",
+             "DEPLOY": "Y = deploy (when asked) | R = roll back | A = abort",
+             "POSTCHECK": "R = roll back now | A = abort", "REPORT": "R = roll back now | A = abort",
+             "FINISH": "D = disable the motors (twice: the warning first) | K = keep them on | R = roll back now",
+             "DONE": _AFTER, "ABORTED": _AFTER, "STOPPED_LOUD": _AFTER}
+
+
+def keys_for(state) -> str:
+    s = state or {}
+    if s.get("mode") != "full":
+        return KEYS
+    return f"{FULL_KEYS.get(s.get('phase'), 'A = abort')} | {LEAVE}"
+
+
 def _motors(state):
+    if state.get("motors_on") is True:
+        return "MOTORS ON"
+    if state.get("motors_on") is False:
+        return "motors off"
     for c in state.get("checks") or ():
         if c.get("name") == "motors_off":
             return "motors off" if c.get("status") == "ok" else "MOTORS ON"
@@ -74,14 +103,93 @@ def render(state, width=100, notes=()) -> str:
                      f"{round(float(tb['dxy_m']) * 100):.0f} cm along the floor")
         for r in tr.get("records") or ():
             L.append(f"  {r['target']:7s} {r['result']:11s} {r['seconds']:6.1f} s, {r.get('prompts', 0)} prompts")
+    if s.get("mode") == "full":
+        L += _full_lines(s, width)
     say = s.get("say")
     if say:
         L.append(f'>> "{say.get("text")}"')
     for e in (s.get("health") or [])[-5:]:
         L.append(f"health {e.get('level', '').upper()}: {e.get('message')}")
     L.append("-" * width)
-    L.append(KEYS)
+    L.append(keys_for(s))
     return "\n".join(L)
+
+
+def _reasons(rs, n=4, width=100):
+    return [f"    - {str(r)[:width - 6]}" for r in list(rs or [])[:n]]
+
+
+def _full_lines(s, width=100) -> list:
+    """the full session's screen: what the current phase needs the operator to see"""
+    L = []
+    mo = s.get("motors")
+    if mo and s.get("phase") in ("MOTORS", "HOLD"):
+        L.append(f"motors: {mo.get('detail', '')}"[:width])
+        for c in mo.get("checks") or ():
+            L.append(f"  {MARK.get(c.get('status'), '?   ')} {c.get('name', ''):16s} "
+                     f"{str(c.get('detail', ''))[:width - 24]}")
+    if s.get("countdown"):
+        L.append(f">>> STARTING IN {s['countdown']} -- step back from the head <<<")
+    pl = s.get("placement")
+    if pl and s.get("phase") in ("PLACE", "GRID", "IMU_PLACE", "IMU_SWEEP", "CHECK_PLACE", "CHECK_GRID", "POST_PLACE",
+                                 "HOLD"):
+        L.append(f"placement: {pl.get('target')} ({pl.get('kind')})")
+    g = s.get("grid")
+    if g and g.get("pose") is not None and s.get("phase") in ("GRID", "CHECK_GRID", "HOLD"):
+        last = g.get("last") or {}
+        cmd, meas = last.get("command") or [], last.get("measured") or []
+        tail = "" if not cmd else (f"; last pose {cmd[0]:+.0f}/{cmd[1]:+.0f} deg, measured {meas[0]:+.1f}/"
+                                   f"{meas[1]:+.1f}, {last.get('tags_l', 0)} tags, "
+                                   f"{'board found' if last.get('found') else 'NO BOARD'}")
+        L.append(f"grid {g.get('placement')}: pose {g.get('pose')} of {g.get('of')}{tail}"[:width])
+    sw = s.get("sweep")
+    if sw:
+        L.append(f"IMU sweep: {'apply the rotation' if sw.get('deploy') else 'keep the live rotation'}")
+        L += _reasons(sw.get("reasons"), 2, width)
+    d = s.get("decision")
+    if d:
+        L.append(f"lens verdict: {d.get('decision')}")
+        L += _reasons(d.get("reasons"), 4, width)
+    ds = s.get("deploy_size")
+    if ds:
+        if ds.get("chosen"):
+            L.append(f"deploy size: {ds['chosen'].get('label')}")
+        else:
+            L.append(f"deploy size (the previous default {ds.get('prev', ['?', '?'])[0]}x"
+                     f"{ds.get('prev', ['?', '?'])[1]}):")
+            L += [f"  {o.get('key')}: {o.get('label')}" for o in ds.get("options") or ()]
+        L += [f"    {h}"[:width] for h in ds.get("help") or ()]
+    ck = s.get("check")
+    if ck:
+        L.append(f"check grid: {ck.get('decision') or 'skipped: ' + str(ck.get('skipped'))}"[:width])
+        L += _reasons(ck.get("reasons"), 3, width)
+    dep = s.get("deploy")
+    if dep:
+        if dep.get("interrupted"):
+            L.append("deploy INTERRUPTED by a calibd restart: " + ("the robot changed: " + "; ".join(dep["drift"])
+                                                                 if dep.get("drift") else "nothing changed yet"))
+        elif dep.get("drift") or dep.get("refused"):
+            L.append(f"deploy: {dep.get('drift') or dep.get('refused')}"[:width * 2])
+        else:
+            L.append(f"deploy: {dep.get('detail', '')}; rollback script {dep.get('rollback_script')}"[:width * 2])
+    pc_ = s.get("postcheck")
+    if pc_:
+        dec = pc_.get("decision") or {}
+        L.append(f"post-check: {'ROLL BACK' if dec.get('rollback') else 'keep the new calibration'}")
+        L += _reasons(dec.get("reasons"), 4, width)
+    rb = s.get("rollback")
+    if rb:
+        L.append(f"rollback: {'done' if rb.get('ok') or rb.get('dry_run') else 'NOT DONE'}"
+                 f" ({rb.get('reason') or rb.get('drift') or rb.get('message')})"[:width * 2])
+    rs = s.get("restore")
+    if rs:
+        L.append(f"restored: {'; '.join(rs.get('done') or ['nothing to restore'])}"
+                 + (f"; ERRORS: {'; '.join(rs['errors'])}" if rs.get("errors") else ""))
+    if s.get("motors_prompt") and s.get("phase") in ("FINISH", "DONE", "ABORTED", "STOPPED_LOUD"):
+        L.append(f"motors: {s['motors_prompt']}"[:width * 2])
+    if s.get("dry_run"):
+        L.append("DRY RUN: nothing is sent to the robot; the commands go to commands.txt in the session folder")
+    return L
 
 
 def ssml_with_pauses(text, word_ms=150, sentence_ms=450) -> str:
