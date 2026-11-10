@@ -30,8 +30,18 @@ SUMMARY_TOL_PCT, ROWS_TOL_PX = 0.02, 0.005
 # phantom21's LIVE radtan config (p21/etc-okvis/mk12_stereo_holevisor-radtan-pre-daksh.yaml) scored by step 66 and the
 # summary row on the TEST pairs of split16(p21_1105) (= the recorded p21/kit/final/test.npz), through a temporary
 # path-patched copy of the kit's radtan_shim.py + run66.py (made by _radtan_runner below, never committed).
-# Source: test_p21_live_radtan_reference on Moonstone, 9 Nov 2026 (FILLED IN FROM THAT RUN).
-P21_LIVE_RADTAN = None
+# Source: test_p21_live_radtan_reference, first run on Moonstone 9 Nov 2026 (x86, OMP_NUM_THREADS=1); the same numbers
+# as the recorded p21/kit/final/validate-live/report.json and final21.log (Thor, 5 Nov) to the printed digits.
+# Step 66: FAIL, 2 of 6 validated entries outside the limits, 16 not validated, 74 of 174 TEST holds flagged.
+P21_LIVE_RADTAN = {
+    "verdict": "FAIL",
+    "entries": {("centre", (0.4, 0.6)): -0.0566, ("centre", (0.6, 0.9)): -0.0006, ("right", (0.6, 0.9)): 0.5375,
+                ("bottom", (0.6, 0.9)): 0.4034, ("bottom", (0.9, 1.3)): 3.9857, ("bottom-right", (0.6, 0.9)): 0.4744},
+    "summary": {"baseline_mm": 43.2798, "n_pairs": 499, "median_pct": 0.7739, "iqr_pct": (0.0654, 1.7674),
+                "rows_px": 0.8203,
+                "bands": {(0.0, 1.0): (289, 0.2850), (1.0, 1.3): (92, 2.8398), (1.3, 1.7): (51, 1.3912),
+                          (1.7, 9.9): (67, 2.1313)}},     # (lo, hi] m: (pairs, median %)
+}
 
 
 # ---------------------------------------------------------------- helpers
@@ -295,12 +305,21 @@ def test_p21_live_radtan_reference(data_root, tmp_path):
     rep = json.loads((data_root / rec.files["validate_live"] / "report.json").read_text())
     rec_entries = {(e["cell"], tuple(e["dist_m"])): e["median_pct"] for e in rep["table"] if "ok" in e}
     off += _entries_off(v.entries, {k: round(x, 2) for k, x in rec_entries.items()}, ENTRY_TOL_PCT)
-    assert P21_LIVE_RADTAN is not None, "reference numbers not recorded yet"
     ref = P21_LIVE_RADTAN
     if v.verdict != ref["verdict"]:
         off.append(f"reference verdict {ref['verdict']} vs {v.verdict}")
     off += [f"reference {x}" for x in _entries_off(v.entries, ref["entries"], ENTRY_TOL_PCT)]
-    for k in ("median_pct", "rows_px"):
-        if abs(sm[k] - ref["summary"][k]) > 1e-3:
-            off.append(f"reference summary {k}: {sm[k]} vs {ref['summary'][k]}")
+    rs = ref["summary"]
+    got = {"median_pct": sm["median_pct"], "iqr low": sm["iqr_pct"][0], "iqr high": sm["iqr_pct"][1],
+           "rows_px": sm["rows_px"], "baseline_mm": sm["baseline_mm"]}
+    want = {"median_pct": rs["median_pct"], "iqr low": rs["iqr_pct"][0], "iqr high": rs["iqr_pct"][1],
+            "rows_px": rs["rows_px"], "baseline_mm": rs["baseline_mm"]}
+    off += [f"reference summary {k}: {got[k]:.4f} vs {want[k]:.4f}" for k in got if abs(got[k] - want[k]) > 1e-3]
+    if sm["n_pairs"] != rs["n_pairs"]:
+        off.append(f"reference summary pairs {sm['n_pairs']} vs {rs['n_pairs']}")
+    for b in sm["bands"]:
+        n, med = rs["bands"][(b["lo"], b["hi"])]
+        if b["n"] != n or abs(b["median_pct"] - med) > ENTRY_TOL_PCT:
+            off.append(f"reference band {b['lo']}-{b['hi']} m: {b['median_pct']:+.4f} % (n {b['n']}) vs {med:+.4f} "
+                       f"(n {n})")
     assert not off, "\n".join(off)
