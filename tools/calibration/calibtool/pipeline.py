@@ -4,7 +4,12 @@ run_lens_kb4t's summary row (TEST depth error and row error of one calibration).
 16 and the summary run in this process (fast); 45 and 66 run as their own processes, exactly as the recorded runs
 called them, and are read from the JSON they write: step 45's fit JSON and step 66's report.json. Exit codes are never
 the verdict (the p21 kit's step-66 runner exited 0 on a FAIL). A step that leaves no JSON raises PipelineError with
-the tail of its log."""
+the tail of its log.
+
+Least squares: solver="fast" (calibtool.solver, M3; calibtool's default) or "scipy" (the standalone scripts' default
+and the recorded runs'), per call: CALIB_SOLVER in the step's own environment, stereofit.solver_scope in this
+process; the caller's environment is never changed. Step 66 leaves its per-pair scores (scores.json) and summary()
+takes them (step66_scores) instead of scoring the same calibration again."""
 import contextlib
 import io
 import json

@@ -11,7 +11,8 @@ One refit (LiveRefit.update), on the FIT corners so far (step 15's corner dict, 
   gate    step 45's quality gate (45_fit_lens.quality_gate: holds over gates.lens_hold_rms_max_px or beyond max_z
           dropped, then fit_converged again from the result) and its rejection share (more than
           gates.lens_bad_hold_max_frac of the holds bad: rejected=True, the numbers kept for display)
-A hold dropped by the gate stays out of later refits (as it would be dropped from step 45's), unless it is gone.
+The gate judges every hold again at each refit, on that refit's fit, as step 45 does on its data (a hold dropped
+while the camera was still rough comes back once it fits).
 The deciding fit is still step 45 (from nominal, on the final split): the refit shows progress and gives the
 operator a fit to score while collecting; on the stored sessions the last refit reaches step 45's numbers.
 
@@ -72,7 +73,6 @@ class LiveRefit:
         self._v45 = paths.import_script("45_fit_lens")
         self.intr = self.C = None
         self.poses = {}             # left stamp -> board pose (6,) of the last refit
-        self.dropped = set()        # holds the gate dropped
         self.history = []
 
     def update(self, fit_corners, placement="") -> Refit:
@@ -82,7 +82,6 @@ class LiveRefit:
         stamps = np.asarray(fit_corners["img_t0"], np.int64)
         with sf.solver_scope(self.solver):
             data = sf.Data(dict(fit_corners), self.rig.board)
-            data = data.select(~np.isin(data.hold, list(self.dropped)))
             known = np.isin(stamps[data.src_pairs], list(self.poses))
             warm = self.intr is not None
             if not warm:
@@ -101,7 +100,6 @@ class LiveRefit:
                 data = data.select(m)
                 r = sf.fit_converged(data, self.model, r["intr"], r["C"], r["poses"][m], log=self.log)
                 nfev += r["nfev"]
-                self.dropped |= set(int(h) for h in bad)
         self.intr, self.C = [np.array(v) for v in r["intr"]], np.array(r["C"])
         self.poses = {int(a): p for a, p in zip(stamps[data.src_pairs], r["poses"])}
         out = Refit(len(self.history) + 1, str(placement), int(data.n), int(len(np.unique(data.hold))), new, warm,

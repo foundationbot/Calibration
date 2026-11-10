@@ -22,9 +22,11 @@ The calibration can be any JSON entry with model, intr, C (step 45's output, or 
 verdict is not "converged" (stopped at its cap, rejected, wrong sides) is not judged: NO RESULT. --fit-report and
 --uncertainty add step 45's dropped holds and step 46's sigmas and repeatability map to the report.
 Exit 0 PASS, 1 FAIL, 2 NO RESULT (an unconverged fit, a scoring solve that did not converge, the self-check failed,
-or no entry reached lens_min_holds holds). The per-pair scores go to <out-dir>/scores.json. Real data: scoring took 4-17 min per calibration and set on Thor (19-20 Oct).
+or no entry reached lens_min_holds holds). The per-pair scores go to <out-dir>/scores.json; --jobs 2 rescores the
+self-check in a second (forked) process while the calibration is scored. Real data: scoring took 4-17 min per
+calibration and set on Thor (19-20 Oct).
 Usage: python 66_validate_lens.py <calibration.json[:key]> <test-corners.npz> <out-dir>
-           [--fit-report fit.json] [--uncertainty uncertainty.json] [--rig PATH]"""
+           [--fit-report fit.json] [--uncertainty uncertainty.json] [--rig PATH] [--jobs 2]"""
 import argparse
 import json
 import sys

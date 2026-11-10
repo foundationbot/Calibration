@@ -75,9 +75,12 @@ def test_the_quality_gate_drops_a_bad_hold_as_step_45_does():
     bad = d["img_hold"][5]
     m = np.isin(d["det_img"], np.flatnonzero(d["img_hold"] == bad)) & (d["det_cam"] == 0)
     d["det_u"][m] += np.linspace(-6, 6, m.sum())             # a bent board: ~3.5 px rms in camera 0
-    r = refit.LiveRefit(S.RIG12).update(d)
+    lr = refit.LiveRefit(S.RIG12)
+    r = lr.update(d)
     assert bad in r.dropped_holds and r.converged
     assert r.holds == len(np.unique(d["img_hold"])) - len(r.dropped_holds)
+    r2 = lr.update(d)                       # judged again on the next refit's fit (step 45 judges its whole data)
+    assert r2.warm and bad in r2.dropped_holds and r2.holds == r.holds
 
 
 def test_a_refit_with_fewer_pairs_than_before_keeps_the_ones_it_has():
@@ -151,9 +154,9 @@ def test_on_session_refits_after_each_placement_and_once_on_the_final_split(tmp_
 @pytest.mark.parametrize("name", ["p21_1105", "p10_1106"])
 def test_live_refit_on_a_stored_session_ends_at_step_45s_fit(name, data_root, tmp_path):
     """every placement's refit converges within the fit budget (design 10.4: 30 s); the refit on the final split is
-    step 45's fit from nominal on the same FIT file (fast solver: the same minimum, measured 9 Nov to 1e-12 px), in
-    less time. Measured on Moonstone, one thread: p21 0.8-9.1 s per placement, final 4.7 s vs step 45 11.3 s; p10
-    1.2-5.2 s, final 4.9 s vs 11.1 s"""
+    step 45's fit from nominal on the same FIT file (fast solver: the same minimum, measured 9 Nov to 2e-12 px).
+    Measured on Moonstone, one thread: p21 0.5-6.1 s per placement, final 6.0 s vs step 45 7.0 s; p10 0.9-7.1 s,
+    final 7.0 s vs 8.8 s (the gate's second fit each time: the holds are judged afresh at every refit)"""
     import lensmodel
     from calibtool import pipeline, sessions
     st = sessions.get(name)
@@ -170,4 +173,3 @@ def test_live_refit_on_a_stored_session_ends_at_step_45s_fit(name, data_root, tm
         ray = lensmodel.unproject("KB4T", f.entry["intr"][c], g)
         assert np.abs(lensmodel.project("KB4T", last["intr"][c], ray) - g).max() < 1e-3
     assert np.abs(np.array(last["C"])[:3, 3] - np.array(f.entry["C"])[:3, 3]).max() < 1e-6       # m
-    assert last["seconds"] < f.seconds

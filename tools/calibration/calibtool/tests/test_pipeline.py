@@ -40,8 +40,9 @@ def _fake45(tmp_path):
     return _write(tmp_path / "fake45.py", """
         import json, os, sys
         from pathlib import Path
-        Path(sys.argv[2]).write_text(json.dumps({"verdict": "converged: x", "rms_px": 0.4, "baseline_mm": 44.0,
-                                                 "fit_pairs": 1, "fit_holds": 1, "solver": os.environ.get("CALIB_SOLVER")}))
+        e = {"verdict": "converged: x", "rms_px": 0.4, "baseline_mm": 44.0, "fit_pairs": 1, "fit_holds": 1,
+             "solver": os.environ.get("CALIB_SOLVER")}
+        Path(sys.argv[2]).write_text(json.dumps(e))
         """)
 
 
