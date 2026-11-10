@@ -207,6 +207,26 @@ def test_sentences_wording_for_every_kind():
     assert "to YOUR right (the robot's left)" in ent[0]
 
 
+def test_a_judged_corner_cell_covers_both_its_edges():
+    """one rule with decide's verdict (decide.edges_judged): a judged corner cell (top-left) counts for the top and
+    for the left edge, so neither is a side deficit; a corner cell's holds count toward both sides' `have`"""
+    import lenscells
+    from calibtool import decide
+    cov = _cov()
+    cov.test = cv.TestTally(entries={("top-left", (0.6, 0.9)): 12, ("bottom", (0.6, 0.9)): 3},
+                            far_bands={(1.3, 1.7): 20, (1.7, 2.3): 20})
+    sides = {x.region: x for x in cov.deficits(cv.Targets()) if x.kind == "side"}
+    assert set(sides) == {"right", "bottom"}, sides
+    assert sides["bottom"].have == 3 and sides["right"].have == 0
+    cov.test = cv.TestTally(entries={("bottom-right", (0.6, 0.9)): 4, ("right", (0.9, 1.3)): 2},
+                            far_bands={(1.3, 1.7): 20, (1.7, 2.3): 20})
+    sides = {x.region: x for x in cov.deficits(cv.Targets()) if x.kind == "side"}
+    assert set(sides) == set(cv.EDGE_CELLS)
+    assert (sides["bottom"].have, sides["right"].have, sides["left"].have) == (4, 4, 0)
+    for cell in lenscells.CELLS:
+        assert cv.edges_of_cell(cell) == decide.edges_judged([(cell, (0.6, 0.9))]), cell
+
+
 def test_ratio_words():
     assert cv.ratio_words(176, 1099) == "6x fewer"
     assert cv.ratio_words(50, 588) == "12x fewer"

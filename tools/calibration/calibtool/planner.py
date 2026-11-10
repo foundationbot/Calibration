@@ -128,7 +128,7 @@ def gain(fit: cv.FitTally, entries: dict, far_bands: dict, d: cv.Deficit, test_h
     if d.kind == "entry":
         return entries.get(d.region, 0) * TEST_FRAC
     if d.kind == "side":
-        return max([n for (c, _), n in entries.items() if c == d.region], default=0) * TEST_FRAC
+        return max([n for (c, _), n in entries.items() if d.region in cv.edges_of_cell(c)], default=0) * TEST_FRAC
     if d.kind == "judged":
         return sum(n * TEST_FRAC >= test_holds for n in entries.values())
     if d.kind == "far_band":

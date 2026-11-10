@@ -119,6 +119,15 @@ def test_pose_subset_left_edge_turns_head_right(planner):
     assert set(poses) <= set(pn.grid())
 
 
+def test_side_gain_counts_a_corner_cell_for_both_its_edges():
+    """the same edge rule as coverage's side deficit and decide's verdict: holds in a corner cell fill both its sides"""
+    ent = {("bottom-left", (0.6, 0.9)): 10, ("left", (0.9, 1.3)): 4}
+    side = lambda r: cv.Deficit("side", None, r, 0, 10)            # noqa: E731
+    assert pn.gain(None, ent, {}, side("left")) == 10 * pn.TEST_FRAC
+    assert pn.gain(None, ent, {}, side("bottom")) == 10 * pn.TEST_FRAC
+    assert pn.gain(None, ent, {}, side("top")) == 0
+
+
 def test_describe_words():
     assert "to YOUR right (the robot's left)" in pn.Candidate(1.1, 20, False).describe()
     assert "to YOUR left (the robot's right)" in pn.Candidate(1.1, -40, False).describe()

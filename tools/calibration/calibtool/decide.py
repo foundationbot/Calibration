@@ -264,11 +264,12 @@ def paired(new: Scores, live: Scores, gates: Gates = Gates()) -> Paired:
 
 
 def edges_judged(entries):
-    """the image edges with a judged entry ({(cell, dist)}): a side cell counts for its edge, a corner cell
-    (top-left, ...) for both of its edges, centre for none"""
+    """the image edges with a judged entry ({(cell, dist)}): coverage.edges_of_cell, the rule coverage and the planner
+    use too (a side cell counts for its edge, a corner cell for both of its edges, centre for none)"""
+    from calibtool import coverage
     out = set()
     for cell, _ in entries:
-        out |= {e for e in EDGES if e in str(cell).split("-")}
+        out |= coverage.edges_of_cell(cell)
     return out
 
 

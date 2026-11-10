@@ -33,6 +33,14 @@ MIRROR = {"left": "right", "right": "left", "top": "bottom", "bottom": "top", "t
 CAMERA = {0: "Left camera", 1: "Right camera"}
 EDGE_CELLS = ("left", "right", "top", "bottom")       # step-66 cells on each image side
 
+
+def edges_of_cell(cell) -> set:
+    """the image edges a step-66 cell is on: a side cell its edge, a corner cell (top-left, ...) both of its edges,
+    centre none. The one rule for "an entry on each image edge": coverage's side deficit, the planner's side gain and
+    decide's verdict (decide.edges_judged) all use it"""
+    return {e for e in EDGE_CELLS if e in str(cell).split("-")}
+
+
 # the operator faces the robot: the robot's left is the operator's right
 SIDE = {"left": "to YOUR right (the robot's left)", "right": "to YOUR left (the robot's right)"}
 TILTED = "the tilted placement (leaning back on the chair, facing up toward the head)"
@@ -242,8 +250,8 @@ class Coverage:
                 if n < targets.test_holds:
                     out.append(Deficit("entry", None, k, n, targets.test_holds, weight=w.get("entry", 1.0)))
             for side in EDGE_CELLS:
-                if not any(c == side for c, _ in judged):
-                    have = max([n for (c, _), n in ent.items() if c == side], default=0)
+                if not any(side in edges_of_cell(c) for c, _ in judged):
+                    have = max([n for (c, _), n in ent.items() if side in edges_of_cell(c)], default=0)
                     out.append(Deficit("side", None, side, have, targets.test_holds, weight=w.get("side", 1.0)))
             if len(judged) < targets.judged_min:
                 out.append(Deficit("judged", None, "judged", len(judged), targets.judged_min,
