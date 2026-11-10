@@ -359,3 +359,53 @@ def test_stored_session_capture_split(name, data_root, rig, tmp_path):
           f"{jme}; step 16 {len(j16)} {j16}; held back {sum(c.held_back for c in ec.values())}, released "
           f"{sum(c.released for c in ec.values())}")
     assert len(jme) >= len(j16)
+
+
+# ---------------------------------------------------------------- 6. replay: the capture split fits and validates
+
+
+@pytest.mark.replay
+@pytest.mark.parametrize("name", NAMES)
+def test_replay_capture_split_validates(name, data_root, tmp_path):
+    """the capture-time split through step 45 and step 66: the new fit PASSes, judged on at least as many entries
+    (>= 8 TEST holds after the fit) as step 16's split was (the recorded run: p21 7, p10 9). Also reported: the holds
+    whose cell moves from the nominal to the fitted principal point, and the TEST holds whose step-66 entry differs
+    from their capture-time one"""
+    import lenscells
+    from calibtool import assign
+    st = sessions.get(name)
+    s = Session.load(st)
+    r = pipeline.load_rig(st.rig_path)
+    a = assign.Assigner(r, (r.resolution[0] / 2, r.resolution[1] / 2), r.nominal_focal_px)
+    for h in assign.capture_holds(s):
+        a.observe(h)
+    sp = a.write_split(s, tmp_path / "split")
+    fit = pipeline.fit45(sp.fit_npz, st.rig_path, tmp_path / "fit", max_z=3.0)
+    assert fit.converged, fit.verdict
+    v = pipeline.validate66(fit.json_path, sp.test_npz, tmp_path / "validate", rig=st.rig_path,
+                            fit_report=fit.json_path)
+    sm = pipeline.summary(fit.json_path, sp.test_npz, st.rig_path)
+    ppf = fit.entry["intr"][0][2:4]
+    moved = a.recell(ppf)
+    rec = sm.records
+    cells = lenscells.cell_of(np.asarray(rec["u"]) - ppf[0], np.asarray(rec["v"]) - ppf[1])
+    bins = lenscells.dist_bin(rec["z"])
+    after = {}
+    for hold, c, b in zip(rec["hold"], cells, bins):
+        after.setdefault(int(hold), set()).add((str(c), lenscells.DIST_BINS[b] if b >= 0 else None))
+    test_holds = [h for h in a.holds.values() if h.label == "TEST" and h.entry is not None and h.hold in after]
+    changed = [h.hold for h in test_holds if after[h.hold] != {h.entry if h.entry[1] in lenscells.DIST_BINS
+                                                               else (h.entry[0], None)}]
+    n16 = len(st.recorded.new_entries)
+    out = {"session": name, "split": {"fit_pairs": sp.fit_pairs, "test_pairs": sp.test_pairs},
+           "fit": fit.as_dict(), "validate": v.as_dict(),
+           "summary": {k: getattr(sm, k) for k in ("median_pct", "iqr_pct", "rows_px", "n_pairs")},
+           "judged_16": n16, "judged_capture": v.n_validated,
+           "holds_cell_moved_by_fitted_pp": len(moved), "holds_with_entry": sum(h.entry is not None
+                                                                                for h in a.holds.values()),
+           "test_holds_entry_changed_after_fit": len(changed), "test_holds_scored": len(test_holds),
+           "held_back": sum(c.held_back for c in a.entry_counts().values()),
+           "released": sum(c.released for c in a.entry_counts().values())}
+    print("CAPTURE REPLAY " + json.dumps(out, default=str))
+    assert v.verdict == "PASS", v.text
+    assert v.n_validated >= n16, f"{v.n_validated} judged entries vs {n16} on step 16's split"

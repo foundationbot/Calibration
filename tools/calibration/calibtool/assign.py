@@ -26,7 +26,8 @@ The rule, per hold in capture order:
      holds back (2a) gets that many of its held-back holds released to TEST, spread evenly over them in capture
      order (release_at_end=True; False keeps them FIT). Holds observe() returned FIT can thus end up TEST; the
      final labels are self.holds[h].label, the capture-time ones observe()'s return values.
-So every entry ends with |TEST - holds / N| <= 1, and an entry fed by >= 2 placements tests at least two of them (for
+So every entry ends with |TEST - holds / N| <= 1 (with release_at_end; without it an entry whose holds were held
+back and never caught up stays short), and an entry fed by >= 2 placements tests at least two of them (for
 N = 2; for larger N when the second placement brings enough holds).
 """
 import math
