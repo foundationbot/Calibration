@@ -667,7 +667,14 @@ class Deployer:
             self.remote.write(ROBOT_ENV, self.snap.robot_env or "")
             steps.append({"step": "robot_env"})
             where = "producer"
-            if self.producer_restore is not None and not self.remote.dry_run:
+            if self.remote.dry_run:
+                if self.snap.producer_yaml:
+                    spec = _producer_spec(self.snap.producer_yaml)
+                    for a in producer_cycle_argv(self.producer_ns, self.producer_deploy, spec.replicas,
+                                                 [kubectl("-n", self.producer_ns, "replace", "-f",
+                                                          f"{self.deploy_dir}/producer.before.yaml")]):
+                        self.remote.call(a, mutating=True)
+            elif self.producer_restore is not None:
                 self.producer_restore()
             steps.append({"step": "producer"})
             where = "restart"

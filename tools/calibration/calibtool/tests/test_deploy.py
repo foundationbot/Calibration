@@ -493,3 +493,16 @@ def test_shell_runner_write_and_read_for_real(tmp_path):
     assert rem.read(str(p)) == "A=1\nB=two words\n" and rem.exists(str(p))
     assert rem.read(str(tmp_path / "nope")) is None and not rem.exists(str(tmp_path / "nope"))
     assert not list(tmp_path.glob("*.calibtool-tmp"))
+
+
+def test_dry_run_rollback_lists_every_step():
+    r = FakeRobot()
+    d, applied = deployer(r, dry_run=True)
+    d.deploy(plan())
+    d.remote.planned.clear()
+    d.left = None
+    rb = d.rollback("demo")
+    txt = d.remote.text()
+    assert not rb.ok and not applied and not mutating_calls(r)
+    assert dp.ROBOT_ENV in txt and "replace -f" in txt and f"{DEPLOY_DIR}/producer.before.yaml" in txt
+    assert txt.index("--replicas=0") < txt.index("replace -f") < txt.index("rollout restart")
