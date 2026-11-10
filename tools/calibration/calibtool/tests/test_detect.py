@@ -198,3 +198,41 @@ def test_pool_size_counts_only_the_cpus_this_process_may_use():
     """found on phantom10 9 Nov: os.cpu_count() reports every core, the process may run on 9"""
     import os
     assert detect.usable_cpus() == len(os.sched_getaffinity(0))
+
+
+def _stored_frame(data_root, take="n6_110", pose=24):
+    f = data_root / "p10" / "kit" / "takes" / take / f"pose_{pose:03d}.npz"
+    if not f.is_file():
+        pytest.skip(f"{f} not in the stored data")
+    z = np.load(f)
+    return z["L"][0], z["R"][0]
+
+
+def test_live_detection_on_a_stored_phantom10_frame(data_root):
+    """a real 1280x800 frame of phantom10's 6 Nov session (board at ~1.1 m, centre pose): the stretched-copy finder
+    sees every tag the plain detector sees, the corners they share agree (both refined on the raw frame), and the
+    board's depth reads in the 1.1 m band"""
+    rig = paths.import_script("rigcfg").load(paths.CONFIG / "rig-phantom11.yaml")
+    yl, _ = _stored_frame(data_root)
+    plain = rig.board.detect(yl)
+    found = detect.find_refine(rig.board, yl)
+    assert {t for t, _ in found} >= {t for t, _ in plain}
+    common = set(plain) & set(found)
+    assert len(common) >= 0.9 * len(plain)
+    d = [np.hypot(*np.subtract(plain[k], found[k])) for k in common]
+    assert np.median(d) < 0.05
+    o = detect.board_obs(found, rig.board, focal=rig.nominal_focal_px, size=SIZE)
+    assert 0.925 <= o.z < 1.35
+
+
+def test_a_dark_stored_frame_is_still_found(data_root):
+    """the same frame at 1/8 of its brightness (a dark room, D9): the plain detector loses tags, the stretched copy
+    finds them, corners still refined on the dark raw frame"""
+    rig = paths.import_script("rigcfg").load(paths.CONFIG / "rig-phantom11.yaml")
+    yl, _ = _stored_frame(data_root)
+    dark = (yl.astype(np.float32) / 8).astype(np.uint8)
+    n_plain = len({t for t, _ in rig.board.detect(dark)})
+    n_found = len({t for t, _ in detect.find_refine(rig.board, dark)})
+    n_bright = len({t for t, _ in rig.board.detect(yl)})
+    assert n_found > n_plain
+    assert n_found >= 0.8 * n_bright
