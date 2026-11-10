@@ -180,3 +180,52 @@ def test_a_tui_that_lost_control_says_so():
     assert "control" not in out[-1].split("\n")[2]
     t.step(json.dumps(state(client={"id": 1, "claimed": True, "controlling": False})))
     assert "NOT NORMAL: another TUI attached later and has control" in out[-1]
+
+
+def _until(cond, timeout=3.0):
+    import time
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if cond():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def test_queued_corrections_are_superseded_but_intros_skips_and_ends_never_dropped():
+    """review 8: the speech queue was unbounded: while spd-say spoke slowly, stale corrections piled up and were all
+    read out after the board had moved on"""
+    import threading
+    gate = threading.Event()
+    said = []
+
+    class Slow:
+        def say(self, text):
+            said.append(text)
+            if text == "first":
+                gate.wait(5)
+    b = tui.Background(Slow())
+    b.say_prompt("first", "correction")
+    assert _until(lambda: said == ["first"])
+    for text, kind in (("Placement 2 of 6.", "intro"), ("Lower the board.", "correction"),
+                       ("Raise the board.", "correction"), ("I cannot see the board.", "lost"),
+                       ("Skipping this one.", "skip"), ("This one is out of reach. Skipping.", "unreachable"),
+                       ("Good. That one is done. Step back.", "good"), ("The camera stopped. Please wait.", "camera"),
+                       ("Move the board closer.", "correction"), ("That was the last placement.", "end")):
+        b.say_prompt(text, kind)
+    gate.set()
+    assert _until(lambda: said[-1] == "That was the last placement.")
+    assert said == ["first", "Placement 2 of 6.", "Skipping this one.", "This one is out of reach. Skipping.",
+                    "Good. That one is done. Step back.", "The camera stopped. Please wait.", "Move the board closer.",
+                    "That was the last placement."]
+
+
+def test_the_tui_hands_the_prompt_kind_to_the_speaker():
+    got = []
+
+    class K:
+        def say_prompt(self, text, kind):
+            got.append((text, kind))
+    t = tui.Tui(lambda s: None, K(), clock=Clock(), out=lambda s: None)
+    t.step(json.dumps(state(say={"id": 3, "t": 99.5, "kind": "intro", "text": "Placement 2 of 6."})))
+    assert got == [("Placement 2 of 6.", "intro")]

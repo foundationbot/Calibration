@@ -7,8 +7,8 @@ recent health events and the key help. Tui(send, speaker): step(line) handles on
 prompt whose id is new and whose age is under SPEAK_MAX_AGE_S, so a re-attach does not replay an old one), heartbeat()
 sends {"hb": t} at most once a second, key(k) sends {"key": K}. SpdSay speaks through spd-say (-w: wait until spoken;
 the caller runs it off the render thread); Silent is the no-voice speaker."""
+import collections
 import json
-import queue
 import subprocess
 import threading
 import time
@@ -113,24 +113,43 @@ class Silent:
         pass
 
 
+SUPERSEDED = frozenset({"correction", "lost"})   # a newer one of these makes the queued ones stale
+
+
 class Background:
-    """a speaker that never blocks the caller: texts queue up and are spoken in order by one thread"""
+    """a speaker that never blocks the caller: texts queue up and are spoken in order by one thread. A correction (or
+    "I cannot see the board") still waiting when a newer one arrives is dropped: the board has moved on (review 8: the
+    queue was unbounded). Intros, skips, ends, "out of reach", "Good" and the camera prompt are never dropped."""
 
     def __init__(self, speaker):
         self.speaker = speaker
-        self.q = queue.Queue()
+        self._q = collections.deque()
+        self._cv = threading.Condition()
+        self.dropped = 0
         threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self):
         while True:
-            t = self.q.get()
+            with self._cv:
+                while not self._q:
+                    self._cv.wait()
+                text, _ = self._q.popleft()
             try:
-                self.speaker.say(t)
+                self.speaker.say(text)
             except Exception:  # noqa: BLE001  (a speech failure must not take the TUI down)
                 pass
 
+    def say_prompt(self, text, kind=None):
+        with self._cv:
+            if kind in SUPERSEDED:
+                keep = [x for x in self._q if x[1] not in SUPERSEDED]
+                self.dropped += len(self._q) - len(keep)
+                self._q = collections.deque(keep)
+            self._q.append((text, kind))
+            self._cv.notify()
+
     def say(self, text):
-        self.q.put(text)
+        self.say_prompt(text, None)
 
 
 def _trial_line(tr) -> str:
@@ -173,11 +192,18 @@ class Tui:
                     continue
                 age = float(st.get("updated") or x.get("t") or 0) - float(x.get("t") or 0)
                 if not self._fresh or age <= self.max_age:
-                    self.speaker.say(x["text"])
+                    self._speak(x)
                 self.spoken = x["id"]
             self._fresh = False
         self.out(render(st, notes=self.notes(st)))
         return st
+
+    def _speak(self, x):
+        f = getattr(self.speaker, "say_prompt", None)
+        if f is not None:
+            f(x["text"], x.get("kind"))         # the kind lets a queued, stale correction be dropped
+        else:
+            self.speaker.say(x["text"])
 
     def notes(self, st) -> list:
         """the laptop's own NOT NORMAL lines: this TUI not in control (another attached later), calibd's step counter
