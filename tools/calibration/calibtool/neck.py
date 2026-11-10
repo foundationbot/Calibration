@@ -50,6 +50,9 @@ MAX_ERR_DEG = 3.0                # step 08's --max-err
 STILL_DEG = 0.1                  # two measured reads this close: the neck has settled
 STILL_POLL_S = 0.1
 STILL_TIMEOUT_S = 1.0
+# 10 Nov, phantom11: its neck lags the tool's ramp; a pose the tool reports short is polled this long for the neck to
+# arrive within MAX_ERR_DEG before it counts as missed
+ARRIVE_TIMEOUT_S = 4.0
 N_JOINTS = 29
 TOOL_TIMEOUT_S = 30.0
 RESULT = re.compile(r"RESULT targets joint=(\d+) target_deg=\S+ ss_err=(\S+)")
@@ -229,6 +232,19 @@ class Neck:
             prev = cur
         return prev, False
 
+    def _arrive(self, p, y):
+        """(seconds it took, None) once the measured neck is within max_err of (p, y), or (None, its last offsets)
+        after ARRIVE_TIMEOUT_S"""
+        t0 = self.clock()
+        while True:
+            mp, my = self.neck_deg()
+            off = (mp - p, my - y)
+            if max(abs(off[0]), abs(off[1])) <= self.max_err:
+                return self.clock() - t0 + 1e-9, off
+            if self.clock() - t0 >= ARRIVE_TIMEOUT_S:
+                return None, off
+            self.sleep(STILL_POLL_S)
+
     def goto(self, pitch, yaw) -> PoseDone:
         if not self.armed:
             raise NeckRefused("the neck is not armed (Neck.arm(): refusals and pins first)")
@@ -247,8 +263,12 @@ class Neck:
                              f"{(out or '').strip()[-300:]}")
         bad = {j: e for j, e in errs.items() if abs(e) > self.max_err}
         if bad:
-            raise NeckMissed(f"pose {p:+.1f}/{y:+.1f} not reached: " + ", ".join(
-                f"joint {j} off by {e:+.1f} deg" for j, e in sorted(bad.items())) + f" (limit {self.max_err:g} deg)")
+            late, off = self._arrive(p, y)
+            if late is None:
+                raise NeckMissed(f"pose {p:+.1f}/{y:+.1f} not reached: " + ", ".join(
+                    f"joint {j} off by {e:+.1f} deg" for j, e in sorted(bad.items())) + f" (limit {self.max_err:g} deg)"
+                    f"; measured still off by {off[0]:+.1f} / {off[1]:+.1f} deg after {ARRIVE_TIMEOUT_S:g} s")
+            self.log[-1]["arrived_late_s"] = late
         meas, still = self._measured()
         self._exit = (self.robot.desired_head(), self.clock())
         self.last = PoseDone((p, y), (float(pitch), float(yaw)), clamped, tuple(meas), still, errs, t_end - t_start,

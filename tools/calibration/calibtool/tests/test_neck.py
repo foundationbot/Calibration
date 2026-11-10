@@ -254,11 +254,39 @@ def test_foreign_command_between_poses_refused_nothing_sent():
 
 
 def test_missed_pose_raises_and_holds():
-    n, r, t, c = make(err=(3.5, 0.1))
+    n, r, t, c = make(err=(3.5, 0.1), sag=3.5)
     n.arm()
     with pytest.raises(neck.NeckMissed, match="3.5"):
         n.goto(8, 0)
     assert len(n.commands) == 1
+
+
+def test_a_slow_neck_that_arrives_after_the_tool_reports_is_not_a_miss():
+    """10 Nov, phantom11: the first grid pose (-24/-34 from home) was 21.6 / 13.8 deg short when the tool reported
+    (ramp 1 s + hold 0.8 s) and there a moment later; the grid held for nothing"""
+    n, r, t, c = make(err=(21.6, 13.8), sag=0.0)
+    n.arm()
+    real = r.joints
+
+    def lagging():
+        names, q = real()
+        if c() < t_arrive[0]:
+            q[NECK_IDX[0]], q[NECK_IDX[1]] = -2.4, -20.2
+        return names, q
+    t_arrive = [c() + 1.8 + 1.5]                        # 1.5 s after the tool's ramp + hold
+    r.joints = lagging
+    d = n.goto(-24, -34)
+    assert d.measured == pytest.approx((-24.0, -34.0), abs=0.2)
+    assert n.log[-1]["arrived_late_s"] > 1.0
+
+
+def test_a_neck_that_never_arrives_is_a_miss_after_the_wait():
+    n, r, t, c = make(err=(21.6, 13.8), sag=-21.6)
+    n.arm()
+    t0 = c()
+    with pytest.raises(neck.NeckMissed, match="measured"):
+        n.goto(-24, 0)
+    assert c() - t0 >= neck.ARRIVE_TIMEOUT_S
 
 
 def test_missing_result_line_is_a_miss():
@@ -327,7 +355,7 @@ def test_run_grid_stops_between_poses(why):
 
 
 def test_run_grid_error_stops_without_more_commands():
-    n, r, t, c = make(err=(0.1, 4.0))
+    n, r, t, c = make(err=(4.0, 0.1), sag=4.0)
     n.arm()
     out = neck.run_grid(n, [(0, 0), (8, 0)], lambda d: None, lambda: None)
     assert out.stopped.startswith("error") and len(n.commands) == 1 and not out.done
