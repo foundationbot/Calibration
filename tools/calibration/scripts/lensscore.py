@@ -38,6 +38,9 @@ def score(model, intr, C, data):
     each restarted once from its result if it stopped short (_solve_fixed), "pnp_failed_pairs": pairs left out
     because their PnP start failed}. A solve that did not converge leaves board scales that are not depth errors:
     check solved(solves) before using the records"""
+    if sf.fast_solver(model) is not None:                         # CALIB_SOLVER=fast: calibtool.score, same contract
+        from calibtool import score as fast_score
+        return fast_score.score(model, intr, C, data)
     poses, ok = sf.pnp_poses(data, model, intr, C)
     d = data.select(ok)
     r = _solve_fixed(d, model, intr, C, poses[ok], scale=False)

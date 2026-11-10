@@ -31,6 +31,19 @@ import rigmath as rm  # noqa: E402
 MAX_NFEV, MAX_ATTEMPTS, TRIM_ROUNDS = 2000, 3, 4
 TRIM_PX = 3.0                        # corners beyond this cut and the fit repeated (lensfit.solve)
 GROSS_PX = 20.0                      # residuals beyond this are detection failures, not noise (lensfit.ring_rms)
+SOLVER_ENV = "CALIB_SOLVER"          # "fast": solve() and lensscore.score() by calibtool.solver / calibtool.score (M3)
+
+
+def fast_solver(model, free_intr=False):
+    """calibtool.solver when CALIB_SOLVER=fast and it takes this solve (free intrinsics: KB4/KB4T only), else None
+    (unset or "scipy": the scipy least squares below, unchanged)"""
+    if os.environ.get(SOLVER_ENV, "").strip().lower() != "fast":
+        return None
+    cal = str(Path(__file__).resolve().parents[1])
+    if cal not in sys.path:
+        sys.path.insert(0, cal)
+    from calibtool import solver
+    return solver if (not free_intr or model in solver.KB_MODELS) else None
 
 
 class Data:
@@ -194,6 +207,10 @@ def solve(data: Data, model, intr0, C0, poses0, free_intr=True, free_C=True, sca
     """Least squares (a robust loss from a far start stalls: tested 19 Oct), then corners beyond trim_px of the fit
     cut and the fit repeated until the cut set settles (lensfit.solve). ls0: the board scales' start (log, per pair;
     None = 1) when scale. -> dict(intr, C, poses, log_scale, res (all corners, N x 2), kept (mask), success, nfev)"""
+    fast = fast_solver(model, free_intr)
+    if fast is not None:
+        return fast.solve(data, model, intr0, C0, poses0, free_intr=free_intr, free_C=free_C, scale=scale,
+                          trim_px=trim_px, rounds=rounds, max_nfev=max_nfev, ls0=ls0)
     keep = np.ones(len(data.P), bool)
     intr, C, poses, ls = intr0, C0, np.asarray(poses0, float), ls0
     nfev, ok = 0, True

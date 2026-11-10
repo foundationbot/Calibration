@@ -1,4 +1,5 @@
-"""calibtool.score: lensscore.score's contract on the fast solver (M3)."""
+"""calibtool.score: lensscore.score's contract on the fast solver (M3), and the CALIB_SOLVER switch of stereofit.solve
+and lensscore.score (default: scipy, unchanged)."""
 import importlib
 import sys
 from pathlib import Path
@@ -76,3 +77,61 @@ def test_radtan_live_configs_score_on_the_fast_path():
         rrec, _, rsolves = ls.score("RADTAN", rt, S.C_TRUE, data)
     assert solves == rsolves and rec["src"] == rrec["src"] and ls.solved(solves)
     _close_to_the_reference(rec["scale"], rrec["scale"], 1e-6, 1e-4)
+
+
+# ---------------------------------------------------------------- the switch
+
+
+def _spy(monkeypatch):
+    seen = {"scipy": 0, "fast": 0, "fast_score": 0}
+    real_ls, real_solve, real_score = sf.least_squares, solver.solve, score.score
+
+    def ls_(*a, **k):
+        seen["scipy"] += 1
+        return real_ls(*a, **k)
+
+    def solve_(*a, **k):
+        seen["fast"] += 1
+        return real_solve(*a, **k)
+
+    def score_(*a, **k):
+        seen["fast_score"] += 1
+        return real_score(*a, **k)
+    monkeypatch.setattr(sf, "least_squares", ls_)
+    monkeypatch.setattr(solver, "solve", solve_)
+    monkeypatch.setattr(score, "score", score_)
+    return seen
+
+
+def test_default_is_scipy(monkeypatch):
+    monkeypatch.delenv(solver.ENV, raising=False)
+    seen = _spy(monkeypatch)
+    ls.score("KB4T", [S.I0, S.I1], S.C_TRUE, _data())
+    assert seen["scipy"] > 0 and seen["fast"] == 0 and seen["fast_score"] == 0
+    monkeypatch.setenv(solver.ENV, "scipy")
+    ls.score("KB4T", [S.I0, S.I1], S.C_TRUE, _data())
+    assert seen["fast"] == 0 and seen["fast_score"] == 0
+
+
+def test_fast_switch_routes_solve_and_score(monkeypatch):
+    monkeypatch.setenv(solver.ENV, "fast")
+    seen = _spy(monkeypatch)
+    data = _data()
+    poses, ok = sf.pnp_poses(data, "KB4T", [S.I0, S.I1], S.C_TRUE)
+    r = sf.solve(data, "KB4T", [S.I0, S.I1], S.C_TRUE, poses, free_intr=False, free_C=False)
+    assert r["success"] and seen == {"scipy": 0, "fast": 1, "fast_score": 0}
+    ls.score("KB4T", [S.I0, S.I1], S.C_TRUE, data)
+    assert seen["scipy"] == 0 and seen["fast_score"] == 1
+
+
+def test_fast_switch_keeps_scipy_for_free_intrinsics_of_other_models(monkeypatch):
+    from calibtool import livecfg
+    monkeypatch.setenv(solver.ENV, "fast")
+    seen = _spy(monkeypatch)
+    data = _data()
+    rt = [np.r_[565.0, 564.0, 642.0, 385.0, -0.01, 0.002, 0.0005, -0.0003]] * 2
+    with livecfg.radtan_scope():
+        poses, ok = sf.pnp_poses(data, "RADTAN", rt, S.C_TRUE)
+        d = data.select(ok)
+        sf.solve(d, "RADTAN", rt, S.C_TRUE, poses[ok], max_nfev=3, rounds=1)
+    assert seen["scipy"] == 1 and seen["fast"] == 0
