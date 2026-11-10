@@ -193,7 +193,7 @@ def plain_reason(why) -> str:
 
 
 def minutes_text(n_poses) -> str:
-    m = max(1, math.ceil(n_poses * POSE_S / 60.0))
+    m = max(1, int(n_poses * POSE_S / 60.0 + 0.5))     # nearest minute (ceil said 3 for a 2-minute grid)
     return f"Moving the head now. About {m} minute{'' if m == 1 else 's'}."
 
 

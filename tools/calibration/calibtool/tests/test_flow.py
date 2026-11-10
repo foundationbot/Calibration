@@ -904,3 +904,9 @@ def test_the_finish_screen_lists_e_and_x_with_what_they_do(tmp_path):
     assert opts, s.kinds()[-15:]
     txt = " ".join(opts[0]["options"])
     assert "E = more placements" in txt and "X = decide again accepting 5 judged regions instead of 6" in txt
+
+
+def test_a_full_grid_is_said_as_about_2_minutes():
+    """10 Nov, phantom11: 49 poses took 118-119 s; rounding up said "About 3 minutes" """
+    assert fl.minutes_text(49) == "Moving the head now. About 2 minutes."
+    assert fl.minutes_text(7) == "Moving the head now. About 1 minute."
