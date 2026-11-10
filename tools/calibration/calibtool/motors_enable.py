@@ -36,14 +36,17 @@ VERIFY_S = 5.0
 POLL_S = 0.5
 DISABLE_WARNING = ("Disabling the motors makes the robot limp: the head and arms drop. Only with the operator next to "
                    "the robot, holding the head if it is not on the gantry. Press D again to disable.")
-_ENABLED = re.compile(r"(\d+)\s+of\s+(\d+)\s+motors\s+enabled", re.I)
+_ENABLED = re.compile(r"(?:(\d+) of (\d+) motors enabled|\benabled (\d+)/(\d+))")   # 2.1.0 line | 2.1.1 roll-call
 OPTIONAL = ("bus_v", "head_power", "slaves_op", "fault_latches")
 
 
 def parse_enabled(text):
     """(n, of) from the last "N of M motors enabled" line, or None"""
     m = _ENABLED.findall(text or "")
-    return None if not m else (int(m[-1][0]), int(m[-1][1]))
+    if not m:
+        return None
+    a, b, c, d = m[-1]
+    return (int(a), int(b)) if a else (int(c), int(d))
 
 
 def passed(checks) -> bool:

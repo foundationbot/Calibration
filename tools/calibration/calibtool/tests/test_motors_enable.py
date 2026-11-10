@@ -221,3 +221,12 @@ def test_motors_already_on_are_taken_over_on_y_only_when_allowed_and_all_else_pa
     en4, _ = make(state=good_state(master=master(motor_state=2)), run=r4, adopt_on=True)
     res4 = en4.enable("Y", gantry=True)
     assert not res4.ok and not mutating(r4.calls)
+
+
+def test_parse_enabled_reads_the_2_1_1_roll_call_line_too():
+    """phantom10's master (dma-ethercat 2.1.1) logs '(29 motors, enabled 29/29, wkc 144/144)' in its periodic
+    roll-call, not 'N of N motors enabled' (10 Nov live session: the takeover could not verify the motors)"""
+    line = ("12:23:13.529 [INFO    ] [dma_master  ] [ACTIVE] none: no SIL socket bit set or flapped in the last 60 s, "
+            "no drive fault, no latch (29 motors, enabled 29/29, wkc 144/144) [roll-call: periodic]")
+    assert me.parse_enabled(line) == (29, 29)
+    assert me.parse_enabled("x 50 of 50 motors enabled\n" + line.replace("29/29", "28/29")) == (28, 29)
