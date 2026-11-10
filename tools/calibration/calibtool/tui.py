@@ -73,7 +73,7 @@ def render(state, width=100) -> str:
     return "\n".join(L)
 
 
-def ssml_with_pauses(text, word_ms=300, sentence_ms=450) -> str:
+def ssml_with_pauses(text, word_ms=150, sentence_ms=450) -> str:
     """the text as SSML with a pause after every word and a longer one after every sentence (9 Nov trial: the
     operator asked for more pause between words; spd-say has no word-gap option, but -x takes SSML breaks)"""
     from xml.sax.saxutils import escape
@@ -86,7 +86,7 @@ def ssml_with_pauses(text, word_ms=300, sentence_ms=450) -> str:
 
 class SpdSay:
     def __init__(self, path="/usr/bin/spd-say", run=subprocess.run, rate=-85, lang="en-us", voice="male1",
-                 word_ms=300, sentence_ms=450):
+                 word_ms=150, sentence_ms=450):
         # 9 Nov trial: rate -10 was too fast and unclear; the operator asked for slower twice (-45, -70 still fast),
         # then for pauses between words
         self.path, self.run, self.rate, self.lang, self.voice = path, run, rate, lang, voice
