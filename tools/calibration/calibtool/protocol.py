@@ -75,16 +75,32 @@ def swept(order, n_poses, take, pose) -> int:
     return int(sum(n_poses[t] for t in order[:order.index(take)]) + pose + 1)
 
 
-def met_at(flags, swept_counts):
-    """the swept count at which a target was met for the last time (it stays met to the end); None if unmet at the
-    end. flags[i]: met after hold i; swept_counts[i]: poses swept by then"""
+def met_index(flags):
+    """the index of the hold after which a target was met for the last time (it stays met to the end); None if unmet
+    at the end. flags[i]: met after hold i"""
     flags = list(flags)
     if not flags or not flags[-1]:
         return None
     i = len(flags) - 1
     while i > 0 and flags[i - 1]:
         i -= 1
-    return swept_counts[i]
+    return i
+
+
+def met_at(flags, swept_counts):
+    """the swept count at which a target was met for the last time; None if unmet at the end"""
+    i = met_index(flags)
+    return None if i is None else swept_counts[i]
+
+
+CENTRE_GRID = tuple(i * 7 + j for i in (2, 3, 4) for j in (2, 3, 4))    # pitch -8..8 x yaw -11..11: board in view
+
+
+def centre_tags(rows) -> float:
+    """median left-camera tag count over a take's central poses (the board is in view there at any distance >= 0.6
+    m): how much of the board the detector finds, apart from the field of view"""
+    t = [r["tags_l"] for r in rows if r.get("grid") in CENTRE_GRID and "tags_l" in r]
+    return float(np.median(t)) if t else float("nan")
 
 
 def session_minutes(poses_per_placement, sec_per_pose=SEC_PER_POSE, placement_s=60.0) -> float:
@@ -222,16 +238,29 @@ def load_frames(path) -> list:
 # ---------------------------------------------------------------- noise, size, timing, bearing
 
 
-def corner_noise(dets, remove_shift=False):
-    """pooled per-axis std (px) of corner positions across frames (list of {(tag, k): (u, v)}) for corners seen in
-    >= 2 frames -> (std, corners used); nan with none"""
+UNSTABLE_PX = 0.5            # a corner whose per-corner sd exceeds this is "unstable" (jumps between frames)
+
+
+@dataclass
+class Noise:
+    median_sd: float            # median over corners of the per-corner sd (px; u and v pooled)
+    p90_sd: float
+    unstable: float             # share of corners with sd > UNSTABLE_PX
+    pooled: float               # pooled sd over every corner (px): what a few jumping corners inflate
+    n: int                      # corners seen in >= 2 frames
+
+
+def corner_noise(dets, remove_shift=False) -> Noise:
+    """repeatability of corner positions across frames (list of {(tag, k): (u, v)}), corners seen in >= 2 frames:
+    per corner the sd of its position (u and v pooled), summarised; nan with none. remove_shift: each frame's median
+    displacement subtracted first (the whole board moving while the head settles)"""
     cnt = {}
     for d in dets:
         for k in d:
             cnt[k] = cnt.get(k, 0) + 1
     keys = [k for k, n in cnt.items() if n >= 2]
     if not keys:
-        return float("nan"), 0
+        return Noise(float("nan"), float("nan"), float("nan"), float("nan"), 0)
     ki = {k: i for i, k in enumerate(keys)}
     P = np.full((len(dets), len(keys), 2), np.nan)
     for f, d in enumerate(dets):
@@ -239,14 +268,15 @@ def corner_noise(dets, remove_shift=False):
             if k in ki:
                 P[f, ki[k]] = uv
     shift = np.zeros((len(dets), 1, 2))
-    for _ in range(2 if remove_shift else 1):
-        mean = np.nanmean(P - shift, axis=0)
-        res = P - shift - mean
-        if remove_shift:
+    if remove_shift:
+        for _ in range(2):
+            res = P - shift - np.nanmean(P - shift, axis=0)
             shift = shift + np.nan_to_num(np.nanmedian(res, axis=1, keepdims=True))
     res = P - shift - np.nanmean(P - shift, axis=0)
-    dof = (np.isfinite(P[..., 0]).sum(0) - 1).sum()
-    return float(np.sqrt(np.nansum(res ** 2) / (2 * dof))), len(keys)
+    dof = np.isfinite(P[..., 0]).sum(0) - 1
+    sd = np.sqrt(np.nansum(res ** 2, axis=(0, 2)) / (2 * dof))
+    return Noise(float(np.median(sd)), float(np.percentile(sd, 90)), float(np.mean(sd > UNSTABLE_PX)),
+                 float(np.sqrt(np.nansum(res ** 2) / (2 * dof.sum()))), len(keys))
 
 
 def tag_px(det) -> float:
@@ -329,9 +359,9 @@ def pose_rows(frames, rig, take, cmds=None):
                "tags_r": max((_ntags(b) for _, b in pf.dets), default=0), "z": z,
                "tag_px": tag_px(dl)}
         for cam in (0, 1):
-            ds = [pf.dets[k][cam] for k in kept]
-            row[f"noise{cam}"], row[f"noise_n{cam}"] = corner_noise(ds) if len(ds) >= 2 else (float("nan"), 0)
-            row[f"noise{cam}_ns"] = corner_noise(ds, remove_shift=True)[0] if len(ds) >= 3 else float("nan")
+            nz = corner_noise([pf.dets[k][cam] for k in kept], remove_shift=True)
+            row[f"noise{cam}"], row[f"p90_{cam}"], row[f"unstable{cam}"] = nz.median_sd, nz.p90_sd, nz.unstable
+            row[f"pooled{cam}"], row[f"noise_n{cam}"] = nz.pooled, nz.n
         if kept:
             for cam in (0, 1):
                 d = pf.dets[i][cam]
@@ -345,6 +375,88 @@ def pose_rows(frames, rig, take, cmds=None):
             row["cell"] = str(lenscells.cell_of(uv0[:, 0].mean() - W / 2, uv0[:, 1].mean() - H / 2)[0])
             row["u_mean"] = float(uv0[:, 0].mean())
         out.append(row)
+    return out
+
+
+def take_kind(name) -> str:
+    """a take's board placement by its name: "tilted" (leaning back, facing up), "floor" (on the floor), "upright" """
+    n = str(name).lower()
+    return "tilted" if "tilt" in n else "floor" if "floor" in n else "upright"
+
+
+_ABBR = {"top-left": "tl", "top": "t", "top-right": "tr", "left": "l", "centre": "c", "right": "r",
+         "bottom-left": "bl", "bottom": "b", "bottom-right": "br"}
+
+
+def cell_abbrev(cell) -> str:
+    return _ABBR.get(str(cell), "?")
+
+
+def edge_letters(row) -> str:
+    """the image edge strips (L, R, T, B) a pose put corners in, either camera"""
+    out = ""
+    for e, letter in (("left", "L"), ("right", "R"), ("top", "T"), ("bottom", "B")):
+        if any(row.get(f"edges{c}", {}).get(e, 0) > 0 for c in (0, 1)):
+            out += letter
+    return out
+
+
+def rows_from_corners(z, rig, take, cmds, n_poses):
+    """pose_rows' rows (no noise, no tag counts of undetected poses) from a stored 15b corner file: a pose is detected
+    when it has a pair; its distance is the median rough z of its pairs; tallies and cell from its middle pair"""
+    import lenscells
+    from calibtool import coverage as cv
+    d16 = paths.import_script("16_split_distance")
+    W, H = rig.resolution
+    zz = d16.rough_z(z, rig.board, rig.nominal_focal_px, rig.resolution)
+    hold = np.asarray(z["img_hold"])
+    out = []
+    for p in range(n_poses):
+        idx = np.flatnonzero(hold == p)
+        if p in cmds:
+            cmd = cmds[p]
+        elif len(idx):
+            cmd = (np.degrees(z["img_pitch"][idx[0]]), np.degrees(z["img_yaw"][idx[0]]))
+        else:
+            cmd = (np.nan, np.nan)
+        row = {"take": take, "pose": p, "grid": grid_index(*cmd) if np.isfinite(cmd).all() else -1,
+               "cmd": tuple(float(c) for c in cmd), "detected": bool(len(idx)), "n_still": int(len(idx)),
+               "z": float(np.nanmedian(zz[idx])) if len(idx) and np.isfinite(zz[idx]).any() else float("nan")}
+        if len(idx):
+            i = per_hold_slice(list(idx), 1)[0]
+            d = {}
+            for cam in (0, 1):
+                m = (z["det_img"] == i) & (z["det_cam"] == cam)
+                d[cam] = {(int(t), int(k)): (float(u), float(v)) for t, k, u, v in
+                          zip(z["det_tag"][m], z["det_k"][m], z["det_u"][m], z["det_v"][m])}
+                t = cv.corner_tally(z["det_u"][m], z["det_v"][m], (W, H))
+                row[f"edges{cam}"], row[f"boxes{cam}"], row[f"rim{cam}"], row[f"n{cam}"] = (dict(t.edges),
+                                                                                         dict(t.boxes), t.rim, t.n)
+            row["tags_l"], row["tags_r"], row["tag_px"] = _ntags(d[0]), _ntags(d[1]), tag_px(d[0])
+            m0 = (z["det_img"] == i) & (z["det_cam"] == 0)
+            u, v = float(np.mean(z["det_u"][m0])), float(np.mean(z["det_v"][m0]))
+            row["cell"] = str(lenscells.cell_of(u - W / 2, v - H / 2)[0])
+            row["u_mean"] = u
+            row["neck"] = (float(np.degrees(z["img_pitch"][i])), float(np.degrees(z["img_yaw"][i])))
+        out.append(row)
+    return out
+
+
+def far_table(rows, edges=tuple(np.round(np.arange(0.25, 3.51, 0.25), 2))):
+    """poses bucketed by distance [edges[i], edges[i+1]): poses, detected, median left tags, tag size (px), and over
+    the detected poses the medians of camera 0's corner noise (median per-corner sd, px), unstable-corner share and
+    pooled sd"""
+    out = []
+    for lo, hi in zip(edges[:-1], edges[1:]):
+        b = [r for r in rows if np.isfinite(r.get("z", np.nan)) and lo <= r["z"] < hi]
+        det = [r for r in b if r["detected"]]
+        med = (lambda xs: float(np.nanmedian(xs)) if len(xs) and np.isfinite(xs).any() else float("nan"))
+        out.append({"lo": float(lo), "hi": float(hi), "n": len(b), "detected": len(det),
+                    "tags_med": med(np.array([r.get("tags_l", np.nan) for r in b], float)),
+                    "tag_px_med": med(np.array([r.get("tag_px", np.nan) for r in b], float)),
+                    "noise_med": med(np.array([r.get("noise0", np.nan) for r in det], float)),
+                    "unstable_med": med(np.array([r.get("unstable0", np.nan) for r in det], float)),
+                    "pooled_med": med(np.array([r.get("pooled0", np.nan) for r in det], float))})
     return out
 
 
@@ -366,8 +478,9 @@ def target_keys(targets):
 
 def target_costs(session, rig, z, assignment, n_poses, keep=None, targets=None, pp=None):
     """replay the session's holds in capture order through coverage's tallies (FIT on FIT holds, TEST per entry) and
-    report, per target, the poses swept until it was met for the last time (None: unmet), and how many holds added to
-    it. n_poses: {take: poses swept in the take}; keep: {take: [pose indices swept]} (a reduced protocol: holds of
+    report, per target, the poses swept until it was met for the last time (None: unmet), the take that met it, and
+    how many holds added to it (FIT targets: FIT holds with corners there; TEST targets: the TEST holds at the end;
+    judged: entries judged at the end). n_poses: {take: poses swept in the take}; keep: {take: [pose indices swept]} (a reduced protocol: holds of
     other poses dropped, swept counts over the kept poses only; None: every pose). pp: the principal point of the TEST
     cells (default: the image centre, the nominal one the capture-time assignment uses)"""
     from calibtool import coverage as cv
@@ -427,12 +540,24 @@ def target_costs(session, rig, z, assignment, n_poses, keep=None, targets=None, 
         p = h.pose if keep is None else pos[h.take][h.pose]
         swept_counts.append(swept(order, npos, h.take, p))
     out = {}
+
+    def res(f, n_add):
+        i = met_index(f)
+        return {"met_at": None if i is None else swept_counts[i], "met_in": None if i is None else holds[i].take,
+                "holds_adding": n_add}
     for k in keys:
-        out[k] = {"met_at": met_at(flags[k], swept_counts), "holds_adding": adds.get(k, 0)}
+        kind, c, r = k
+        if kind == "side":
+            n_add = max([n for (cc, _), n in entries.items() if cc == r], default=0)
+        elif kind == "judged":
+            n_add = sum(n >= targets.test_holds for n in entries.values())
+        elif kind == "far_band":
+            n_add = far_bands[r]
+        else:
+            n_add = adds.get(k, 0)
+        out[k] = res(flags[k], n_add)
     for e in sorted(entry_keys, key=str):
-        f = [st[1].get(e, 0) >= targets.test_holds for st in states]
-        out[("entry", None, e)] = {"met_at": met_at(f, swept_counts),
-                                   "holds_adding": states[-1][1].get(e, 0) if states else 0}
+        out[("entry", None, e)] = res([st[1].get(e, 0) >= targets.test_holds for st in states], entries.get(e, 0))
     return {"targets": out, "swept_total": sum(npos.values()), "order": order, "n_poses": npos,
             "holds": len(holds), "fit": fit, "entries": entries, "far_bands": far_bands}
 
@@ -484,6 +609,220 @@ def cmd_variant(a):
               [round(x, 3) for x in r["summary"]["iqr_pct"]], "rows", round(r["summary"]["rows_px"], 3))
 
 
+def _cmds_for(log_dir, take):
+    for f in (Path(log_dir) / f"{take}.out", Path(log_dir) / take / "neckgrid.log"):
+        if f.is_file():
+            c, n = pose_cmds_from_log(f.read_text(errors="replace"))
+            if c:
+                return c, n
+    return {}, 49
+
+
+def robot_rows(robot, rig, det_dir, corner_dir, log_dir):
+    """{take: rows} of one robot: from its raw detections where they exist, else from its stored corner files"""
+    takes = {}
+    for f in sorted(Path(det_dir).glob("*.frames.npz")):
+        t = f.name[: -len(".frames.npz")]
+        cmds, _ = _cmds_for(log_dir, t)
+        takes[t] = ("raw", pose_rows(load_frames(f), rig, t, cmds))
+    if corner_dir:
+        for f in sorted(Path(corner_dir).glob("*.npz")):
+            t = f.stem
+            if t in takes:
+                continue
+            cmds, n = _cmds_for(log_dir, t)
+            takes[t] = ("corners", rows_from_corners(dict(np.load(f)), rig, t, cmds, n))
+    for t, (_, rows) in takes.items():
+        for r in rows:
+            r["robot"] = robot
+    return takes
+
+
+def take_summary(rows, rig):
+    det = [r for r in rows if r["detected"]]
+    z = np.array([r["z"] for r in det], float)
+    zmed = float(np.nanmedian(z)) if len(z) and np.isfinite(z).any() else float("nan")
+    b = bearing_deg([np.radians(r["neck"][1]) for r in det], [r["u_mean"] for r in det], rig.nominal_focal_px,
+                    rig.resolution[0]) if det else float("nan")
+    med = (lambda k: float(np.nanmedian([r.get(k, np.nan) for r in det])) if det else float("nan"))
+    return {"poses": len(rows), "detected": len(det), "centre_tags": centre_tags(rows), "z": zmed, "band": float(band_of(zmed)[0]), "bearing": b,
+            "tag_px": med("tag_px"), "noise0": med("noise0"), "unstable0": med("unstable0"),
+            "noise1": med("noise1"), "unstable1": med("unstable1")}
+
+
+def _fmt(x, nd=2):
+    return "-" if x is None or (isinstance(x, float) and not np.isfinite(x)) else f"{x:.{nd}f}"
+
+
+def cmd_analyse(a):
+    """items 1, 3, 4 of the protocol report: markdown to stdout, everything to --json"""
+    from calibtool import coverage as cv, sessions
+    from calibtool.session import Session
+    robots, allrows, summ, rigs = {}, [], {}, {}
+    for spec in a.robot:
+        name, rigp, det_dir, corner_dir, log_dir, sess = spec.split(":")
+        rig = _rig(rigp)
+        rigs[name] = (rig, sess, log_dir)
+        robots[name] = robot_rows(name, rig, det_dir, corner_dir, log_dir)
+        for t, (src, rows) in robots[name].items():
+            summ[(name, t)] = dict(take_summary(rows, rig), source=src, kind=take_kind(t))
+            allrows += rows
+    P = print
+    P("## Takes\n")
+    P("| robot | take | source | kind | poses | detected | left tags at centre poses (of 35) | distance m (median) | "
+      "band | bearing deg | tag px | noise L px / unstable % | noise R px / unstable % |")
+    P("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    for (r, t), s in summ.items():
+        P(f"| {r} | {t} | {s['source']} | {s['kind']} | {s['poses']} | {s['detected']} | "
+          f"{_fmt(s['centre_tags'], 0)} | {_fmt(s['z'])} | "
+          f"{_fmt(s['band'])} | {_fmt(s['bearing'], 1)} | {_fmt(s['tag_px'], 1)} | {_fmt(s['noise0'], 3)} / "
+          f"{_fmt(100 * s['unstable0'], 1)} | {_fmt(s['noise1'], 3)} / {_fmt(100 * s['unstable1'], 1)} |")
+    # ---- item 1: default placements per band
+    default = {k: s for k, s in summ.items() if s["kind"] == "upright" and np.isfinite(s["bearing"])
+               and abs(s["bearing"]) <= a.max_bearing and s["poses"] == 49}
+    proposals, out_json = {}, {"takes": {f"{r}/{t}": s for (r, t), s in summ.items()}}
+    groups = [(b, [k for k, s in default.items() if s["band"] == b]) for b in NOMINAL]
+    tilt = [k for k, s in summ.items() if s["kind"] == "tilted" and s["poses"] == 49]
+    groups.append(("tilted", tilt))
+    P(f"\n## Pose usefulness per default distance (upright, |bearing| <= {a.max_bearing:g} deg, full 49-pose takes; "
+      "tilted takes apart)\n")
+    for b, keys in groups:
+        if not keys:
+            P(f"### {b}: no take\n")
+            continue
+        rows_by = [{r["grid"]: r for r in robots[rk][t][1]} for rk, t in keys]
+        det = np.array([[g in rb and rb[g]["detected"] for g in range(49)] for rb in rows_by], bool)
+        cells = []
+        for g in range(49):
+            d = [rb[g] for rb in rows_by if g in rb and rb[g]["detected"]]
+            cs = sorted({cell_abbrev(r["cell"]) for r in d})
+            el = "".join(sorted(set("".join(edge_letters(r) for r in d)), key="LRTB".index))
+            cells.append(f"{len(d)}/{len(rows_by)} {'/'.join(cs)} {el}".strip())
+        keep = propose(det, a.min_rate)
+        proposals[str(b)] = keep
+        tot = {k: 0 for k in ("edge", "box", "rim", "n")}
+        kept = dict(tot)
+        for rb in rows_by:
+            for g, r in rb.items():
+                if not r["detected"]:
+                    continue
+                v = {"edge": sum(sum(r[f"edges{c}"].values()) for c in (0, 1)),
+                     "box": sum(sum(r[f"boxes{c}"].values()) for c in (0, 1)),
+                     "rim": r["rim0"] + r["rim1"], "n": 1}
+                for k in tot:
+                    tot[k] += v[k]
+                    kept[k] += v[k] if g in keep else 0
+        cells_all = {(rr["cell"]) for rb in rows_by for rr in rb.values() if rr["detected"]}
+        cells_kept = {(rr["cell"]) for rb in rows_by for g, rr in rb.items() if rr["detected"] and g in keep}
+        names = ", ".join(f"{rk}/{t} ({_fmt(summ[(rk, t)]['z'])} m)" for rk, t in keys)
+        P(f"### {b}{' m' if b != 'tilted' else ''}: {names}\n")
+        P(grid_text(cells))
+        P(f"\nCell = takes detecting the pose / takes; step-66 cells of its camera-0 board (nominal principal point); "
+          f"edge strips (80 px) it puts corners in, either camera.\n")
+        P(f"Proposed list (detected in >= {a.min_rate:.0%} of the takes): {len(keep)} poses = grid {keep}; keeps "
+          f"{kept['n']}/{tot['n']} detected pose-takes, edge-strip corners {kept['edge']}/{tot['edge']}, corner-box "
+          f"corners {kept['box']}/{tot['box']}, rim corners {kept['rim']}/{tot['rim']}, cells {len(cells_kept)}/"
+          f"{len(cells_all)}; time {len(keep)} x {SEC_PER_POSE} s = {len(keep) * SEC_PER_POSE:.0f} s (all 49: "
+          f"{49 * SEC_PER_POSE:.0f} s).\n")
+    out_json["proposals"] = proposals
+    # ---- item 3: far limit (raw takes only: noise needs the frames)
+    raw = [r for (rk, t), s in summ.items() if s["source"] == "raw" for r in robots[rk][t][1]]
+    P("\n## Detection and corner noise vs distance (raw takes, every pose; distance = rough z of the pose's middle "
+      "still pair, or of its frame with most left tags)\n")
+    P("| distance m | poses | detected | detected % | median left tags | tag px (cam0) | noise L px | "
+      "unstable L % | pooled sd L px |")
+    P("|---|---|---|---|---|---|---|---|---|")
+    ft = far_table(raw)
+    for b in ft:
+        if b["n"]:
+            P(f"| {b['lo']:.2f}-{b['hi']:.2f} | {b['n']} | {b['detected']} | {100 * b['detected'] / b['n']:.0f} | "
+              f"{_fmt(b['tags_med'], 0)} | {_fmt(b['tag_px_med'], 1)} | {_fmt(b['noise_med'], 3)} | "
+              f"{_fmt(100 * b['unstable_med'], 1)} | {_fmt(b['pooled_med'], 3)} |")
+    out_json["far"] = ft
+    # ---- capture timing
+    P("\n## Capture timing (raw takes)\n")
+    tim = []
+    for (rk, t), s in summ.items():
+        if s["source"] != "raw":
+            continue
+        fr = load_frames(Path([x for x in a.robot if x.startswith(rk + ":")][0].split(":")[2]) / f"{t}.frames.npz")
+        tm = timing([pf.tl for pf in fr])
+        tim.append(tm)
+        P(f"- {rk}/{t}: frame {tm['frame_ms']:.2f} ms, 5-frame window {tm['window_ms']:.1f} ms, pose period "
+          f"{tm['period_s']:.2f} s")
+    out_json["timing"] = tim
+    # ---- item 4: poses per target on the stored sessions
+    for name, (rig, sess, log_dir) in rigs.items():
+        if not sess:
+            continue
+        st = sessions.get(sess)
+        s = Session.load(st)
+        z = cv.session_z(s, rig)
+        asg = cv.split16_assignment(s, z)
+        n_poses = {t: _cmds_for(log_dir, t)[1] for t in s.take_order}
+        extra = set(a.extra or [])
+        dflt = [t for (rk, t), v in summ.items() if rk == name and (rk, t) in default and f"{rk}/{t}" not in extra]
+        tilts = [t for (rk, t) in tilt if rk == name and f"{rk}/{t}" not in extra]
+        scen = {"as recorded": None}
+        cmds = {t: _cmds_for(log_dir, t)[0] for t in s.take_order}
+        prop_keep = {}
+        for t in s.take_order:
+            b = str(summ[(name, t)]["band"]) if (name, t) in default else ("tilted" if t in tilts else None)
+            if b in proposals:
+                prop_keep[t] = [p for p in range(n_poses[t]) if p in cmds[t] and grid_index(*cmds[t][p]) in
+                                proposals[b]]
+            else:
+                prop_keep[t] = list(range(n_poses[t]))
+        scen["proposed pose lists (defaults + tilted reduced, extras whole)"] = prop_keep
+        scen["defaults + tilted only, all poses"] = {t: list(range(n_poses[t])) for t in s.take_order
+                                                     if t in dflt or t in tilts}
+        scen["defaults + tilted only, proposed lists"] = {t: prop_keep[t] for t in s.take_order
+                                                          if t in dflt or t in tilts}
+        res = {k: target_costs(s, rig, z, asg, n_poses, keep=v) for k, v in scen.items()}
+        P(f"\n## Poses per coverage target: {sess} (split16 holdout_every 2; TEST cells on the nominal principal "
+          "point; swept poses in capture order, every pose of earlier takes counted)\n")
+        P("Scenarios: " + "; ".join(f"**{k}**: {r['holds']} holds, {r['swept_total']} poses swept over "
+                                    f"{len(r['order'])} takes ({', '.join(r['order'])})" for k, r in res.items()))
+        P("")
+        P("| target | " + " | ".join(f"{k}: met at swept pose, in take (holds)" for k in res) + " |")
+        P("|---" * (len(res) + 1) + "|")
+        keys = []
+        for r in res.values():
+            for k in r["targets"]:
+                if k not in keys:
+                    keys.append(k)
+        for k in keys:
+            kind, c, reg = k
+            label = f"{kind} {'' if c is None else 'cam' + str(c) + ' '}{reg}"
+            cells_ = []
+            for r in res.values():
+                v = r["targets"].get(k)
+                cells_.append("-" if v is None else "unmet" + f" ({v['holds_adding']})" if v["met_at"] is None else
+                              f"{v['met_at']} {v['met_in']} ({v['holds_adding']})")
+            P(f"| {label} | " + " | ".join(cells_) + " |")
+        P("\nFinal FIT tallies (corners; thirds = image-corner thirds TL/TR/BL/BR) and TEST entries with >= "
+          f"{cv.Targets().test_holds} TEST holds:\n")
+        for sk, r in res.items():
+            f = r["fit"]
+            parts = []
+            for c in (0, 1):
+                t = f.cams[c]
+                th = "/".join(str(int(t.thirds[i, j])) for i, j in cv.CORNER_THIRDS.values())
+                parts.append(f"cam{c}: thirds {th}, rim {t.rim}, edges L/R/T/B "
+                             + "/".join(str(t.edges[e]) for e in cv.EDGES) + ", boxes TL/TR/BL/BR "
+                             + "/".join(str(t.boxes[b]) for b in cv.BOXES))
+            judged = sorted(f"{c} {lo:g}-{hi:g} ({n})" for (c, (lo, hi)), n in r["entries"].items()
+                            if n >= cv.Targets().test_holds)
+            P(f"- **{sk}**: FIT pairs {f.n_pairs}, far pairs {f.far_pairs}; " + "; ".join(parts)
+              + f"; judged {len(judged)}: {', '.join(judged)}; far-band TEST holds "
+              + ", ".join(f"{lo:g}-{hi:g}: {n}" for (lo, hi), n in r["far_bands"].items()))
+        out_json[f"targets/{sess}"] = {sk: {str(k): v for k, v in r["targets"].items()} for sk, r in res.items()}
+        out_json[f"scenarios/{sess}"] = {sk: {"holds": r["holds"], "swept": r["swept_total"], "order": r["order"]}
+                                         for sk, r in res.items()}
+    if a.json:
+        Path(a.json).write_text(json.dumps(out_json, indent=1, default=str))
+
+
 def main(argv=None):
     import argparse
     ap = argparse.ArgumentParser(description="calibtool collection-protocol measurements")
@@ -500,8 +839,16 @@ def main(argv=None):
     v.add_argument("--out", required=True)
     v.add_argument("--common-test", default=None)
     v.add_argument("takes", nargs="+")
+    n = sub.add_parser("analyse")
+    n.add_argument("--robot", action="append", required=True,
+                   help="name:rig:frames dir:corner dir:raw-take/log dir:stored session (empty fields allowed)")
+    n.add_argument("--min-rate", type=float, default=0.5)
+    n.add_argument("--max-bearing", type=float, default=25.0)
+    n.add_argument("--json", default=None)
+    n.add_argument("--extra", nargs="*", default=[],
+                   help="robot/take placements made as extras (left out of the defaults scenario)")
     a = ap.parse_args(argv)
-    {"detect": cmd_detect, "variant": cmd_variant}[a.cmd](a)
+    {"detect": cmd_detect, "variant": cmd_variant, "analyse": cmd_analyse}[a.cmd](a)
 
 
 if __name__ == "__main__":

@@ -159,7 +159,7 @@ def test_frames_save_load_roundtrip(tmp_path):
 # ---------------------------------------------------------------- noise, tag size, timing, bearing
 
 
-def test_corner_noise_pooled_std_and_common_shift():
+def test_corner_noise_per_corner_sd_common_shift_and_jumps():
     rng = np.random.default_rng(1)
     base = _tags(30)
     dets = []
@@ -167,12 +167,17 @@ def test_corner_noise_pooled_std_and_common_shift():
         shift = (0.5 * f, -0.3 * f)                    # the head still settling: the whole board moves
         dets.append({k: (u + shift[0] + rng.normal(0, 0.2), v + shift[1] + rng.normal(0, 0.2))
                      for k, (u, v) in base.items()})
-    s, n = pr.corner_noise(dets, remove_shift=True)
-    assert n == 120
-    assert s == pytest.approx(0.2, rel=0.1)
-    s_raw, _ = pr.corner_noise(dets, remove_shift=False)
-    assert s_raw > 0.4
-    assert pr.corner_noise(dets[:1])[0] != pr.corner_noise(dets[:1])[0]   # one frame: nan
+    jump = (3, 2)                                       # one corner jumps 2 px in one frame (seen on stored takes)
+    dets[4][jump] = (dets[4][jump][0] + 2.0, dets[4][jump][1])
+    n = pr.corner_noise(dets, remove_shift=True)
+    assert n.n == 120
+    assert n.median_sd == pytest.approx(0.2, rel=0.15)
+    assert n.unstable == pytest.approx(1 / 120)        # per-corner sd > UNSTABLE_PX
+    assert n.pooled > n.median_sd                       # the jump weighs on the pooled sd only
+    raw = pr.corner_noise(dets, remove_shift=False)
+    assert raw.median_sd > 0.4
+    assert np.isnan(pr.corner_noise(dets[:1]).median_sd)     # one frame: nan
+    assert pr.corner_noise(dets[:1]).n == 0
 
 
 def test_tag_px_mean_side():
@@ -244,3 +249,77 @@ def test_selection_reproduces_a_recorded_corner_file(data_root):
     common = set(a) & set(b)
     assert len(common) >= 0.999 * max(len(a), len(b))
     assert max(np.hypot(a[k][0] - b[k][0], a[k][1] - b[k][1]) for k in common) < 0.01
+
+
+# ---------------------------------------------------------------- analysis helpers
+
+
+def test_take_kind_by_name():
+    assert pr.take_kind("n6_tiltL") == "tilted" and pr.take_kind("dtiltleft") == "tilted"
+    assert pr.take_kind("d075floordn") == "floor"
+    assert pr.take_kind("n6_110") == "upright" and pr.take_kind("dleft") == "upright"
+
+
+def test_cell_abbrev_and_edge_letters():
+    assert pr.cell_abbrev("top-left") == "tl" and pr.cell_abbrev("centre") == "c" and pr.cell_abbrev("bottom") == "b"
+    row = {"edges0": {"left": 3, "right": 0, "top": 0, "bottom": 0},
+           "edges1": {"left": 0, "right": 0, "top": 2, "bottom": 0}}
+    assert pr.edge_letters(row) == "LT"
+    assert pr.edge_letters({}) == ""
+
+
+def _corner_file():
+    """2 detected poses (0 and 2) of a 3-pose take, 2 pairs each; 8 tags of a 7x5 board at about 1 m"""
+    import contextlib
+    import io
+    import rigcfg
+    with contextlib.redirect_stdout(io.StringIO()):
+        rig = rigcfg.load(paths.CONFIG / "rig-phantom11.yaml")
+    rows, hold, t0 = [], [], []
+    for j, (h, du) in enumerate([(0, 0.0), (0, 0.1), (2, 400.0), (2, 400.1)]):
+        hold.append(h)
+        t0.append(1000 + j)
+        for cam in (0, 1):
+            for (t, k), (u, v) in _tags(8, du=du + 40 * cam).items():
+                rows.append((j, cam, t, k, u, v))
+    r = np.array(rows, float)
+    z = dict(img_hold=np.array(hold), img_t0=np.array(t0), img_t1=np.array(t0) + 1, det_img=r[:, 0].astype(int),
+             det_cam=r[:, 1].astype(int), det_tag=r[:, 2].astype(int), det_k=r[:, 3].astype(int), det_u=r[:, 4],
+             det_v=r[:, 5], img_pitch=np.radians([-22.6, -22.6, -22.6, -22.6]),
+             img_yaw=np.radians([-33.2, -33.2, -11.0, -11.0]))
+    return z, rig
+
+
+def test_rows_from_corners_marks_missing_poses_undetected():
+    z, rig = _corner_file()
+    cmds = {0: (-24.0, -34.0), 1: (-24.0, -23.0), 2: (-24.0, -11.0)}
+    rows = pr.rows_from_corners(z, rig, "t", cmds, 3)
+    assert [r["detected"] for r in rows] == [True, False, True]
+    assert [r["grid"] for r in rows] == [0, 1, 2]
+    assert rows[0]["edges0"]["left"] == 0 and rows[0]["cell"] in ("top-left", "left", "top")
+    assert np.isnan(rows[1]["z"])
+
+
+def test_far_table_buckets_by_distance():
+    rows = [{"z": 1.05, "detected": True, "tags_l": 35, "tag_px": 60.0, "noise0": 0.05, "unstable0": 0.01},
+            {"z": 1.10, "detected": False, "tags_l": 3, "tag_px": 58.0, "noise0": np.nan, "unstable0": np.nan},
+            {"z": 2.30, "detected": True, "tags_l": 20, "tag_px": 27.0, "noise0": 0.15, "unstable0": 0.05},
+            {"z": np.nan, "detected": False, "tags_l": 0, "tag_px": np.nan, "noise0": np.nan, "unstable0": np.nan}]
+    t = pr.far_table(rows, edges=(1.0, 1.25, 2.25, 2.5))
+    assert [b["n"] for b in t] == [2, 0, 1]
+    assert t[0]["detected"] == 1 and t[0]["tags_med"] == pytest.approx(19.0)
+    assert t[2]["noise_med"] == pytest.approx(0.15) and t[2]["tag_px_med"] == pytest.approx(27.0)
+    assert t[2]["unstable_med"] == pytest.approx(0.05)
+
+
+def test_met_index_matches_met_at():
+    assert pr.met_index([False, True, False, True, True]) == 3
+    assert pr.met_index([True, True]) == 0
+    assert pr.met_index([True, False]) is None and pr.met_index([]) is None
+
+
+def test_centre_tags_median_over_the_nine_central_poses():
+    rows = [{"grid": g, "tags_l": (30 if g in pr.CENTRE_GRID else 2)} for g in range(49)]
+    assert sorted(pr.CENTRE_GRID) == [16, 17, 18, 23, 24, 25, 30, 31, 32]
+    assert pr.centre_tags(rows) == 30
+    assert np.isnan(pr.centre_tags([]))
