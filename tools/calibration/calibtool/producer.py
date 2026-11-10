@@ -6,8 +6,8 @@ producer pod exists -> settle -> (change) -> scale back -> wait until Running; a
 restart before any scale-up (ProducerError). The kit's prodrestart.sh did the same by hand.
 
 Kube runs kubectl through an injected runner (argv, input) -> (rc, text); kubectl_runner() is the robot's
-(`k0s kubectl`, KUBECONFIG=/var/lib/k0s/pki/admin.conf). read_only=True (M2) refuses every mutating call
-(ReadOnlyRefused) before the runner is reached.
+(`k0s kubectl`, KUBECONFIG=/var/lib/k0s/pki/admin.conf). read_only=True (M2) runs only get / logs / describe and
+refuses every other call (ReadOnlyRefused) before the runner is reached.
 
 Spec: the deployment as saved in preflight (the "previous default" and the rollback snapshot); clean_yaml() drops the
 server-owned fields so `kubectl replace` applies it as saved. Lease: a JSON file naming the session that changed the
@@ -26,6 +26,7 @@ DOWN_TIMEOUT_S = 60.0
 UP_TIMEOUT_S = 90.0
 SETTLE_S = 3.0
 POLL_S = 1.0
+READ_VERBS = frozenset({"get", "logs", "describe"})     # all a read-only Kube runs
 SERVER_FIELDS = ("resourceVersion", "uid", "creationTimestamp", "generation", "managedFields", "selfLink")
 SERVER_ANNOTATIONS = ("deployment.kubernetes.io/revision", "kubectl.kubernetes.io/last-applied-configuration")
 
@@ -59,7 +60,8 @@ class Kube:
         self.run, self.ns, self.deploy, self.read_only = run, ns, deploy, read_only
 
     def _call(self, argv, input=None, mutating=False):
-        if mutating and self.read_only:
+        # read-only is an allow-list (review 7: the mutating flag alone was opt-in; a call that forgot it would run)
+        if self.read_only and (mutating or not argv or argv[0] not in READ_VERBS):
             raise ReadOnlyRefused(f"read-only: refused kubectl {' '.join(argv[:3])}")
         rc, out = self.run(argv, input=input) if input is not None else self.run(argv)
         if rc != 0:
@@ -161,17 +163,50 @@ def _wait(cond, timeout, sleep, clock, poll=POLL_S):
         sleep(poll)
 
 
+class _StillThere(ProducerError):
+    pass
+
+
+def _gone(kube):
+    """no producer pod left (a failing listing counts as not known to be gone)"""
+    try:
+        return not kube.pods()
+    except ProducerError:
+        return False
+
+
 def _cycle(kube: Kube, replicas, between=None, sleep=time.sleep, clock=time.monotonic, down_timeout=DOWN_TIMEOUT_S,
            up_timeout=UP_TIMEOUT_S, settle=SETTLE_S):
+    """scale 0 -> no pod -> settle -> between() -> scale back. Any failure after the scale to 0 still scales the
+    producer back once no pod is left (review 7: one kubectl error left the cameras off) and says so in the error; with
+    the old pod still there it stays at 0 (a second producer on the board crashes it), said as loudly"""
     kube.scale(0)
-    if not _wait(lambda: not kube.pods(), down_timeout, sleep, clock):
-        raise ProducerError(f"the producer pod did not go away within {down_timeout:.0f} s: not scaling up (two "
-                            "producers on one camera board crash it)")
-    sleep(settle)
-    if between is not None:
-        between()
+    up = False
+    try:
+        if not _wait(lambda: not kube.pods(), down_timeout, sleep, clock):
+            raise _StillThere(f"the producer pod did not go away within {down_timeout:.0f} s")
+        sleep(settle)
+        if between is not None:
+            between()
+        if replicas > 0:
+            up = True
+            kube.scale(replicas)
+    except Exception as e:
+        if up or replicas <= 0:
+            raise
+        fix = (f"scale it back by hand once no producer pod is left: k0s kubectl scale deploy {kube.deploy} -n "
+               f"{kube.ns} --replicas={int(replicas)}")
+        if isinstance(e, _StillThere) or not _wait(lambda: _gone(kube), down_timeout, sleep, clock):
+            raise ProducerError(f"{e}: PRODUCER LEFT AT 0 REPLICAS, the cameras are off (not scaling up while a "
+                                f"producer pod may still exist: two producers on one camera board crash it); {fix}") \
+                from e
+        try:
+            kube.scale(replicas)
+        except Exception as e2:  # noqa: BLE001
+            raise ProducerError(f"{e}; scaling back up failed too ({e2}): PRODUCER LEFT AT 0 REPLICAS, the cameras "
+                                f"are off; {fix}") from e
+        raise ProducerError(f"{e}; the producer was scaled back to {int(replicas)} (the change was not applied)") from e
     if replicas > 0:
-        kube.scale(replicas)
         if not _wait(lambda: any(p["ready"] and p["phase"] == "Running" for p in kube.pods()), up_timeout, sleep,
                      clock):
             raise ProducerError(f"the producer is not Running within {up_timeout:.0f} s after the restart")

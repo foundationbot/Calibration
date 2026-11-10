@@ -118,6 +118,74 @@ def test_read_only_runs_reads_and_refuses_writes():
     assert not any(c[0][0] in ("scale", "patch", "replace") for c in f.calls)
 
 
+def test_read_only_allows_only_get_logs_describe():
+    """review 7: the guard was opt-in (mutating=True); a call that forgot the flag would have run"""
+    f = FakeKubectl()
+    k = kube(f, read_only=True)
+    for argv in (["delete", "pod", "producer-a", "-n", "dma-video"], ["rollout", "restart", "deploy/producer"],
+                 ["apply", "-f", "-"], ["annotate", "deploy", "producer", "x=y"], ["exec", "producer-a", "--", "sh"]):
+        with pytest.raises(pr.ReadOnlyRefused):
+            k._call(argv)
+    assert f.calls == []
+    k._call(["get", "deploy", "producer", "-n", "dma-video", "-o", "yaml"])
+    k._call(["logs", "deploy/producer", "-n", "dma-video", "--tail=5"])
+    assert [c[0][0] for c in f.calls] == ["get", "logs"]
+
+
+class FailingKubectl(FakeKubectl):
+    """FakeKubectl whose verb `fail` fails `times` times"""
+
+    def __init__(self, fail, times=1, **kw):
+        super().__init__(**kw)
+        self.fail, self.times = fail, times
+
+    def __call__(self, argv, input=None):
+        if argv[0] == self.fail and self.times > 0:
+            self.times -= 1
+            self.calls.append((list(argv), input))
+            return 1, f"error: {self.fail} failed (the API server timed out)"
+        return super().__call__(argv, input)
+
+
+def test_a_failure_after_scaling_down_scales_the_producer_back_up():
+    """review 7: one kubectl error after the scale to 0 left the cameras off; now the producer is always scaled back
+    (once its old pod is gone) and the error says so"""
+    f = FailingKubectl("patch")
+    c = Clock()
+    spec = pr.Spec.from_yaml(DEPLOY_YAML)
+    with pytest.raises(pr.ProducerError, match="scaled back to 1"):
+        pr.resize(kube(f), spec, 1280, 800, 15, sleep=c.sleep, clock=c)
+    scales = [c_[0][-1] for c_ in f.calls if c_[0][0] == "scale"]
+    assert scales == ["--replicas=0", "--replicas=1"] and f.max_pods_seen == 1
+
+
+def test_a_pod_listing_error_while_waiting_down_still_scales_back():
+    f = FailingKubectl("get", times=0)
+    c = Clock()
+    k = kube(f)
+    orig = k.pods
+    n = {"i": 0}
+
+    def flaky():
+        n["i"] += 1
+        if n["i"] == 1:
+            raise pr.ProducerError("kubectl get pods failed (rc 1): timeout")
+        return orig()
+    k.pods = flaky
+    with pytest.raises(pr.ProducerError, match="scaled back to 1"):
+        pr.restart(k, sleep=c.sleep, clock=c)
+    assert [c_[0][-1] for c_ in f.calls if c_[0][0] == "scale"] == ["--replicas=0", "--replicas=1"]
+
+
+def test_a_pod_that_does_not_go_away_is_left_down_and_said_loudly():
+    """the no-overlap rule wins: with the old pod still there, scaling back would start a second producer"""
+    f = FakeKubectl(stuck=True)
+    c = Clock()
+    with pytest.raises(pr.ProducerError, match="LEFT AT 0 REPLICAS"):
+        pr.restart(kube(f), sleep=c.sleep, clock=c)
+    assert [c_[0][-1] for c_ in f.calls if c_[0][0] == "scale"] == ["--replicas=0"]
+
+
 def test_kubectl_argv_names_namespace_and_deployment():
     f = FakeKubectl()
     k = kube(f)
