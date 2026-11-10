@@ -3,6 +3,7 @@ home, nothing moves): the tool watches the board continuously but speaks only on
 thing at a time ("Good. Step back." or one correction), names directions from the operator's side, and never says
 "hold"."""
 import json
+import math
 import re
 
 import pytest
@@ -590,13 +591,16 @@ def test_a_trial_without_a_time_limit_never_skips_by_itself(tmp_path, limit):
 # two corrections that did not bring the board more than ~3 cm nearer, a board within 15 cm of a near target is used
 # where it is.
 
+QUIET = {"status_s": math.inf}         # rests 20 s apart with no frames between: no "Still waiting" in these tests
+
+
 def rest(g, o, t0):
     """the board at rest for 1.5 s from t0 (rests 20 s apart: the last prompt has been spoken and acted on)"""
     return feed(g, [o] * 4, t0=t0)
 
 
 def test_a_near_board_that_stops_improving_is_close_enough():
-    g = guide(place.target("0.5 m"))
+    g = guide(place.target("0.5 m"), **QUIET)
     assert rest(g, obs(z=0.66, v=40, cut=("top",)), 0.0)[0].text.startswith("Lower the board.")
     assert rest(g, obs(z=0.70, v=600), 20.0)[0].text.startswith("Good. Raise the board")
     s = rest(g, obs(z=0.64, v=40, cut=("top",)), 40.0)
@@ -605,7 +609,7 @@ def test_a_near_board_that_stops_improving_is_close_enough():
 
 
 def test_a_near_board_still_getting_closer_is_guided_on():
-    g = guide(place.target("0.5 m"))
+    g = guide(place.target("0.5 m"), **QUIET)
     rest(g, obs(z=0.80, v=600), 0.0)
     rest(g, obs(z=0.72, v=600), 20.0)
     s = rest(g, obs(z=0.64, v=40, cut=("top",)), 40.0)                 # 16 cm better than two corrections ago
@@ -613,7 +617,7 @@ def test_a_near_board_still_getting_closer_is_guided_on():
 
 
 def test_close_enough_needs_two_corrections_first():
-    g = guide(place.target("0.5 m"))
+    g = guide(place.target("0.5 m"), **QUIET)
     rest(g, obs(z=0.64, v=40, cut=("top",)), 0.0)
     s = rest(g, obs(z=0.64, v=40, cut=("top",), u=700), 20.0)          # one correction so far
     assert s[0].kind == "correction" and not g.done
@@ -621,7 +625,7 @@ def test_close_enough_needs_two_corrections_first():
 
 @pytest.mark.parametrize("name,z", [("0.5 m", 0.70), ("1.1 m", 1.40)])
 def test_close_enough_only_within_15_cm_of_a_near_target(name, z):
-    g = guide(place.target(name))
+    g = guide(place.target(name), **QUIET)
     for i in range(4):
         cut = ("top",) if i % 2 == 0 else ()
         s = rest(g, obs(z=z, v=40 if cut else 600, cut=cut, u=640 + 20 * i), 20.0 * i)
@@ -631,7 +635,7 @@ def test_close_enough_only_within_15_cm_of_a_near_target(name, z):
 
 def test_close_enough_with_gravity_and_the_operator_deciding_reachability():
     """phantom10's profile (auto_skip off): raised, the board is cut at the top; lowered, it is too far"""
-    g = gguide("0.5 m", stand=place.Stand(auto_skip=False))
+    g = gguide("0.5 m", stand=place.Stand(auto_skip=False), **QUIET)
     o1 = at(-0.25, 0.62, cut=("top",))
     o1.lo[1] = 2.0
     o2 = at(-0.45, 0.55)
@@ -646,7 +650,8 @@ def test_close_enough_with_gravity_and_the_operator_deciding_reachability():
 
 
 def test_the_trial_logs_a_close_enough_placement_with_its_distance(tmp_path):
-    tr = place.Trial([place.target("0.5 m"), place.target("1.1 m")], tmp_path / "t.jsonl", focal=F, size=(W, H))
+    tr = place.Trial([place.target("0.5 m"), place.target("1.1 m")], tmp_path / "t.jsonl", focal=F, size=(W, H),
+                     **QUIET)
     tr.start(0.0)
     says = []
     for t0, o in ((1.0, obs(z=0.66, v=40, cut=("top",))), (21.0, obs(z=0.70, v=600)),
@@ -656,3 +661,140 @@ def test_the_trial_logs_a_close_enough_placement_with_its_distance(tmp_path):
     assert "Close enough. Using 64 centimetres." in [x.text for x in says]
     assert tr.records[0]["result"] == "placed_near" and tr.records[0]["z_m"] == pytest.approx(0.64)
     assert tr.summary()["placed"] == 1
+
+
+
+# ------------------------------------------------------------------ more communication (10 Nov, phantom10)
+# A board not seen only got "I cannot see the board. Turn it to face the robot." after 6 s. The guide now says why
+# (from detect.board_miss), once per reason until it changes; "Keep the board still." when the board keeps appearing
+# and vanishing; and "Still waiting. ..." when nothing has been said for STATUS_S.
+
+def miss(reason, cut=(), n_tags=3, tag_px=30.0, bright=120.0):
+    return detect.Miss(reason, n_tags, tag_px, bright, tuple(cut))
+
+
+def feed_miss(g, m, seconds, t0=0.0, dt=0.5):
+    out = []
+    for i in range(int(round(seconds / dt))):
+        s = g.update(t0 + i * dt, None, miss=m)
+        if s is not None:
+            out.append(s)
+    return out
+
+
+@pytest.mark.parametrize("m,text", [
+    (miss("dark", n_tags=0, bright=20.0), "It is too dark for me to see the board."),
+    (miss("far", tag_px=9.0), "The board is too far for me to read. Bring it closer."),
+    (miss("partial", cut=("left",)), "I can see only part of the board. Move the board to your left."),
+    (miss("partial", cut=("right",)), "I can see only part of the board. Move the board to your right."),
+    (miss("partial", cut=("top",)), "I can see only part of the board. Lower the board."),
+    (miss("partial", cut=("bottom",)), "I can see only part of the board. Raise the board."),
+    (miss("few"), "I can read only a few tags. Turn the board to face the robot."),
+])
+def test_a_board_not_seen_gets_its_reason_said_once(m, text):
+    says = feed_miss(guide(), m, 12.0)
+    assert [x.text for x in says] == [text]
+    assert says[0].t == pytest.approx(place.MISS_S)
+
+
+def test_nothing_found_in_a_bright_image_waits_lost_s_as_before():
+    says = feed_miss(guide(lost_s=6.0), miss("none", n_tags=0), 12.0)
+    assert [(x.t, x.text) for x in says] == [(6.0, "I cannot see the board. Turn it to face the robot.")]
+
+
+def test_a_new_reason_is_said_and_an_old_one_again_once_it_changed():
+    g = guide()
+    a = feed_miss(g, miss("dark", n_tags=0, bright=20.0), 12.0)
+    b = feed_miss(g, miss("far", tag_px=9.0), 12.0, t0=12.0)
+    c = feed_miss(g, miss("dark", n_tags=0, bright=20.0), 12.0, t0=24.0)
+    assert [x.text for x in a + b + c] == ["It is too dark for me to see the board.",
+                                         "The board is too far for me to read. Bring it closer.",
+                                         "It is too dark for me to see the board."]
+
+
+def test_a_reason_waits_until_the_last_prompt_was_spoken():
+    g = guide()
+    s1 = feed(g, [obs(z=1.6)] * 3)
+    assert len(s1) == 1
+    s2 = feed_miss(g, miss("far", tag_px=9.0), 10.0, t0=1.5)
+    assert len(s2) == 1 and s2[0].t >= s1[0].t + place.speech_s(s1[0].text) + place.GAP_S
+
+
+def test_a_board_that_keeps_appearing_and_vanishing_is_asked_to_keep_still():
+    """tags found in one step and not the next while the operator moves: blur"""
+    g = guide()
+    says = []
+    for i in range(24):                                             # 12 s, seen every other step
+        o = obs(z=1.3, u=400 + 20 * i) if i % 2 == 0 else None
+        s = g.update(i * 0.5, o, miss=None if o else miss("none", n_tags=0))
+        if s is not None:
+            says.append(s)
+    assert [x.text for x in says] == ["Keep the board still."]
+    assert says[0].t > place.UNSETTLED_S
+
+
+def test_keep_still_only_after_it_does_not_settle_for_unsettled_s():
+    g = guide()
+    says = []
+    for i in range(7):                                              # 3 s of flicker, then at rest in the band
+        o = obs(z=1.3, u=400 + 20 * i) if i % 2 == 0 else None
+        s = g.update(i * 0.5, o, miss=None if o else miss("none", n_tags=0))
+        says += [s] if s else []
+    says += feed(g, [obs(z=1.1)] * 4, t0=3.5)
+    assert [x.text for x in says] == [place.DONE_TEXT]
+
+
+def test_a_board_carried_steadily_is_not_asked_to_keep_still():
+    assert "Keep the board still." not in [x.text for x in feed(guide(), moving(20))]
+
+
+def test_a_status_after_status_s_of_silence_while_the_board_is_carried():
+    g = guide(place.target("0.5 m"))
+    says = feed(g, [obs(z=1.1, u=300 + 30 * (i % 20)) for i in range(40)])          # 20 s, always moving
+    assert [(x.kind, x.text) for x in says] == [("status", "Still waiting. Board 110 centimetres away; I need about 50.")]
+    assert says[0].t == pytest.approx(place.STATUS_S)
+
+
+def test_a_status_repeats_while_the_board_is_not_seen_with_the_reason():
+    says = feed_miss(guide(lost_s=6.0), miss("none", n_tags=0), 40.0)
+    assert [(x.t, x.text) for x in says] == [
+        (6.0, "I cannot see the board. Turn it to face the robot."),
+        (21.0, "Still waiting. I cannot see the board. Turn it to face the robot."),
+        (36.0, "Still waiting. I cannot see the board. Turn it to face the robot.")]
+    says = feed_miss(guide(), miss("far", tag_px=9.0), 20.0)
+    assert [x.text for x in says][-1] == "Still waiting. The board is too far for me to read. Bring it closer."
+
+
+def test_a_status_never_comes_into_a_still_board_with_its_instruction_standing():
+    """the repeat rule governs a board at rest after an instruction: one repeat after repeat_s, no nagging"""
+    says = feed(guide(), [obs(z=1.6)] * 200)
+    assert [x.kind for x in says] == ["correction", "correction"]
+
+
+def test_a_status_does_not_take_the_rest_of_its_still_stretch():
+    """a status said while the board settles must not count as the rest's instruction"""
+    g = guide()
+    s1 = feed(g, [obs(z=1.6, u=300 + 30 * (i % 20)) for i in range(40)])             # 20 s carried: the status
+    assert [x.kind for x in s1] == ["status"]
+    says = feed(g, [obs(z=1.6, u=600)] * 30, t0=20.0)
+    assert [x.kind for x in says] == ["correction"]
+
+
+def test_new_sentences_never_say_hold_or_robots_right_alone():
+    texts = list(place.MISS_TEXT.values()) + list(place.CUT_FIRST.values()) + [place.STILL_TEXT, place.near_text(0.63)]
+    texts += [x.text for x in feed_miss(guide(), miss("none", n_tags=0), 40.0)]
+    for s in texts:
+        assert "hold" not in s.lower(), s
+        if "robot's right" in s:
+            assert "YOUR left" in s, s
+        if "robot's left" in s:
+            assert "YOUR right" in s, s
+
+
+def test_the_trial_passes_the_reason_to_the_guide(tmp_path):
+    tr = place.Trial([place.target("0.5 m")], tmp_path / "t.jsonl", focal=F, size=(W, H))
+    tr.start(0.0)
+    says = []
+    for i in range(1, 12):
+        says += tr.update(i * 0.5, None, miss=miss("dark", n_tags=0, bright=20.0))
+    assert "It is too dark for me to see the board." in [x.text for x in says]

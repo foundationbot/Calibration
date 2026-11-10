@@ -220,6 +220,28 @@ def test_queued_corrections_are_superseded_but_intros_skips_and_ends_never_dropp
                     "That was the last placement."]
 
 
+def test_queued_status_and_keep_still_prompts_are_superseded_too():
+    """10 Nov: "Still waiting." and "Keep the board still." describe the board at one moment, like a correction"""
+    import threading
+    gate = threading.Event()
+    said = []
+
+    class Slow:
+        def say(self, text):
+            said.append(text)
+            if text == "first":
+                gate.wait(5)
+    b = tui.Background(Slow())
+    b.say_prompt("first", "correction")
+    assert _until(lambda: said == ["first"])
+    b.say_prompt("Still waiting. Board 110 centimetres away; I need about 50.", "status")
+    b.say_prompt("Keep the board still.", "still")
+    b.say_prompt("Lower the board.", "correction")
+    gate.set()
+    assert _until(lambda: said[-1] == "Lower the board.")
+    assert said == ["first", "Lower the board."]
+
+
 def test_the_tui_hands_the_prompt_kind_to_the_speaker():
     got = []
 

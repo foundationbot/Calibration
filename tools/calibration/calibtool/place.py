@@ -20,8 +20,13 @@ important first:
   than 3 cm nearer, within 15 cm of the target -> "Close enough. Using N centimetres." (result placed_near, near_z)
 After the operator moved the board and it rests again: the same problem, smaller -> "Not yet. N more centimetres
 closer." (what is left); the same problem, not smaller -> "Not yet. " + the instruction; another problem -> "Good. " +
-the instruction. Unchanged and unmoved, an instruction is repeated at most once, after repeat_s. A board not seen for
-lost_s gets one "I cannot see the board" prompt. Directions name the operator's side ("to your left"); the word "hold"
+the instruction. Unchanged and unmoved, an instruction is repeated at most once, after repeat_s. A board not seen
+gets its reason said once (until the reason changes; detect.board_miss): "It is too dark for me to see the board.",
+"The board is too far for me to read. Bring it closer.", "I can see only part of the board." + the direction, "I can
+read only a few tags. Turn the board to face the robot." (after MISS_S), or "I cannot see the board. Turn it to face
+the robot." (nothing found, after lost_s). A board found and lost in turn for UNSETTLED_S -> "Keep the board still.";
+nothing said for STATUS_S -> "Still waiting. Board N centimetres away; I need about M." (or "Still waiting. " + why it
+is not seen). None of these interrupt: each waits for the last prompt's speaking time plus GAP_S. Directions name the operator's side ("to your left"); the word "hold"
 is not used in speech (inside the tool it is a still neck pose).
 
 The distance model (9 Nov trial, phantom10): the head camera is ~1.5 m up and looks steeply down, so a board standing
@@ -66,7 +71,12 @@ UNREACHABLE_RESTS = 2      # ... judged out of reach on this many separate rests
 UNREACHABLE_LONG_S = 3.0   # the board low ended a placement for good), or one rest this long
 FEW_TAGS = 20          # of 35: fewer readable tags with the board in view = seen too obliquely (9 Nov trial: 8)
 FEW_TAGS_STILL_PX = 25.0   # few tags make the centroid jitter; stillness is judged more loosely then
-LOST_S = 6.0
+LOST_S = 6.0             # nothing found at all in a bright image: said after this long
+MISS_S = 2.0             # a specific reason the board is not seen (dark, far, partial, few): said after this long
+UNSETTLED_S = 4.0        # the board found and lost in turn (blur while moving) this long -> "Keep the board still."
+UNSETTLED_FLIPS = 3      # ... with at least this many changes between found and not found
+SETTLED_S = 2.0          # no such change for this long: the board settled (or stayed away)
+STATUS_S = 15.0          # nothing said for this long while a placement runs -> "Still waiting. ..."
 MOVE_Z_FRAC = 0.03       # a distance change above this counts as the board moving
 MOVE_H_M = 0.05          # so does a height change above this (a board raised or lowered on its stand)
 SHRINK_M = 0.03          # the same correction counts as smaller when its amount fell by more than this
@@ -95,10 +105,34 @@ NEAR_WITHIN_M = 0.15
 NEAR_KEYS = frozenset({"closer", "back", "far", "near", "raise", "lower", "raise_head", "cut_top", "cut_bottom",
                        "noplace"})
 PLACED = ("placed", "placed_near")      # the results a placement's grid runs for
+
+
+def near_text(z) -> str:
+    return f"Close enough. Using {int(round(z * 100))} centimetres."
+
+
+def miss_text(miss) -> str:
+    """the sentence for a board not seen: detect.Miss or None (nothing known: as "none")"""
+    reason = "none" if miss is None else miss.reason
+    text = MISS_TEXT.get(reason, MISS_TEXT["none"])
+    if reason == "partial" and miss.cut:
+        text += " " + CUT_FIRST[miss.cut[0]]
+    return text
 UNREACHABLE_TEXT = "This one is out of reach. Skipping."
 NOPLACE_TEXT = "I cannot find a good spot. Press C to skip this one."
 AUTO_OFF_RANGE_M = 1.5
 SKIP_TEXT = "Skipping this one."
+STILL_TEXT = "Keep the board still."     # never "hold": inside the tool a hold is a still neck pose
+# 10 Nov (phantom10): why the board is not seen (detect.board_miss), said short and plain
+MISS_TEXT = {"dark": "It is too dark for me to see the board.",
+             "far": "The board is too far for me to read. Bring it closer.",
+             "partial": "I can see only part of the board.",
+             "few": "I can read only a few tags. Turn the board to face the robot.",
+             "none": "I cannot see the board. Turn it to face the robot."}
+# the first words of a correction for a board cut by an image side (image left = the robot's left = YOUR right: a
+# board cut on the left goes to YOUR left)
+CUT_FIRST = {"left": "Move the board to your left.", "right": "Move the board to your right.",
+             "top": "Lower the board.", "bottom": "Raise the board."}
 KEEP_HEIGHT = "Keep the same height."
 TIMEOUT_S = 180.0
 
@@ -240,10 +274,11 @@ def floor_distance_for(depth, dh, up, h_dir):
 
 class PlacementGuide:
     def __init__(self, target: Target, focal, size=(1280, 800), pp=None, still_s=STILL_S, still_px=STILL_PX,
-                 lost_s=LOST_S, repeat_s=REPEAT_S, ids=None, up=None, stand=None):
+                 lost_s=LOST_S, repeat_s=REPEAT_S, ids=None, up=None, stand=None, status_s=STATUS_S):
         self.target, self.f, self.size = target, float(focal), tuple(size)
         self.pp = pp or ((size[0] - 1) / 2.0, (size[1] - 1) / 2.0)
         self.still_s, self.still_px, self.lost_s, self.repeat_s = still_s, still_px, lost_s, repeat_s
+        self.status_s = status_s
         self.ids = ids or itertools.count(1)
         self.up = up                    # 'up' in camera 0: a vector, a callable giving one (or None), or None
         self.stand = stand or Stand()
@@ -260,38 +295,93 @@ class PlacementGuide:
         self.says = []
         self._start = None              # (t, centroid, z, dh) of the current still stretch
         self._spoken_at = None          # t of the last say in this still stretch
-        self._lost_since = None
-        self._lost_said = False
         self.last_obs = None
         self._last_key = None           # the last correction spoken (kind of problem), for feedback
         self._last_err = None
         self._repeats = 0
+        self.last_miss = None           # why the board was not seen in the last frame (detect.Miss), or None
+        self._miss_key = None           # the current reason the board is not seen, since when, and the last one said
+        self._miss_since = None
+        self._miss_said = None
+        self._seen = None               # the board found in the previous frame
+        self._flips = []                # times the board went from found to not found or back, this unsettled stretch
+        self._still_said = False
+        self._said_t = None             # the last time anything was said (the status clock)
 
-    def _say(self, t, kind, text):
+    def _say(self, t, kind, text, rest=True, gap=True):
+        """rest=False: a prompt about no rest in particular (a reason the board is not seen, keep still, a status):
+        it does not stand as the current rest's instruction; gap=False: it asks nothing of the operator (a status),
+        so the next prompt waits only for it to be spoken, not GAP_S more"""
         s = Say(next(self.ids), float(t), kind, text)
         self.says.append(s)
-        self._spoken_at = t
-        self._quiet_until = float(t) + speech_s(text) + GAP_S
+        if rest:
+            self._spoken_at = t
+        self._said_t = float(t)
+        self._quiet_until = float(t) + speech_s(text) + (GAP_S if gap else 0.0)
         return s
+
+    def _quiet(self, t) -> bool:
+        return t < getattr(self, "_quiet_until", float("-inf"))
+
+    def _track_seen(self, t, seen):
+        """the board found / not found in turn: blur while it moves"""
+        if self._flips and t - self._flips[-1] >= SETTLED_S:
+            self._flips, self._still_said = [], False
+        if self._seen is not None and seen != self._seen:
+            self._flips.append(t)
+        self._seen = seen
+
+    def _settled(self):
+        self._flips, self._still_said = [], False
+
+    def _unsettled(self, t):
+        if self._still_said or len(self._flips) < UNSETTLED_FLIPS or t - self._flips[0] < UNSETTLED_S or \
+                self._quiet(t):
+            return None
+        self._still_said = True
+        return self._say(t, "still", STILL_TEXT, rest=False)
+
+    def _missing(self, t, miss):
+        """the reason the board is not seen, once per reason until it changes, after MISS_S (nothing at all: lost_s)"""
+        reason = "none" if miss is None else miss.reason
+        key = (reason, miss.cut[:1] if reason == "partial" else ())
+        if key != self._miss_key:
+            self._miss_key, self._miss_since = key, t
+        delay = self.lost_s if reason == "none" else MISS_S
+        if self._miss_said == key or t - self._miss_since < delay or self._quiet(t):
+            return None
+        self._miss_said = key
+        return self._say(t, "lost", miss_text(miss), rest=False)
+
+    def _status(self, t, obs, miss):
+        """nothing said for STATUS_S: where the board is and what is needed, or why it is not seen"""
+        if self._said_t is None or t - self._said_t < self.status_s or self._quiet(t):
+            return None
+        if obs is None:
+            text = "Still waiting. " + miss_text(miss)
+        else:
+            text = (f"Still waiting. Board {int(round(float(obs.z) * 100))} centimetres away; I need about "
+                    f"{int(round(self.target.distance_m * 100))}.")
+        return self._say(t, "status", text, rest=False, gap=False)
 
     def _up(self):
         u = self.up() if callable(self.up) else self.up
         return None if u is None else np.asarray(u, float)
 
-    def update(self, t, obs):
+    def update(self, t, obs, miss=None):
+        """obs: detect.BoardObs, or None when the board is not seen; miss: then why (detect.Miss), if known"""
         if self.done:
             return None
         self.last_obs = obs
+        self.last_miss = None if obs is not None else miss
+        if self._said_t is None:
+            self._said_t = float(t)             # the placement's intro was said just now
+        self._track_seen(t, obs is not None)
         if obs is None:
             self._start = None
             self._spoken_at = None
-            if self._lost_since is None:
-                self._lost_since = t
-            if not self._lost_said and t - self._lost_since >= self.lost_s:
-                self._lost_said = True
-                return self._say(t, "lost", "I cannot see the board. Turn it to face the robot.")
-            return None
-        self._lost_since, self._lost_said = None, False
+            return self._unsettled(t) or self._missing(t, miss) or self._status(t, None, miss)
+        self._miss_key = self._miss_said = None
         up = self._up()
         sp = split(obs.p, up) if up is not None and getattr(obs, "p", None) is not None else None
         self.geom = None if sp is None else (sp[0], sp[1])
@@ -304,10 +394,11 @@ class PlacementGuide:
             # a board moved straight toward or away from the camera keeps its centroid: distance and height count too
             self._start = (t, (float(c[0]), float(c[1])), float(obs.z), None if sp is None else sp[0])
             self._spoken_at = None
-            return None
+            return self._unsettled(t) or self._status(t, obs, None)
         if t - self._start[0] < self.still_s:
-            return None
-        if t < getattr(self, "_quiet_until", float("-inf")):
+            return self._unsettled(t) or self._status(t, obs, None)
+        self._settled()
+        if self._quiet(t):
             return None                 # the last prompt is still being spoken / the operator is still acting on it
         if self._spoken_at is not None:
             # already spoke in this still stretch: repeat the same instruction at most once, after repeat_s
@@ -340,7 +431,7 @@ class PlacementGuide:
             if self._close_enough(float(obs.z)):
                 self.done, self.result, self.near_z = True, "placed_near", float(obs.z)
                 self.rest_t = self._start[0]
-                return self._say(t, "good", f"Close enough. Using {int(round(obs.z * 100))} centimetres.")
+                return self._say(t, "good", near_text(obs.z))
             self._near_z.append(float(obs.z))
         if self.h0 is None and sp is not None:
             self.h0 = sp[0]                 # the stand's base: the first rest the operator gets an instruction at
@@ -366,8 +457,9 @@ class PlacementGuide:
     def interrupted(self):
         """the trial was interrupted (HOLD, a stalled camera): the board may have moved meanwhile, so the rest, the
         lost timer and the feedback on the last instruction start over (h0, the stand's base, is kept)"""
-        self._start = self._spoken_at = self._lost_since = None
-        self._lost_said = False
+        self._start = self._spoken_at = None
+        self._miss_key = self._miss_said = self._said_t = self._seen = None
+        self._settled()
         self._last_key = self._last_err = None
         self._repeats = 0
 
@@ -436,8 +528,7 @@ class PlacementGuide:
             span = {"left": obs.lo[0], "right": self.size[0] - 1 - obs.hi[0], "top": obs.lo[1],
                     "bottom": self.size[1] - 1 - obs.hi[1]}[side]
             m = max(0.1, (60.0 - span) * z / self.f + 0.05) if span < 60 else 0.1
-            first = {"left": "Move the board to your left.", "right": "Move the board to your right.",
-                     "top": "Lower the board.", "bottom": "Raise the board."}[side]
+            first = CUT_FIRST[side]
             # height on the chair-shaped stand moves only in coarse steps (operator, 9 Nov: "lower maybe 40 cm or raise
             # by 30 cm"), so up/down says the minimum; sideways stays approximate
             amount = "At least" if side in ("top", "bottom") else "About"
@@ -578,12 +669,13 @@ class Trial:
         with open(self.log_path, "a") as f:
             f.write(json.dumps(rec) + "\n")
 
-    def update(self, t, obs) -> list:
+    def update(self, t, obs, miss=None) -> list:
+        """obs: detect.BoardObs or None; miss: why it is None (detect.Miss), if known"""
         if self.finished or self.guide is None:
             return []
         self.t_last = t
         out = []
-        s = self.guide.update(t, obs)
+        s = self.guide.update(t, obs, miss)
         if s is not None:
             self.says.append(s)
             out.append(s)

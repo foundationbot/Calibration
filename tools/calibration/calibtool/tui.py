@@ -260,7 +260,7 @@ class Silent:
         pass
 
 
-SUPERSEDED = frozenset({"correction", "lost"})   # a newer one of these makes the queued ones stale
+SUPERSEDED = frozenset({"correction", "lost", "status", "still"})   # a newer one of these makes the queued ones stale
 
 
 class Background:
