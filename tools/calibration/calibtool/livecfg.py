@@ -156,7 +156,8 @@ def _fs_read(text):
 
 def load(okvis_yaml, at_size=None) -> LiveCalib:
     """the stereo calibration of an OKVIS config (cameras 0 and 1). at_size=(W, H): a config written for another size is
-    unscaled to it first (scaling.unscale_config: focal / s, principal point (c + 0.5) / s - 0.5)"""
+    unscaled to it first (scaling.unscale_config: focal / s, principal point (c + 0.5) / s - 0.5), resize_factor left
+    as it is (vio=None): a config without one (VIO at the image size, as scale_config writes 640x400) loads too"""
     import okviscfg
     path = Path(okvis_yaml)
     text = path.read_text()
@@ -172,7 +173,7 @@ def load(okvis_yaml, at_size=None) -> LiveCalib:
     if at_size is not None and tuple(at_size) != sizes[0]:
         from calibtool import scaling
         s = scaling.factor(sizes[0], at_size)
-        text = scaling.unscale_config(text, s)
+        text = scaling.unscale_config(text, s, vio=None)    # the lens only: scoring never reads resize_factor
         scaled_from = sizes[0]
     with tempfile.TemporaryDirectory() as td:
         p = Path(td) / path.name

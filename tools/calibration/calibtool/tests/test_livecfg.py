@@ -121,6 +121,20 @@ def test_load_at_another_size_unscales(tmp_path):
     assert livecfg.load(tmp_path / "cfg.yaml").size == (960, 600)
 
 
+def test_load_at_another_size_needs_no_resize_factor(tmp_path):
+    """a 640x400 config has no resize_factor (VIO runs at the image size; scaling.scale_config writes it so): it still
+    loads at 1280x800, since scoring needs only the lens, never the VIO resize"""
+    from calibtool import scaling
+    native = okvis_yaml("equidistant", (0.01, 0, 0, 0), resize=None)
+    small = scaling.scale_config(native, 0.5)
+    assert "resize_factor" not in small and scaling.config_size(small) == (640, 400)
+    live = livecfg.load(_write(tmp_path, small, "640.yaml"), at_size=(1280, 800))
+    ref = livecfg.load(_write(tmp_path, native, "1280.yaml"))
+    assert live.size == (1280, 800) and live.scaled_from == (640, 400)
+    for a, b in zip(live.intr, ref.intr):
+        assert np.allclose(a, b, rtol=0, atol=1e-9)
+
+
 # ---------------------------------------------------------------- the RADTAN model
 
 
