@@ -127,8 +127,8 @@ def shell_runner(default_timeout=60):
 class Remote:
     _WRITE = 'umask 022; cat > "$1.calibtool-tmp" && chmod "$2" "$1.calibtool-tmp" && mv -f "$1.calibtool-tmp" "$1"'
 
-    def __init__(self, run, dry_run=False):
-        self.run, self.dry_run = run, dry_run
+    def __init__(self, run, dry_run=False, log=None):
+        self.run, self.dry_run, self.log = run, dry_run, log
         self.planned = []           # (argv, input) of the mutating commands a dry run did not send
         self.sent = []              # argv of every command sent
 
@@ -138,6 +138,8 @@ class Remote:
         if bad:
             raise ForbiddenCommand(f"refused: {bad!r} in {shlex.join(argv)} (never a zero grace period or --force "
                                    "on the robot)")
+        if mutating and self.log is not None:
+            self.log(argv, input)       # the session's command log (sessionctl.Recorder): sent or, in a dry run, planned
         if mutating and self.dry_run:
             self.planned.append((argv, input))
             return 0, ""
@@ -541,8 +543,8 @@ class Deployer:
     def rollback_path(self):
         return f"{self.deploy_dir}/rollback.sh"
 
-    def _restart(self):
-        argv = self.snap.restart.get("argv") or []
+    def _restart(self, argv=None):
+        argv = argv or self.snap.restart.get("argv") or []
         if not argv:
             raise DeployFailed(f"no OKVIS restart path: {self.snap.restart.get('detail')}")
         rc, out = self.remote.call(argv, mutating=True, timeout=120)
@@ -563,7 +565,10 @@ class Deployer:
             self.sleep(POLL_S)
         return {**seen, "crash_loop": crash, "pods": pods, "log_tail": lines[-20:]}
 
-    def deploy(self, plan: DeployPlan) -> DeployResult:
+    def deploy(self, plan: DeployPlan, restart_argv=None) -> DeployResult:
+        """restart_argv: the restart step's command instead of the snapshot's (the session stopped OKVIS for the
+        collection: starting it is the restart; sessionctl.OkvisCtl.start_argv). A rollback restarts by the snapshot's
+        path"""
         steps = []
         new_host = f"{HOST_CFG_DIR}/{plan.name}"
         sha = sha12(plan.config_text)
@@ -631,8 +636,8 @@ class Deployer:
             elif self.producer_apply is not None:
                 self.producer_apply(tuple(plan.size))
             step("producer", size=list(plan.size))
-            self._restart()
-            step("restart", kind=self.snap.restart.get("kind"))
+            self._restart(restart_argv)
+            step("restart", kind=self.snap.restart.get("kind"), start=bool(restart_argv))
         except (RemoteError, DeployFailed) as e:
             raise DeployFailed(f"deploy stopped after step '{steps[-1]['step']}': {e}. Roll back "
                                f"(Deployer.rollback or bash {self.rollback_path})") from e

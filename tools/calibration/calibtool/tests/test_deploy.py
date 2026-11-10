@@ -506,3 +506,27 @@ def test_dry_run_rollback_lists_every_step():
     assert not rb.ok and not applied and not mutating_calls(r)
     assert dp.ROBOT_ENV in txt and "replace -f" in txt and f"{DEPLOY_DIR}/producer.before.yaml" in txt
     assert txt.index("--replicas=0") < txt.index("replace -f") < txt.index("rollout restart")
+
+
+def test_a_deploy_while_okvis_is_stopped_starts_it_instead_of_restarting(tmp_path):
+    """the session stopped OKVIS for the collection: the deploy's restart is the start command (the pod comes up on
+    the new robot.env); a later rollback restarts it the usual way"""
+    r = FakeRobot(okvis_sh=True, ds_desired=None)
+    starts = []
+    orig = r.__call__
+
+    def run(argv, input=None, timeout=None):
+        if argv[-2:] == [dp.OKVIS_SH, "start"]:
+            starts.append(list(argv))
+            r._boot_okvis()
+            return 0, "started"
+        return orig(argv, input, timeout)
+    c = Clock()
+    snap = dp.take_snapshot(dp.Remote(run), producer_yaml=PRODUCER_YAML, clock=lambda: 1.79e9)
+    d = dp.Deployer(dp.Remote(run), snap, DEPLOY_DIR, clock=c, sleep=c.sleep)
+    start = ["env", "OKVIS_LAUNCH_ORIGIN=calibtool", "bash", dp.OKVIS_SH, "start"]
+    res = d.deploy(plan(), restart_argv=start)
+    assert res.ok, res.as_dict()
+    assert starts == [start] and r.restarts == 0
+    d.rollback("on purpose")
+    assert r.restarts == 1 and len(starts) == 1
