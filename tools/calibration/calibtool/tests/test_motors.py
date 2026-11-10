@@ -34,7 +34,8 @@ class Run:
 
 def good_run():
     return Run({("systemctl", "is-active"): (0, "active\n"), ("dma_cmd_client", "-V"): (0, VERSION),
-                ("dma_cmd_client", "ping"): (0, PING), ("dma_cmd_client", "estop-status"): (0, "Emergency stop: false\n")})
+                ("dma_cmd_client", "ping"): (0, PING),
+                ("dma_cmd_client", "estop-status"): (0, "Emergency stop: false\n")})
 
 
 def test_parse_ping():

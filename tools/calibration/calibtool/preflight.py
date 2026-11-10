@@ -148,7 +148,8 @@ def run(probes, prof) -> Result:
     v, err = get("clock")
     if not err:
         add("clock", "ok" if v >= CLOCK_MIN_S else "fail", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(v))
-            if v >= CLOCK_MIN_S else f"the clock reads {time.strftime('%Y-%m-%d', time.gmtime(v))} (1970-like): not set")
+            if v >= CLOCK_MIN_S else
+            f"the clock reads {time.strftime('%Y-%m-%d', time.gmtime(v))} (1970-like): not set")
     boot, _ = _probe(probes, "boot_id")
     base["boot_id"] = boot
     v, err = get("k0s")

@@ -123,7 +123,8 @@ def test_policy_pods_block_motion_not_collection():
 
 def test_motion_gate_checks():
     r = run(master=lambda: motors.MasterStatus(False, None, None, None, None, "dma-ethercat is inactive"),
-            motor_tool=lambda: {"path": "/usr/bin/dma_motor_motion", "md5": "3808", "has_targets": False, "error": None},
+            motor_tool=lambda: {"path": "/usr/bin/dma_motor_motion", "md5": "3808", "has_targets": False,
+                                "error": None},
             desired_still=lambda: False)
     b = by(r)
     for n in ("master", "motor_tool", "desired_still"):

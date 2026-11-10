@@ -3,7 +3,6 @@ heartbeat deadman (5 s without a heartbeat -> HOLD; only key G with a TUI attach
 itself), abort from any phase, resume from disk after a crash or reboot (an active phase comes back as HOLD), the
 Unix-socket link a TUI attaches to over ssh, and the one-job-per-robot lock."""
 import json
-import os
 import socket
 import threading
 import time

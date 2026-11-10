@@ -131,7 +131,8 @@ def test_dmesg_reset_on_the_head_port_only():
 
 
 def test_producer_device_crashed():
-    line = "[19443010A1F94D2E00] [1.4.1] [743.9] [system] [critical] Device crashed, but no crash dump could be extracted."
+    line = ("[19443010A1F94D2E00] [1.4.1] [743.9] [system] [critical] Device crashed, but no crash dump could be "
+            "extracted.")
     e = watch().observe(0.0, good(producer_log=[line]))
     assert codes(e) == ["device_crashed"] and e[0].level == "suspect" and line in e[0].lines
 

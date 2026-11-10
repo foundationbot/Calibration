@@ -1,6 +1,7 @@
-"""calibtool.place: spoken placement guidance, pause-then-speak (design 4.1), and the placement-trial mode (neck at home,
-nothing moves): the tool watches the board continuously but speaks only once it has been still ~1 s, says one thing at
-a time ("Good. Step back." or one correction), names directions from the operator's side, and never says "hold"."""
+"""calibtool.place: spoken placement guidance, pause-then-speak (design 4.1), and the placement-trial mode (neck at
+home, nothing moves): the tool watches the board continuously but speaks only once it has been still ~1 s, says one
+thing at a time ("Good. Step back." or one correction), names directions from the operator's side, and never says
+"hold"."""
 import json
 
 import pytest
@@ -177,7 +178,8 @@ def test_trial_logs_seconds_and_success(tmp_path):
         says += s
     assert [s.kind for s in says] == ["good", "intro"]
     rec = [json.loads(x) for x in log.read_text().splitlines()]
-    assert rec[0]["target"] == "0.5 m" and rec[0]["result"] == "placed" and rec[0]["seconds"] == pytest.approx(10.5)    # intro -> board at rest
+    assert rec[0]["target"] == "0.5 m" and rec[0]["result"] == "placed"
+    assert rec[0]["seconds"] == pytest.approx(10.5)        # from the intro to the board at rest
     t += 1.0
     assert tr.key(t, "C")[0].kind == "intro"              # can't put it there -> next
     t += 200.0

@@ -94,7 +94,8 @@ def _pair_job(yl, yr, use_stretch):
 
 class DetectPool:
     """detection workers (forkserver: the daemon has threads running, so no plain fork; the board travels as its
-    constructor arguments, a cv2 detector does not pickle); submit_pair(left Y, right Y) -> Future of (left corners, right corners)"""
+    constructor arguments, a cv2 detector does not pickle); submit_pair(left Y, right Y) -> Future of (left corners,
+    right corners)"""
 
     def __init__(self, board, workers, use_stretch=True):
         self.board, self.use_stretch = board, use_stretch

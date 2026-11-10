@@ -266,7 +266,8 @@ class Capture:
         now = self.clock()
         med, mx = self.pair_stats.median_abs_dt_ns(), self.pair_stats.max_abs_dt_ns()
         return {"cams": {str(c): k.as_dict(now) for c, k in self.counters.items()},
-                "pairs": self.pair_stats.pairs, "unpaired_dropped": {str(c): n for c, n in self.matcher.dropped.items()},
+                "pairs": self.pair_stats.pairs,
+                "unpaired_dropped": {str(c): n for c, n in self.matcher.dropped.items()},
                 "sub_dropped": self.sub_dropped,
                 "sync_median_ms": None if med is None else round(med / 1e6, 4),
                 "sync_max_ms": None if mx is None else round(mx / 1e6, 4),

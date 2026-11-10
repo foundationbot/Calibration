@@ -3,8 +3,8 @@
 calib phantom10 [--trial] [--session ID] [--headless N] [--no-speech] [--stop] [--status] [--say TEXT] [--no-sync]
   - copies the kit (tools/calibration/{calibtool,scripts,config}, code only) to <root>/kit on the robot (rsync; M2: the
     hand-made venv runs it; the CI-built calib image replaces this, 10.3);
-  - starts calibd there (niced, at most 2 BLAS threads, the profile's python + dma_ipc folder) or, with --session ID of a
-    live session, re-attaches without starting anything;
+  - starts calibd there (niced, at most 2 BLAS threads, the profile's python + dma_ipc folder) or, with --session ID
+    of a live session, re-attaches without starting anything;
   - runs the TUI over `ssh robot python -m calibtool.daemon attach` (state lines in, heartbeat and keys out). Leaving
     the TUI (Q, or the link dropping) leaves calibd running: it holds after 5 s without a heartbeat and waits for G;
   - --stop asks calibd to stop; --status prints its state; --say TEXT speaks TEXT once on the laptop (a speech test).
@@ -17,7 +17,6 @@ import subprocess
 import sys
 import threading
 import time
-from pathlib import Path
 
 from calibtool import paths, profile as prof_mod, tui
 

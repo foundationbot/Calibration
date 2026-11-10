@@ -21,8 +21,8 @@ def test_remote_command_line():
     assert w[:2] == ["cd", "/tmp/calibtool-m2/kit/tools/calibration"]
     assert "OMP_NUM_THREADS=2" in cmd and "OPENBLAS_NUM_THREADS=2" in cmd
     assert "PYTHONPATH=/tmp/calibtool-m2/kit/tools/calibration:/root/p11-cal/pydeps" in cmd
-    assert "nice -n 10 /root/p11-cal/venv/bin/python -m calibtool.daemon start --root /tmp/calibtool-m2 --profile P10 " \
-           "--trial" in cmd
+    assert ("nice -n 10 /root/p11-cal/venv/bin/python -m calibtool.daemon start --root /tmp/calibtool-m2 "
+            "--profile P10 --trial") in cmd
 
 
 def test_ssh_argv_keeps_the_link_alive_check_short():

@@ -1,7 +1,6 @@
 """calibtool.capture: the head-camera reader. Pairs are matched by capture stamp, every camera has frame-health
 counters (reads, None reads = pool desync, sequence gaps, repeated frames = freeze, fps), the capture loop never
 blocks on a slow consumer, and a camera whose reads keep coming back None gets its own consumer re-attached."""
-import queue
 import threading
 import time
 import types
