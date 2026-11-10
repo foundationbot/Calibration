@@ -323,3 +323,13 @@ def test_centre_tags_median_over_the_nine_central_poses():
     assert sorted(pr.CENTRE_GRID) == [16, 17, 18, 23, 24, 25, 30, 31, 32]
     assert pr.centre_tags(rows) == 30
     assert np.isnan(pr.centre_tags([]))
+
+
+def test_propose_keeps_rare_poses_that_fill_an_edge_strip():
+    det = np.zeros((3, 49), bool)
+    det[:, 24] = True
+    det[:1, 48] = True                                   # 1 of 3, fills an edge strip: kept
+    det[:1, 47] = True                                   # 1 of 3, adds no edge: dropped
+    adds = np.zeros(49, bool)
+    adds[[48, 10]] = True                                # 10: never detected, never kept
+    assert pr.propose(det, min_rate=0.5, adds_edge=adds) == [24, 48]

@@ -313,10 +313,12 @@ def bearing_deg(neck_yaw_rad, u_mean, focal_px, width) -> float:
 # ---------------------------------------------------------------- pose lists
 
 
-def propose(detected, min_rate=0.5) -> list:
-    """grid indices detected in >= min_rate of the takes; detected: (takes, 49) bool"""
+def propose(detected, min_rate=0.5, adds_edge=None) -> list:
+    """grid indices to sweep: detected in >= min_rate of the takes, or detected at least once and putting corners in
+    an image edge strip (adds_edge, per grid pose); detected: (takes, 49) bool"""
     d = np.asarray(detected, bool)
-    return [i for i in range(d.shape[1]) if d[:, i].mean() >= min_rate]
+    e = np.zeros(d.shape[1], bool) if adds_edge is None else np.asarray(adds_edge, bool)
+    return [i for i in range(d.shape[1]) if d[:, i].mean() >= min_rate or (e[i] and d[:, i].any())]
 
 
 def grid_text(values, title="pitch \\ yaw") -> str:
@@ -355,6 +357,7 @@ def pose_rows(frames, rig, take, cmds=None):
             z = float(d16.rough_z(one, rig.board, rig.nominal_focal_px, rig.resolution)[0])
         row = {"take": take, "pose": p, "grid": grid_index(*cmd), "cmd": tuple(float(c) for c in cmd),
                "neck": tuple(float(c) for c in pf.neck), "detected": bool(kept), "n_still": len(kept),
+               "n_frames": len(pf.dets),
                "tags_l": max((_ntags(a) for a, _ in pf.dets), default=0),
                "tags_r": max((_ntags(b) for _, b in pf.dets), default=0), "z": z,
                "tag_px": tag_px(dl)}
@@ -645,7 +648,11 @@ def take_summary(rows, rig):
     b = bearing_deg([np.radians(r["neck"][1]) for r in det], [r["u_mean"] for r in det], rig.nominal_focal_px,
                     rig.resolution[0]) if det else float("nan")
     med = (lambda k: float(np.nanmedian([r.get(k, np.nan) for r in det])) if det else float("nan"))
-    return {"poses": len(rows), "detected": len(det), "centre_tags": centre_tags(rows), "z": zmed, "band": float(band_of(zmed)[0]), "bearing": b,
+    nf = [r.get("n_frames", np.nan) for r in det]
+    still_all = float(np.mean([r["n_still"] == n for r, n in zip(det, nf)])) if det and np.isfinite(nf).all() \
+        else float("nan")
+    return {"poses": len(rows), "detected": len(det), "still_all": still_all, "centre_tags": centre_tags(rows),
+            "z": zmed, "band": float(band_of(zmed)[0]), "bearing": b,
             "tag_px": med("tag_px"), "noise0": med("noise0"), "unstable0": med("unstable0"),
             "noise1": med("noise1"), "unstable1": med("unstable1")}
 
@@ -669,12 +676,12 @@ def cmd_analyse(a):
             allrows += rows
     P = print
     P("## Takes\n")
-    P("| robot | take | source | kind | poses | detected | left tags at centre poses (of 35) | distance m (median) | "
-      "band | bearing deg | tag px | noise L px / unstable % | noise R px / unstable % |")
-    P("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    P("| robot | take | source | kind | poses | detected | all frames still % | left tags at centre poses (of 35) | "
+      "distance m (median) | band | bearing deg | tag px | noise L px / unstable % | noise R px / unstable % |")
+    P("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for (r, t), s in summ.items():
         P(f"| {r} | {t} | {s['source']} | {s['kind']} | {s['poses']} | {s['detected']} | "
-          f"{_fmt(s['centre_tags'], 0)} | {_fmt(s['z'])} | "
+          f"{_fmt(100 * s['still_all'], 0)} | {_fmt(s['centre_tags'], 0)} | {_fmt(s['z'])} | "
           f"{_fmt(s['band'])} | {_fmt(s['bearing'], 1)} | {_fmt(s['tag_px'], 1)} | {_fmt(s['noise0'], 3)} / "
           f"{_fmt(100 * s['unstable0'], 1)} | {_fmt(s['noise1'], 3)} / {_fmt(100 * s['unstable1'], 1)} |")
     # ---- item 1: default placements per band
@@ -698,7 +705,9 @@ def cmd_analyse(a):
             cs = sorted({cell_abbrev(r["cell"]) for r in d})
             el = "".join(sorted(set("".join(edge_letters(r) for r in d)), key="LRTB".index))
             cells.append(f"{len(d)}/{len(rows_by)} {'/'.join(cs)} {el}".strip())
-        keep = propose(det, a.min_rate)
+        adds_edge = np.array([any(g in rb and rb[g]["detected"] and edge_letters(rb[g]) for rb in rows_by)
+                              for g in range(49)])
+        keep = propose(det, a.min_rate, adds_edge)
         proposals[str(b)] = keep
         tot = {k: 0 for k in ("edge", "box", "rim", "n")}
         kept = dict(tot)
@@ -719,7 +728,8 @@ def cmd_analyse(a):
         P(grid_text(cells))
         P(f"\nCell = takes detecting the pose / takes; step-66 cells of its camera-0 board (nominal principal point); "
           f"edge strips (80 px) it puts corners in, either camera.\n")
-        P(f"Proposed list (detected in >= {a.min_rate:.0%} of the takes): {len(keep)} poses = grid {keep}; keeps "
+        P(f"Proposed list (detected in >= {a.min_rate:.0%} of the takes, or at least once when it fills an edge "
+          f"strip): {len(keep)} poses, dropped grid {[g for g in range(49) if g not in keep]}; keeps "
           f"{kept['n']}/{tot['n']} detected pose-takes, edge-strip corners {kept['edge']}/{tot['edge']}, corner-box "
           f"corners {kept['box']}/{tot['box']}, rim corners {kept['rim']}/{tot['rim']}, cells {len(cells_kept)}/"
           f"{len(cells_all)}; time {len(keep)} x {SEC_PER_POSE} s = {len(keep) * SEC_PER_POSE:.0f} s (all 49: "
