@@ -273,8 +273,9 @@ class Coverage:
     test: object = None         # TestTally or None
 
     def deficits(self, targets: Targets = Targets()) -> list:
-        """what is short: edge strips first, then corner boxes (each most lopsided first), then the rest (least met
-        first)"""
+        """what is short, most important first: the comparative edge strips (most lopsided first), the absolute edge
+        strips, the corner boxes, then the rest: what blocks the stop rule (least met first), then what is only asked
+        for (least met first)"""
         w = targets.weights
         out = []
         for c in targets.fit_cams:
@@ -322,7 +323,7 @@ class Coverage:
         strips = sorted([d for d in out if d.kind == "strip"], key=lambda d: d.have / max(d.want, 1e-9))
         boxes = sorted([d for d in out if d.kind == "box"], key=lambda d: d.have / max(d.ref_have, 1))
         rest = sorted([d for d in out if d.kind not in ("edge", "strip", "box")],
-                      key=lambda d: d.have / max(d.want, 1e-9))
+                      key=lambda d: (not d.blocks, d.have / max(d.want, 1e-9)))
         return edges + strips + boxes + rest
 
     def blocking(self, targets: Targets = Targets()) -> list:

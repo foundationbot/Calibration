@@ -97,14 +97,42 @@ def test_suggest_right_edge_bears_right(planner):
     assert "to YOUR left (the robot's right)" in top.say()
 
 
-def test_suggest_is_greedy_without_repeats(planner):
-    s = planner.suggest([_edge_deficit("left", ref=40000), _edge_deficit("right", ref=40000)], k=3)
+def test_one_suggestion_per_top_deficit(planner):
+    """C3: pick i serves the most important deficit no earlier pick served (deficits in Coverage.deficits order), so a
+    second deficit is not drowned by the first; a candidate is used once; once every short deficit has been served, a
+    new round starts"""
+    left, right = _edge_deficit("left", ref=40000), _edge_deficit("right", ref=40000)
+    s = planner.suggest([left, right], k=3)
     assert len(s) == 3
+    assert [x.target.region for x in s[:2]] == ["left", "right"]
+    assert s[0].candidate.bearing_deg > 0 and s[1].candidate.bearing_deg < 0
     assert len({x.candidate for x in s}) == len(s)
-    assert all(a.score >= b.score for a, b in zip(s, s[1:]))
-    # one big deficit met by a first pick is not asked for again: the picks change with the deficits
+    s = planner.suggest([right, left], k=2)
+    assert [x.target.region for x in s] == ["right", "left"]
+    # one deficit met by the first pick is not asked for again
     one = planner.suggest([_edge_deficit("left")], k=3)
     assert len(one) == 1
+
+
+def test_a_suggestion_is_the_best_fill_of_its_deficit(planner):
+    """the candidate picked for a deficit adds the most to it (predicted gain, not capped: of two boards that both
+    cover what is short, the one that fills more); the rest of its value breaks ties"""
+    d = _edge_deficit("left", have=990, ref=2000)                     # 10 short: any left-bearing board covers it
+    g = {c: planner.simulate(c).fit.cams[0].edges["left"] for c in planner.candidates}
+    assert sum(v >= 10 for v in g.values()) > 1
+    assert g[planner.suggest([d], k=1)[0].candidate] == max(g.values())
+    d = cv.Deficit("far_band", None, (1.7, 2.3), 0, 1000)            # more than any candidate gives: no cap
+    s = planner.suggest([_edge_deficit("left"), d], k=2)
+    assert [x.target.kind for x in s] == ["edge", "far_band"]
+    g = {c: pn.gain(planner.simulate(c).fit, planner.simulate(c).entries, planner.simulate(c).far_bands, d)
+         for c in planner.candidates if c != s[0].candidate}
+    assert g[s[1].candidate] == max(g.values()) > 0
+
+
+def test_a_deficit_no_candidate_fills_is_skipped(planner):
+    nowhere = cv.Deficit("entry", None, ("centre", (5.0, 6.0)), 0, 10)
+    s = planner.suggest([nowhere, _edge_deficit("left")], k=2)
+    assert [x.target.region for x in s] == ["left"]
 
 
 def test_suggest_nothing_for_no_deficit(planner):
@@ -146,26 +174,20 @@ _CF = {}
 
 
 def _counterfactual():
-    """phantom21 5 Nov without dleft and dtiltleft: FIT tally of the FIT holds and TEST tally of the TEST holds of step
-    16's rule (every 2nd hold per take), deficits, and the planner's 3 suggestions (cached for the module)"""
+    """phantom21 5 Nov without dleft and dtiltleft, as the replay counts it: replay.Collection with step 16's split
+    (every 2nd hold per take), regions over all corners, the stored sessions' targets (per_hold 3); its deficits after
+    the last placement and the planner's 3 suggestions at 3 pairs a pose (cached for the module)"""
     if not _CF:
-        from calibtool import pipeline, sessions
-        from calibtool.session import Session
+        from calibtool import assign, pipeline, replay, sessions
         st = sessions.get("p21_1105")
         rig = pipeline.load_rig(st.rig_path)
-        keep = [t for t in st.take_order if t not in ("dleft", "dtiltleft")]
-        files = dict(zip(st.take_order, st.corner_files))
-        s = Session.from_files([(t, files[t]) for t in keep], name="p21-no-left")
-        z = cv.session_z(s, rig)
-        a = cv.split16_assignment(s, z)
-        fit = np.array([a[int(h)] == "FIT" for h in s.pairs["hold"]])
+        s = replay.load_session(st, exclude_takes=("dleft", "dtiltleft"))
+        col = replay.Collection.for_session(s, rig, "split16", targets=cv.Targets.for_per_hold(3))
+        d = replay.feed(col, assign.capture_holds(s))[-1].deficits
         head = pl.head_from_okvis(st.live_config, rig.resolution)
-        cov = cv.Coverage(fit=cv.fit_tally(s, mask=fit, rig=rig, z=z),
-                          test=cv.test_tally(s, a, tuple(head.cams[0].K[:2, 2]), z))
-        d = cov.deficits(cv.Targets())
-        _CF.update(deficits=d, suggestions=pn.Planner(head, pl.chain(), rig.board).suggest(d, k=3))
+        _CF.update(deficits=d, suggestions=pn.Planner(head, pl.chain(), rig.board, pairs_per_pose=3).suggest(d, k=3))
         for x in d:
-            print("DEFICIT", cv.sentence(x))
+            print("DEFICIT", "blocks" if x.blocks else "asked", cv.sentence(x))
         for x in _CF["suggestions"]:
             print("SUGGEST", x.say(), "| fills:",
                   [(f.kind, f.cam, f.region, round(g)) for f, g in zip(x.fills, x.gains)])
@@ -184,16 +206,14 @@ def test_p21_counterfactual_top_suggestion_is_left_edge_toward_robots_left(data_
 
 
 @pytest.mark.replay
-@pytest.mark.xfail(strict=True, reason=(
-    "M1 B2 measured 9 Nov: no tilted placement in the top 3. Without dleft/dtiltleft the comparative rule finds no "
-    "bottom-edge deficit (cam0, all pairs: bottom 2,674 vs top 2,574 corners); for the bottom-left box the model "
-    "predicts the tilted board adds 45-54 corners vs 120-168 for an upright board to the robot's left (the real "
-    "dtiltleft take added 3 there, 726 on the bottom edge). The tilted board is the best single fill of the bottom "
-    "0.9-1.3 m TEST entry (20-23 holds vs 10-12) but greedy summed value prefers upright boards that also fill edges "
-    "and other entries. Decision for the lead (C3): a bottom-edge target, or one suggestion per top deficit."))
 def test_p21_counterfactual_asks_for_a_tilted_placement_for_the_bottom(data_root):
+    """one suggestion per top deficit (C3): the bottom edge strip gets its own pick, and the tilted board is its best
+    fill (M1 B2's greedy summed value preferred upright boards that also fill edges and other entries, so no tilted
+    placement made the top 3; the real dtiltleft take added 726 corners on the bottom edge)"""
     sug = _counterfactual()["suggestions"]
     low = [x for x in sug if x.candidate.tilted and any(
         f.region in ("bottom", "bottom-left") or (f.kind == "entry" and f.region[0] in ("bottom", "bottom-left"))
         for f in x.fills[:1])]
     assert low, "no tilted placement for the bottom / bottom-left deficit"
+    assert low[0].target.kind == "strip" and low[0].target.region == "bottom"
+    assert sug[0].target.kind == "edge" and sug[0].target.region == "left"

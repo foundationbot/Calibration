@@ -329,9 +329,16 @@ def test_side_counts_holds_from_side_holds_on():
 def test_deficit_order_edges_strips_boxes_rest():
     e = dict(FINE_E, right=50, bottom=1000, top=1000)
     b = dict(FINE_B, **{"top-left": 10})
-    d = _cov(e0=e, b0=b, thirds=1000).deficits(cv.Targets())
+    cov = _cov(e0=e, b0=b, thirds=1000)
+    cov.test = _fine_test({("top-right", (0.6, 0.9)): 1, ("centre", (0.9, 1.3)): 0, ("centre", (0.4, 0.6)): 0})
+    d = cov.deficits(cv.Targets())
     kinds = [x.kind for x in d]
     assert kinds[:3] == ["edge", "strip", "box"], kinds
+    # after them: what blocks the stop rule first (least met first), then what is only asked for (a held-out entry
+    # with 1 of 10 holds does not crowd out the thirds and the judged count)
+    rest = d[3:]
+    assert [x.blocks for x in rest] == sorted([x.blocks for x in rest], reverse=True)
+    assert {x.kind for x in rest if x.blocks} == {"third", "judged"} and rest[-1].kind == "entry"
 
 
 def test_ratio_words():

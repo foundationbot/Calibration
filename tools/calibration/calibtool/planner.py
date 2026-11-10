@@ -9,9 +9,11 @@ tilted p21 dtiltleft -0.85 m, p10 n6_tiltL/R -1.19/-1.16 m).
 
 Each candidate is simulated over the 49-pose neck grid (pitch -24..24 deg step 8 x yaw -34..34 deg in 7 steps) with
 the placement model (placement.BoardModel): per pose, both cameras' predicted corners (x pairs_per_pose stereo pairs),
-the far pairs, and the step-66 entry / far band of the camera-0 board. suggest() picks greedily by weighted deficit
-reduction (each deficit's gain capped at what it is short, divided by its target, times its weight, coverage.Targets:
-edge strips 3, corner boxes 2, the rest mostly 1), updating the deficits after each pick."""
+the far pairs, and the step-66 entry / far band of the camera-0 board. suggest() gives one suggestion per top deficit
+(C3): each pick serves the most important deficit no earlier pick served, with the candidate predicted to fill most of
+it; the summed weighted deficit reduction breaks ties (each deficit's gain capped at what it is short, divided by its
+target, times its weight, coverage.Targets: edge strips 3, corner boxes 2, the rest mostly 1); the deficits are
+updated with each pick's predicted gains."""
 from dataclasses import dataclass, field, replace
 
 import numpy as np
@@ -217,32 +219,44 @@ class Planner:
         return [gain(fit, ent, far, d) for d in deficits]
 
     def suggest(self, deficits, k=3) -> list:
-        """up to k placements, greedy by weighted deficit reduction; each pick's gains are added to the deficits before
-        the next pick; a candidate is picked at most once; nothing when no candidate reduces any deficit"""
+        """up to k placements, one per top deficit (C3): pick i serves the first deficit, in the given order
+        (Coverage.deficits: most important first), that is still short after the earlier picks' predicted gains and
+        that no earlier pick served; once every short deficit has been served, a new round starts. Its placement is
+        the unused candidate predicted to add most to that deficit (not capped at what it is short: of two boards
+        that both cover it, the one that fills more), ties broken by the summed weighted value over all deficits
+        (Suggestion.score). A deficit no candidate adds to is skipped.
+        So a deficit an earlier pick already addressed does not dominate the next pick, and a bottom deficit gets the
+        tilted board when that is its best fill"""
         left = [replace(d) for d in deficits if d.short > 0]
-        out, used = [], set()
-        for _ in range(k):
-            if not left:
+        out, used, served, skip = [], set(), set(), set()
+        while len(out) < k:
+            short = [i for i, d in enumerate(left) if d.short > 0 and i not in skip]
+            if not short:
                 break
+            todo = [i for i in short if i not in served] or short
+            if len(todo) == len(short):
+                served = set()
+            ti = todo[0]
             best = None
             for c in self.candidates:
                 if c in used:
                     continue
                 g = self._gains(c, left)
-                score = sum(_value(gi, d) for gi, d in zip(g, left))
-                if score > 0 and (best is None or score > best[0]):
-                    best = (score, c, g)
+                key = (g[ti], sum(_value(gi, d) for gi, d in zip(g, left)))
+                if key[0] > 0 and (best is None or key > best[0]):
+                    best = (key, c, g)
             if best is None:
-                break
-            score, c, g = best
-            order = sorted([i for i in range(len(left)) if g[i] > 0], key=lambda i: -_value(g[i], left[i]))
+                skip.add(ti)
+                continue
+            (_, score), c, g = best
+            order = [ti] + sorted([i for i in range(len(left)) if g[i] > 0 and i != ti],
+                                  key=lambda i: -_value(g[i], left[i]))
             fills = [replace(left[i]) for i in order]
-            out.append(Suggestion(c, score, fills[0], fills, [g[i] for i in order],
-                                  self.pose_subset(c, fills[0])))
+            out.append(Suggestion(c, score, fills[0], fills, [g[i] for i in order], self.pose_subset(c, fills[0])))
             used.add(c)
+            served.add(ti)
             for i, d in enumerate(left):
                 d.have = d.have + g[i]
-            left = [d for d in left if d.short > 0]
         return out
 
     def pose_subset(self, c: Candidate, deficit: cv.Deficit) -> list:
