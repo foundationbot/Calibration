@@ -211,3 +211,120 @@ def test_gap_change_about_gravity_is_small():
     assert set(ob.gap_change_deg) == {"gravity", "camera x", "camera z"}
     assert ob.gap_change_deg["gravity"] < 0.3 * ob.gap_change_deg["camera x"]
     assert ob.gap_change_deg["camera x"] > 0.5
+
+
+# ---------------------------------------------------------------- task 5: T_SC read and apply
+
+
+def _block(T, bottom="0, 0, 0, 1"):
+    rows = [", ".join(repr(float(v)) for v in T[i]) for i in range(3)] + [bottom]
+    return "[" + ",\n          ".join(rows) + "]"
+
+
+T0_SYN = np.eye(4)
+T0_SYN[:3, :3] = R_CFG
+T0_SYN[:3, 3] = (-0.0536, 0.1374, 0.0255)
+T01_SYN = np.eye(4)
+T01_SYN[:3, :3] = imu.axis_rotation([0.2, 1, 0.1], 0.8)
+T01_SYN[:3, 3] = (0.044, 0.0003, -0.0002)
+T1_SYN = T0_SYN @ T01_SYN
+
+
+def config_text(blocks=(T0_SYN, T1_SYN)):
+    """an OKVIS config in the robot files' layout: flow-mapping camera blocks, a T_BS block, comments naming T_SC"""
+    cams = "".join(f"""\
+    - {{T_SC:
+        {_block(T)},
+        image_dimension: [1280, 800],
+        distortion_coefficients: [-0.01, 0.002, 0.0003, -0.0001, 1e-05, -2e-05],
+        distortion_type: kb4t,
+        focal_length: [583.5, 582.9],
+        principal_point: [643.37, 388.85]}}
+""" for T in blocks)
+    return f"""%YAML:1.0
+# a note naming T_SC: [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 0, 0, 0, 1] in a comment
+cameras:
+{cams}
+camera_parameters:
+    timestamp_tolerance: 0.005
+imu_parameters:
+    # T_SC in a comment again
+    T_BS:
+        [3.26794897e-07, 0.84339145, 0.537299603, 0.00954301,
+         -1.0, 2.75616021e-07, 1.75586768e-07, -0.0389529,
+         0.0, -0.537299603, 0.84339145, 0.08296029,
+         0.0, 0.0, 0.0, 1.0]
+"""
+
+
+def _bodies(text):
+    return [m for m in re.finditer(r"^(?![ \t]*#)[^\n]*?\bT_SC:\s*\[([^\]]*)\]", text, re.M)]
+
+
+NUM = re.compile(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?")
+
+
+def test_t_sc_reads_two_blocks_skipping_comments():
+    T0, T1 = imu.t_sc(config_text())
+    assert np.allclose(T0, T0_SYN, atol=0) and np.allclose(T1, T1_SYN, atol=1e-15)
+    assert np.array_equal(imu.cam0_rotation(config_text()), T0[:3, :3])
+
+
+def test_apply_rotates_cam0_keeps_stereo_pose():
+    C = imu.rot_xz(0.32, 0.11)
+    N0, N1 = imu.t_sc(imu.apply(config_text(), C))
+    T0, T1 = imu.t_sc(config_text())
+    assert np.allclose(N0[:3, :3], T0[:3, :3] @ C, atol=1e-15)
+    assert np.array_equal(N0[:3, 3], T0[:3, 3])
+    assert np.allclose(np.linalg.inv(N0) @ N1, np.linalg.inv(T0) @ T1, atol=1e-12)
+
+
+def test_apply_diff_is_only_those_numbers():
+    old = config_text()
+    new = imu.apply(old, imu.rot_xz(0.32, 0.11))
+    mo, mn = _bodies(old), _bodies(new)
+    assert len(mo) == len(mn) == 2
+    outside = lambda t, ms: [t[:ms[0].start(1)], t[ms[0].end(1):ms[1].start(1)], t[ms[1].end(1):]]  # noqa: E731
+    assert outside(old, mo) == outside(new, mn)
+    for a, b, kept in zip(mo, mn, ((3, 7, 11, 12, 13, 14, 15), (12, 13, 14, 15))):
+        assert NUM.split(a.group(1)) == NUM.split(b.group(1))           # separators identical
+        ta, tb = NUM.findall(a.group(1)), NUM.findall(b.group(1))
+        assert [ta[i] for i in kept] == [tb[i] for i in kept]          # untouched numbers keep their text
+        assert all(ta[i] != tb[i] for i in range(16) if i not in kept)
+
+
+def test_apply_identity_keeps_cam0_text():
+    old = config_text()
+    new = imu.apply(old, np.eye(3))
+    assert _bodies(old)[0].group(0) == _bodies(new)[0].group(0)
+    assert np.allclose(imu.t_sc(new)[1], T1_SYN, atol=1e-15)
+
+
+def test_apply_refuses_bad_input():
+    with pytest.raises(ValueError):
+        imu.apply(config_text(blocks=(T0_SYN,)), np.eye(3))
+    with pytest.raises(ValueError):
+        imu.apply(config_text(blocks=(T0_SYN, T1_SYN, T1_SYN)), np.eye(3))
+    with pytest.raises(ValueError):
+        imu.apply(config_text(), np.diag([1.0, 1.0, -1.0]))
+    with pytest.raises(ValueError):
+        imu.apply(config_text(), np.eye(3) * 1.001)
+
+
+def test_apply_note_after_yaml_header():
+    new = imu.apply(config_text(), imu.rot_xz(0.1, 0.1), note="cam0 T_SC rotation re-measured\nsecond line")
+    lines = new.splitlines()
+    assert lines[:3] == ["%YAML:1.0", "# cam0 T_SC rotation re-measured", "# second line"]
+    assert "\n".join(lines[3:]) + "\n" == imu.apply(config_text(), imu.rot_xz(0.1, 0.1)).split("\n", 1)[1]
+
+
+def test_apply_output_reads_in_okviscfg(tmp_path):
+    pytest.importorskip("cv2")
+    from calibtool import paths  # noqa: F401  (scripts folder on sys.path)
+    import okviscfg
+    C = imu.rot_xz(0.32, 0.11)
+    p = tmp_path / "new.yaml"
+    p.write_text(imu.apply(config_text(), C))
+    rig = okviscfg.load(p)
+    assert np.allclose(rig.T_SC[0][:3, :3], R_CFG @ C, atol=1e-9)
+    assert np.allclose(np.linalg.inv(rig.T_SC[0]) @ rig.T_SC[1], T01_SYN, atol=1e-9)

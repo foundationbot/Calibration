@@ -282,3 +282,71 @@ def observability(sweep: Sweep, R, step_deg=1.0, eps=1e-6) -> Observability:
     change = {name: float(np.median(floor_gap_deg(sweep, R @ axis_rotation(ax, step_deg))) - base)
               for name, ax in (("gravity", up), ("camera x", [1.0, 0, 0]), ("camera z", [0, 0, 1.0]))}
     return Observability(up, sv, weak, float(sv[-1] / sv[0]), weak_sigma, change)
+
+
+# ---------------------------------------------------------------- the config: T_SC read and surgery
+
+_TSC = re.compile(r"^[^#\n]*?\bT_SC:\s*\[(?P<body>[^\]]*)\]", re.M)    # never inside a comment
+_NUM = re.compile(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?")
+ROTATION_TOL = 1e-9
+CAM0_ROTATION = (0, 1, 2, 4, 5, 6, 8, 9, 10)     # row-major indices apply() may rewrite in cam0's block
+CAM1_TOP = tuple(range(12))                      # ... and in cam1's (its translation follows the stereo pose)
+
+
+def _blocks(text):
+    ms = list(_TSC.finditer(text))
+    if len(ms) != 2:
+        raise ValueError(f"{len(ms)} T_SC blocks: a stereo OKVIS config has exactly 2")
+    for m in ms:
+        body = m.group("body")
+        if len(_NUM.findall(body)) != 16 or _NUM.sub("", body).strip(", \t\r\n"):
+            raise ValueError(f"T_SC block is not 16 numbers: [{body.strip()[:80]}]")
+    return ms
+
+
+def _matrix(m):
+    return np.array([float(x) for x in _NUM.findall(m.group("body"))]).reshape(4, 4)
+
+
+def t_sc(config_text):
+    """(T_SC cam0, T_SC cam1) as written in the file (no cleaning: the surgery works on the file's numbers)"""
+    return tuple(_matrix(m) for m in _blocks(config_text))
+
+
+def cam0_rotation(config_text):
+    return t_sc(config_text)[0][:3, :3]
+
+
+def _rewrite(body, values, which):
+    """the block's text with the numbers at `which` replaced by values where they changed; all else kept"""
+    out, pos = [], 0
+    for i, t in enumerate(_NUM.finditer(body)):
+        out.append(body[pos:t.start()])
+        v = float(values[i])
+        out.append(repr(v) if i in which and v != float(t.group()) else t.group())
+        pos = t.end()
+    out.append(body[pos:])
+    return "".join(out)
+
+
+def apply(config_text, R_correction, note=None):
+    """the kit's mkfinal.py rule on an OKVIS config's text: cam0 rotation R0 -> R0 @ R_correction, cam1 = new cam0 x
+    inv(T0) @ T1 (the config's stereo pose); cam0 translation, T_BS and all other text kept. `note` (lines) goes in as
+    comments right after the %YAML header"""
+    C = np.asarray(R_correction, float)
+    if C.shape != (3, 3) or np.abs(C @ C.T - np.eye(3)).max() > ROTATION_TOL or np.linalg.det(C) <= 0:
+        raise ValueError("R_correction is not a rotation")
+    ms = _blocks(config_text)
+    T0, T1 = _matrix(ms[0]), _matrix(ms[1])
+    N0 = T0.copy()
+    N0[:3, :3] = T0[:3, :3] @ C
+    N1 = N0 @ (np.linalg.inv(T0) @ T1)
+    out, pos = [], 0
+    for m, N, which in ((ms[0], N0, CAM0_ROTATION), (ms[1], N1, CAM1_TOP)):
+        out += [config_text[pos:m.start("body")], _rewrite(m.group("body"), N.ravel(), which)]
+        pos = m.end("body")
+    text = "".join(out) + config_text[pos:]
+    if note:
+        head = "%YAML:1.0\n" if text.startswith("%YAML:1.0\n") else ""
+        text = head + "".join(f"# {ln}\n" for ln in note.splitlines()) + text[len(head):]
+    return text
