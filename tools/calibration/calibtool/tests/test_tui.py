@@ -103,7 +103,7 @@ def test_spd_say_argv():
     calls = []
     sp = tui.SpdSay(path="/usr/bin/spd-say", run=lambda argv, **kw: calls.append(argv))
     sp.say("Good. Step back.")
-    assert calls == [["/usr/bin/spd-say", "-w", "-x", "-l", "en-us", "-t", "male1", "-r", "-85",
+    assert calls == [["/usr/bin/spd-say", "-w", "-x", "-l", "en-us", "-t", "male1", "-r", "-95",
                       "<speak>Good. <break time='450ms'/> Step <break time='150ms'/> back. <break time='450ms'/></speak>"]]
 
 

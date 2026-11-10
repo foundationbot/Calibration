@@ -92,6 +92,24 @@ def _pair_job(yl, yr, use_stretch):
     return find_refine(b, yl, use_stretch), find_refine(b, yr, use_stretch)
 
 
+def guide_corners(board, gray, use_stretch=True) -> dict:
+    """{(tag, k): (u, v)} for placement guidance only: tags found on the (stretched) left image, ArUco's quad corners
+    without sub-pixel refinement, no right image. 9 Nov trial: full-size detection of
+    both images (~2 per second on phantom10) made the spoken guidance lag behind the board."""
+    g = np.asarray(gray)
+    img = stretch(g) if use_stretch else g          # full size: at half size only 14 of 35 tags were found at 1.1 m
+    out = {}
+    for tid, q in quads(board, img):
+        q = np.asarray(q, float).reshape(4, 2)
+        for k in range(4):
+            out[(tid, k)] = (float(q[k, 0]), float(q[k, 1]))
+    return out
+
+
+def _guide_job(yl, use_stretch):
+    return guide_corners(_W["board"], yl, use_stretch), {}
+
+
 class DetectPool:
     """detection workers (forkserver: the daemon has threads running, so no plain fork; the board travels as its
     constructor arguments, a cv2 detector does not pickle); submit_pair(left Y, right Y) -> Future of (left corners,
@@ -118,6 +136,10 @@ class DetectPool:
 
     def submit_pair(self, yl, yr):
         return self._ex.submit(_pair_job, yl, yr, self.use_stretch)
+
+    def submit_guide(self, yl):
+        """placement guidance: left image only, no refinement -> Future of (left corners, {})"""
+        return self._ex.submit(_guide_job, yl, self.use_stretch)
 
     def close(self):
         if self._ex is not None:

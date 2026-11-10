@@ -236,3 +236,23 @@ def test_a_dark_stored_frame_is_still_found(data_root):
     n_bright = len({t for t, _ in rig.board.detect(yl)})
     assert n_found > n_plain
     assert n_found >= 0.8 * n_bright
+
+
+def test_guide_corners_match_full_detection_on_a_stored_phantom10_frame():
+    """the fast guidance path (half size, no refinement, left only) must put the board where full detection does"""
+    from calibtool import paths
+    if not paths.have_data():
+        pytest.skip("CALIBTOOL_DATA not set")
+    pose = paths.data_root() / "p10" / "kit" / "takes" / "n6_110" / "pose_024.npz"
+    if not pose.is_file():
+        pytest.skip(f"{pose} missing")
+    from calibtool import pipeline
+    rig = pipeline.load_rig(paths.CONFIG / "rig-phantom11.yaml")
+    y = np.load(pose)["L"][0]
+    full = detect.find_refine(rig.board, y)
+    fast = detect.guide_corners(rig.board, y)
+    assert len(fast) >= 0.8 * len(full) > 0
+    a = detect.board_obs(full, rig.board, focal=rig.nominal_focal_px)
+    b = detect.board_obs(fast, rig.board, focal=rig.nominal_focal_px)
+    assert a is not None and b is not None
+    assert np.hypot(*(a.centroid - b.centroid)) < 3.0 and abs(b.z / a.z - 1) < 0.02

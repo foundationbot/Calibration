@@ -85,7 +85,7 @@ def ssml_with_pauses(text, word_ms=150, sentence_ms=450) -> str:
 
 
 class SpdSay:
-    def __init__(self, path="/usr/bin/spd-say", run=subprocess.run, rate=-85, lang="en-us", voice="male1",
+    def __init__(self, path="/usr/bin/spd-say", run=subprocess.run, rate=-95, lang="en-us", voice="male1",
                  word_ms=150, sentence_ms=450):
         # 9 Nov trial: rate -10 was too fast and unclear; the operator asked for slower twice (-45, -70 still fast),
         # then for pauses between words

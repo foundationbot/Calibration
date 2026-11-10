@@ -33,7 +33,7 @@ from pathlib import Path
 DEADMAN_S = 5.0
 ACTIVE = frozenset({"TRIAL"})
 TERMINAL = frozenset({"DONE", "ABORTED"})
-STEP_S = 0.5
+STEP_S = 0.25            # 9 Nov trial: guidance felt laggy at 0.5 s
 SAMPLE_S = 1.0
 HEALTH_KEEP = 30
 
@@ -617,7 +617,10 @@ def cmd_run(a):
     sampler.refresh()
     sampler.refresh_slow()
     sampler.start()
-    d = Daemon(m, cap, lambda p: pool.submit_pair(p.left.y, p.right.y), to_obs, sampler, trial=trial)
+    # the placement trial only needs where the board is (left image): the fast guidance detection
+    submit = (lambda p: pool.submit_guide(p.left.y)) if trial is not None else \
+        (lambda p: pool.submit_pair(p.left.y, p.right.y))
+    d = Daemon(m, cap, submit, to_obs, sampler, trial=trial)
     d.preflight_done(res)
     t = threading.Thread(target=d.loop, name="calibd-loop", daemon=True)
     t.start()

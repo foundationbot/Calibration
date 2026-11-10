@@ -31,12 +31,14 @@ from pathlib import Path
 
 from calibtool import protocol
 
-STILL_S = 1.0
+STILL_S = 0.6            # 9 Nov trial: 1.0 s plus slow detection felt laggy
 STILL_PX = 6.0
 FEW_TAGS = 20          # of 35: fewer readable tags with the board in view = seen too obliquely (9 Nov trial: 8)
 FEW_TAGS_STILL_PX = 25.0   # few tags make the centroid jitter; stillness is judged more loosely then
 LOST_S = 6.0
-REPEAT_S = 20.0
+MOVE_Z_FRAC = 0.03       # a distance change above this counts as the board moving
+REPEAT_S = 30.0          # the same instruction is repeated at most once, after this long unchanged
+DONE_TEXT = "Good. That one is done. Step back."
 TIMEOUT_S = 180.0
 BUDGET_S = 60.0                 # design 10.4: target < 1 min per placement
 YOUR_LEFT = "to YOUR left (the robot's right)"
@@ -90,6 +92,8 @@ def intro(t: Target, i, n) -> str:
     elif t.bearing_deg:
         side = "to your right" if t.bearing_deg > 0 else "to your left"
         where = f"Board {_dist_words(t.distance_m)} from the robot. Off {side}."
+    elif t.distance_m < 1.0:
+        where = f"Board {_dist_words(t.distance_m)} from the robot's head. Keep it high, near the head."
     else:
         where = f"Board {_dist_words(t.distance_m)} in front of the robot."
     return f"Placement {i} of {n}. {where}"
@@ -126,6 +130,9 @@ class PlacementGuide:
         self._lost_since = None
         self._lost_said = False
         self.last_obs = None
+        self._last_key = None           # the last correction spoken (kind of problem), for feedback
+        self._last_err = None
+        self._repeats = 0
 
     def _say(self, t, kind, text):
         s = Say(next(self.ids), float(t), kind, text)
@@ -149,18 +156,36 @@ class PlacementGuide:
         self._lost_since, self._lost_said = None, False
         c = obs.centroid
         tol = self.still_px if obs.n_tags >= FEW_TAGS else max(self.still_px, FEW_TAGS_STILL_PX)
-        if self._start is None or math.hypot(c[0] - self._start[1][0], c[1] - self._start[1][1]) > tol:
-            self._start = (t, (float(c[0]), float(c[1])))
+        moved = self._start is None or math.hypot(c[0] - self._start[1][0], c[1] - self._start[1][1]) > tol or \
+            abs(float(obs.z) - self._start[2]) > MOVE_Z_FRAC * self._start[2]
+        if moved:
+            # a board moved straight toward or away from the camera keeps its centroid: distance counts too
+            self._start = (t, (float(c[0]), float(c[1])), float(obs.z))
             self._spoken_at = None
             return None
         if t - self._start[0] < self.still_s:
             return None
-        if self._spoken_at is not None and t - self._spoken_at < self.repeat_s:
-            return None
-        kind, text = self.judge(obs)
+        if self._spoken_at is not None:
+            # already spoke in this still stretch: repeat the same instruction at most once, after repeat_s
+            if t - self._spoken_at < self.repeat_s or self._repeats >= 1:
+                return None
+            self._repeats += 1
+        else:
+            self._repeats = 0
+        kind, text, key, err = self._judge(obs)
         if kind == "good":
             self.done = True
             self.rest_t = self._start[0]
+            return self._say(t, kind, DONE_TEXT)
+        if self._spoken_at is None and self._last_key is not None:
+            # the board was moved since the last instruction: tell the operator how that went
+            if key != self._last_key:
+                text = "Good. " + text
+            elif err is not None and self._last_err is not None and err < self._last_err - 1e-9:
+                text = "Better. Keep going. " + text
+            else:
+                text = "Not yet. " + text
+        self._last_key, self._last_err = key, err
         return self._say(t, kind, text)
 
     def bearing_deg(self, obs) -> float:
@@ -169,6 +194,11 @@ class PlacementGuide:
 
     def judge(self, obs):
         """(kind, text) for a board at rest: the most important correction, or good"""
+        kind, text, _, _ = self._judge(obs)
+        return (kind, DONE_TEXT) if kind == "good" else (kind, text)
+
+    def _judge(self, obs):
+        """(kind, text, key, err): key names the problem (for feedback), err its size (smaller = closer to done)"""
         t = self.target
         if obs.cut:
             side = obs.cut[0]
@@ -181,24 +211,30 @@ class PlacementGuide:
             # height on the chair-shaped stand moves only in coarse steps (operator, 9 Nov: "lower maybe 40 cm or raise
             # by 30 cm"), so up/down says the minimum; sideways stays approximate
             amount = "At least" if side in ("top", "bottom") else "About"
-            return "correction", f"{first} {amount} {move} centimetres."
+            return "correction", f"{first} {amount} {move} centimetres.", f"cut_{side}", float(move)
         if obs.n_tags < FEW_TAGS and not t.tilted:
-            return "correction", "Tilt the board back. Face it to the robot's head."
+            return "correction", "Tilt the board back. Face it to the robot's head.", "tilt", float(FEW_TAGS - obs.n_tags)
         lo, hi = t.accept
         z = obs.z
         if t.refuse_beyond_m is not None and z > t.refuse_beyond_m:
-            return "correction", f"Too far. Bring the board closer. About {_cm(z - t.distance_m)} centimetres."
+            return ("correction", f"Too far. Bring the board closer. About {_cm(z - t.distance_m)} centimetres.",
+                    "far", z - t.distance_m)
         if z < lo:
-            return "correction", f"Move the board back. About {_cm(t.distance_m - z)} centimetres."
+            return "correction", f"Move the board back. About {_cm(t.distance_m - z)} centimetres.", "near", t.distance_m - z
         if z >= hi:
-            return "correction", f"Bring the board closer. About {_cm(z - t.distance_m)} centimetres."
+            if t.distance_m < 1.0 and obs.centroid[1] > self.pp[1] + 0.1 * self.size[1]:
+                # 9 Nov trial: the camera is ~1.5 m up looking down; a board low in the image is far below the head, so
+                # a near placement needs it raised toward the head, not moved along the floor ("it is at the feet")
+                return ("correction", f"Raise the board, up toward the robot's head. At least {_cm(z - t.distance_m)} "
+                        "centimetres.", "raise", z - t.distance_m)
+            return "correction", f"Bring the board closer. About {_cm(z - t.distance_m)} centimetres.", "far", z - t.distance_m
         if t.bearing_deg is not None and t.tol_deg is not None:
             b = self.bearing_deg(obs)
             if abs(b - t.bearing_deg) > t.tol_deg:
                 cm = _cm(z * (math.tan(math.radians(t.bearing_deg)) - math.tan(math.radians(b))))
                 side = "to your right" if t.bearing_deg > b else "to your left"
-                return "correction", f"Move the board {side}. About {cm} centimetres."
-        return "good", "Good. Step back."
+                return "correction", f"Move the board {side}. About {cm} centimetres.", "side", abs(b - t.bearing_deg)
+        return "good", DONE_TEXT, "good", 0.0
 
 
 class Trial:

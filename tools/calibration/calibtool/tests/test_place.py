@@ -44,7 +44,7 @@ def test_silent_while_carried_then_one_say_after_a_second_still():
     assert feed(g, moving(8)) == []
     says = feed(g, [obs()] * 4, t0=10.0)
     assert len(says) == 1
-    assert says[0].kind == "good" and says[0].text == "Good. Step back."
+    assert says[0].kind == "good" and says[0].text == "Good. That one is done. Step back."
     assert g.done
 
 
@@ -135,6 +135,38 @@ def test_few_tags_jitter_still_counts_as_resting():
     """with few tags the centroid jitters by more than still_px; it must still be judged"""
     seq = [obs(z=1.19, n_tags=8, u=640 + (9 if i % 2 else -9)) for i in range(6)]
     assert len(feed(guide(), seq)) == 1
+
+
+def test_feedback_good_when_the_problem_changes_better_when_it_shrinks_not_yet_otherwise():
+    """9 Nov trial: the operator wanted positive feedback, and the same sentence repeated felt like parroting"""
+    g = guide()                                                     # target 1.1 m
+    s1 = feed(g, [obs(z=1.1, v=40, cut=("top",))] * 4)[0].text       # cut at the top
+    assert s1.startswith("Lower the board.")
+    s2 = feed(g, [obs(z=1.6)] * 4, t0=10.0)[0].text                  # moved: no longer cut, but too far
+    assert s2.startswith("Good. Bring the board closer.")
+    s3 = feed(g, [obs(z=1.45)] * 4, t0=20.0)[0].text                 # moved closer, still too far
+    assert s3.startswith("Better. Keep going. Bring the board closer.")
+    s4 = feed(g, [obs(z=1.5, u=700)] * 4, t0=30.0)[0].text           # moved, but not closer
+    assert s4.startswith("Not yet. Bring the board closer.")
+    s5 = feed(g, [obs(z=1.1, u=640)] * 4, t0=40.0)[0]
+    assert s5.kind == "good" and s5.text == "Good. That one is done. Step back."
+
+
+def test_the_same_instruction_is_repeated_at_most_once_while_nothing_changes():
+    g = guide()
+    says = feed(g, [obs(z=1.6)] * 200)                               # 100 s, board never moves
+    assert [x.text for x in says] == ["Bring the board closer. About 50 centimetres."] * 2
+
+
+def test_a_near_placement_with_the_board_low_asks_to_raise_it_toward_the_head():
+    """9 Nov trial: 'bring the board closer by 60 cm' while it stood at the robot's feet: the camera is ~1.5 m up,
+    so a near placement needs the board raised toward the head"""
+    t = place.target("0.75 m")
+    s = feed(guide(t), [obs(z=1.15, v=600)] * 4)[0].text
+    assert s.startswith("Raise the board, up toward the robot's head.")
+    s = feed(guide(t), [obs(z=1.15, v=380)] * 4)[0].text            # board at the image centre: closer is right
+    assert s.startswith("Bring the board closer.")
+    assert "high, near the head" in place.intro(t, 2, 6)
 
 
 def test_lost_board_prompt_once():
