@@ -635,3 +635,56 @@ def test_the_main_thread_restarts_a_dead_loop(tmp_path):
     finally:
         d.stop_flag.set()
     assert "loop_died" in kinds(m.store) and m.state["loop_restarts"] == 1
+
+
+def _held_after_restart(tmp_path, c):
+    m = machine(tmp_path, c)
+    m.to("READY", "x")
+    m.heartbeat()
+    m.key("T")
+    del m
+    c.t += 30
+    m2 = dm.Machine.resume(dm.Store(tmp_path / "s1"), c)
+    assert m2.phase == "HOLD"
+    cap = cp.Capture(FakeSource(), 3, 0, clock=c)
+    return m2, dm.Daemon(m2, cap, detector=lambda pair: _done((None, None)), to_obs=lambda det: None,
+                         sampler=lambda: {}, clock=c)
+
+
+def test_preflight_after_a_restart_does_not_lift_hold(tmp_path):
+    """review 7: resume -> HOLD, then cmd_run's preflight_done moved it to READY: HOLD left without G"""
+    c = Clock()
+    m, d = _held_after_restart(tmp_path, c)
+    d.preflight_done(pf.Result([pf.Check("frames", "ok", "3 pairs")], {}, {}))
+    assert m.phase == "HOLD" and m.state["held_from"] == "TRIAL"
+    m.heartbeat()
+    m.key("G")
+    assert m.phase == "TRIAL"
+
+
+def test_g_is_refused_while_a_failed_preflight_holds(tmp_path):
+    c = Clock()
+    m, d = _held_after_restart(tmp_path, c)
+    d.preflight_done(pf.Result([pf.Check("frames", "fail", "0 pairs")], {}, {}))
+    assert m.phase == "HOLD"
+    assert any("preflight failed" in b for b in m.state["banner"])
+    m.heartbeat()
+    m.key("G")
+    assert m.phase == "HOLD" and "g_refused" in kinds(m.store)
+
+
+def test_the_deadman_runs_on_a_monotonic_clock(tmp_path):
+    """review 7: liveness on time.time: an NTP step back kept a dead link 'live' (or a step forward held a live one)"""
+    wall, mono = Clock(1000.0), Clock(50.0)
+    m = dm.Machine(dm.Store(tmp_path / "s1"), wall, session="s1", robot="P10", mono=mono)
+    m.to("READY", "x")
+    m.heartbeat()
+    m.key("T")
+    wall.t += 3600.0                            # the wall clock steps forward; 1 s really passed
+    mono.t += 1.0
+    m.tick()
+    assert m.phase == "TRIAL"
+    wall.t -= 7200.0                            # ... and back; 6 s really passed since the heartbeat
+    mono.t += 5.0
+    m.tick()
+    assert m.phase == "HOLD"

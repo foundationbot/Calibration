@@ -109,8 +109,11 @@ def _json_default(o):
 
 class Machine:
     def __init__(self, store: Store, clock=time.time, session="", robot="", deadman_s=DEADMAN_S, read_only=True,
-                 mode="watch", _state=None):
+                 mode="watch", _state=None, mono=None):
         self.store, self.clock, self.deadman_s = store, clock, deadman_s
+        # the deadman runs on a monotonic clock (a wall-clock step must not make a dead link live, or a live one dead);
+        # an injected test clock serves both
+        self.mono = mono or (time.monotonic if clock is time.time else clock)
         self._lock = threading.RLock()
         self.pending_keys = []
         self.last_hb = None
@@ -126,12 +129,13 @@ class Machine:
         self.save()
 
     @classmethod
-    def resume(cls, store: Store, clock=time.time, deadman_s=DEADMAN_S):
-        """the machine as state.json left it: an active phase comes back as HOLD, an unfinished preflight reruns"""
+    def resume(cls, store: Store, clock=time.time, deadman_s=DEADMAN_S, mono=None):
+        """the machine as state.json left it: an active phase comes back as HOLD (and stays there through the new
+        preflight: only G leaves it), an unfinished preflight reruns"""
         st = store.load_state()
         if st is None:
             raise FileNotFoundError(f"no state.json in {store.dir}")
-        m = cls(store, clock, deadman_s=deadman_s, _state=st)
+        m = cls(store, clock, deadman_s=deadman_s, _state=st, mono=mono)
         before = st["phase"]
         if before in ACTIVE:
             st["held_from"], st["phase"] = before, "HOLD"
@@ -178,14 +182,14 @@ class Machine:
             self.save()
 
     def live(self) -> bool:
-        return self.last_hb is not None and self.clock() - self.last_hb <= self.deadman_s
+        return self.last_hb is not None and self.mono() - self.last_hb <= self.deadman_s
 
     def heartbeat(self):
         with self._lock:
-            self.last_hb = self.clock()
+            self.last_hb = self.mono()
             if not self.state["attached"]:
                 self.state["attached"] = True
-                self.store.event("tui_heartbeat", t=self.last_hb)
+                self.store.event("tui_heartbeat", t=self.clock())
 
     def tick(self):
         with self._lock:
@@ -193,7 +197,8 @@ class Machine:
             changed = False
             if self.state["attached"] and not live:
                 self.state["attached"] = False
-                self.store.event("link_lost", t=self.clock(), last_hb=self.last_hb)
+                self.store.event("link_lost", t=self.clock(), hb_age_s=round(self.mono() - self.last_hb, 2)
+                                 if self.last_hb is not None else None)
                 changed = True
             if self.phase in ACTIVE and not live:
                 self.state["held_from"] = self.phase
@@ -212,7 +217,9 @@ class Machine:
             if k == "A":
                 self.to("ABORTED", "abort key")
             elif k == "G":
-                if self.phase == "HOLD" and self.live() and self.state.get("held_from"):
+                if self.phase == "HOLD" and self.state.get("preflight_green") is False:
+                    self.store.event("g_refused", t=self.clock(), why="the preflight after the restart failed")
+                elif self.phase == "HOLD" and self.live() and self.state.get("held_from"):
                     back = self.state["held_from"]
                     self.store.event("resumed_by_operator", t=self.clock(), to=back)
                     self.state["held_from"] = None
@@ -398,7 +405,10 @@ class Daemon:
         failed = [c.name for c in res.checks if c.status == "fail" and c.gate == "collect"]
         self.m.store.event("preflight", t=self.clock(), green=st["preflight_green"], failed=failed,
                            checks=st["checks"])
-        if st["preflight_green"]:
+        if self.m.phase == "HOLD":
+            # a restarted calibd resumed in HOLD: only G leaves it (and not while this preflight failed) (review 7)
+            self.m.store.event("preflight_in_hold", t=self.clock(), green=st["preflight_green"])
+        elif st["preflight_green"]:
             self.m.to("READY", "preflight green")
         else:
             self.m.to("BLOCKED", "preflight failed: " + ", ".join(failed))
@@ -417,7 +427,7 @@ class Daemon:
         if st.get("camera_stalled_s") is not None:
             out.append(f"CAMERA STALLED: no new left/right pair for {st['camera_stalled_s']:.0f} s (frozen or dropped); "
                        "the trial waits")
-        if st["phase"] == "BLOCKED":
+        if st["phase"] == "BLOCKED" or (st["phase"] == "HOLD" and st.get("preflight_green") is False):
             out.append("preflight failed: " + ", ".join(c["name"] for c in st["checks"]
                                                         if c["status"] == "fail" and c["gate"] == "collect"))
         if self.watch is not None:
