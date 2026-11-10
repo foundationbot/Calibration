@@ -268,3 +268,62 @@ def test_guide_corners_match_full_detection_on_a_stored_phantom10_frame():
     b = detect.board_obs(fast, rig.board, focal=rig.nominal_focal_px)
     assert a is not None and b is not None
     assert np.hypot(*(a.centroid - b.centroid)) < 3.0 and abs(b.z / a.z - 1) < 0.02
+
+
+
+# ------------------------------------------------------------------ why the board was not seen (10 Nov, phantom10)
+# "I cannot see the board" was the only thing said when detection failed; board_miss names the reason so the guide can
+# say what to do: too dark, too far (tags too small), only part of the board in view, few tags, or nothing at all.
+
+def tags_at(ids, edge_px, u0, v0):
+    """{(tag, k): (u, v)}: square tags edge_px wide in a row from (u0, v0), 2 edges apart"""
+    out = {}
+    for i, t in enumerate(ids):
+        u, v = u0 + 2 * edge_px * i, v0
+        for k, (du, dv) in enumerate(((0, 0), (1, 0), (1, 1), (0, 1))):
+            out[(t, k)] = (u + du * edge_px, v + dv * edge_px)
+    return out
+
+
+def test_a_dark_image_is_too_dark():
+    m = detect.board_miss({}, SIZE, brightness=25.0)
+    assert m.reason == "dark" and m.n_tags == 0 and m.brightness == 25.0
+    assert detect.board_miss(tags_at([1, 2], 40, 600, 400), SIZE, brightness=30.0).reason == "dark"
+
+
+def test_small_tags_are_too_far():
+    m = detect.board_miss(tags_at([1, 2, 3], 10, 600, 400), SIZE, brightness=120.0)
+    assert m.reason == "far" and m.n_tags == 3 and m.tag_px == pytest.approx(10.0)
+
+
+def test_tags_at_an_image_edge_are_part_of_the_board():
+    m = detect.board_miss(tags_at([1, 2, 3], 40, 1050, 400), SIZE, brightness=120.0)     # right end at 1250
+    assert m.reason == "partial" and m.cut == ("right",)
+    m = detect.board_miss(tags_at([1, 2], 40, 600, 2), SIZE, brightness=120.0)
+    assert m.reason == "partial" and m.cut == ("top",)
+
+
+def test_a_few_tags_in_the_middle_are_few():
+    m = detect.board_miss(tags_at([1, 2, 3], 40, 600, 400), SIZE, brightness=120.0)
+    assert m.reason == "few" and m.cut == ()
+
+
+def test_nothing_found_in_a_bright_image_is_none():
+    assert detect.board_miss({}, SIZE, brightness=120.0).reason == "none"
+    assert detect.board_miss({}, SIZE).reason == "none"                   # brightness unknown
+
+
+def test_brightness_is_the_mean_of_the_central_region():
+    g = np.zeros((800, 1280), np.uint8)
+    g[200:600, 320:960] = 200
+    assert detect.brightness(g) == pytest.approx(200.0, abs=1.0)
+
+
+def test_the_guidance_job_reports_the_images_brightness():
+    b = board()
+    img, _ = render(b, lo=10, hi=30)
+    with detect.DetectPool(b, 1) as pool:
+        dl, info = pool.submit_guide(img).result(timeout=60)
+    assert dl == detect.guide_corners(b, img)
+    assert info["brightness"] == pytest.approx(detect.brightness(img))
+    assert info["brightness"] < detect.DARK

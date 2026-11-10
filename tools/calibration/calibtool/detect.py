@@ -8,7 +8,8 @@ detect().
 DetectPool: a process pool sized to the robot's free CPU (pool_size: cpus - load - a reserve, capped; phantom10 runs
 load ~9 on 9 cpus, so 1 worker there) that detects both frames of a pair per job; resize() rebuilds it when the load
 changes. board_obs: the board's centroid, depth and 3-D centre (PnP with the nominal equidistant camera, as step 06),
-tag count and whether it touches the image edge, for placement guidance. hold_dict: detected pairs -> the step-15b
+tag count and whether it touches the image edge, for placement guidance; board_miss: why a frame shows no board
+(too dark, too far, partly in view, few tags, nothing), so the guidance can say it. hold_dict: detected pairs -> the step-15b
 corner dict a replay.Collection / assign.CaptureHold takes."""
 import math
 from concurrent.futures import ProcessPoolExecutor
@@ -20,6 +21,8 @@ from calibtool import paths
 
 MIN_TAGS = 6
 BORDER_PX = 8.0
+DARK = 40.0                     # mean grey (0-255) of the image's central region below this: too dark to see the board
+SMALL_TAG_PX = 14.0             # tags found but their median edge below this: the board is too far to read
 POOL_RESERVE = 2.0              # cpus left to the robot's own load
 POOL_CAP = 4
 
@@ -106,8 +109,16 @@ def guide_corners(board, gray, use_stretch=True) -> dict:
     return out
 
 
+def brightness(gray) -> float:
+    """mean grey of the image's central region (the middle half in each direction, where the board is placed),
+    every 4th pixel"""
+    g = np.asarray(gray)
+    h, w = g.shape[:2]
+    return float(g[h // 4:h - h // 4:4, w // 4:w - w // 4:4].mean())
+
+
 def _guide_job(yl, use_stretch):
-    return guide_corners(_W["board"], yl, use_stretch), {}
+    return guide_corners(_W["board"], yl, use_stretch), {"brightness": brightness(yl)}
 
 
 class DetectPool:
@@ -138,7 +149,8 @@ class DetectPool:
         return self._ex.submit(_pair_job, yl, yr, self.use_stretch)
 
     def submit_guide(self, yl):
-        """placement guidance: left image only, no refinement -> Future of (left corners, {})"""
+        """placement guidance: left image only, no refinement -> Future of (left corners, {"brightness": central mean
+        grey of the left image}) (board_miss uses it when no board is seen)"""
         return self._ex.submit(_guide_job, yl, self.use_stretch)
 
     def close(self):
@@ -198,6 +210,48 @@ def board_obs(det, board, focal=None, pp=None, intr=None, size=(1280, 800), min_
     gaps = {"left": lo[0], "top": lo[1], "right": W - 1 - hi[0], "bottom": H - 1 - hi[1]}
     cut = tuple(side for side, g in gaps.items() if g < margin)
     return BoardObs(uv.mean(0), z, n_tags, len(keys), bool(cut), cut, lo, hi, p)
+
+
+@dataclass
+class Miss:
+    """why one frame shows no usable board (board_obs gave None), for the spoken guidance"""
+    reason: str                 # dark | far | partial | few | none
+    n_tags: int
+    tag_px: float               # median tag edge (px) of the tags found, 0 when none
+    brightness: object          # mean grey of the image's central region, None when unknown
+    cut: tuple                  # image sides the tags found sit at, the nearest first ("left", "right", "top", ...)
+
+    def as_dict(self):
+        return {"reason": self.reason, "tags": self.n_tags, "tag_px": round(self.tag_px, 1),
+                "brightness": None if self.brightness is None else round(float(self.brightness), 1),
+                "cut": list(self.cut)}
+
+
+def board_miss(det, size=(1280, 800), brightness=None, border_px=BORDER_PX) -> Miss:
+    """why det (the corners found in a frame board_obs could not use) shows no board: too dark (central mean grey
+    below DARK), too far (tags found, median edge below SMALL_TAG_PX), partial (the tags found sit within 1.5 tag
+    edges + border_px of an image side), few (some tags, none of those), none (no tags in a bright image)"""
+    n = len({t for t, _ in det})
+    tpx = tag_px(det)
+    cut = ()
+    if det:
+        uv = np.array(list(det.values()), float)
+        W, H = size
+        lo, hi = uv.min(0), uv.max(0)
+        gaps = {"left": lo[0], "top": lo[1], "right": W - 1 - hi[0], "bottom": H - 1 - hi[1]}
+        margin = border_px + 1.5 * tpx
+        cut = tuple(sorted((k for k, g in gaps.items() if g < margin), key=lambda k: gaps[k]))
+    if brightness is not None and brightness < DARK:
+        reason = "dark"
+    elif n and 0 < tpx < SMALL_TAG_PX:
+        reason = "far"
+    elif n and cut:
+        reason = "partial"
+    elif n:
+        reason = "few"
+    else:
+        reason = "none"
+    return Miss(reason, n, tpx, None if brightness is None else float(brightness), cut)
 
 
 def tag_px(det) -> float:
