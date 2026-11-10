@@ -520,3 +520,118 @@ def test_the_trial_times_out_without_fresh_detections(tmp_path):
     _run(d, cap, c, 4.0)
     assert [r["result"] for r in tr.records] == ["timeout"]
     assert "Skipping this one." in [x["text"] for x in m.state["says"]]
+
+
+class FlakyCapture:
+    """a capture whose snapshot raises the first `fail` times"""
+
+    def __init__(self, fail=2, exc=RuntimeError("shm read failed")):
+        self.fail, self.exc, self.calls = fail, exc, 0
+        self.inner = cp.Capture(FakeSource(), 3, 0)
+
+    def snapshot(self):
+        self.calls += 1
+        if self.calls <= self.fail:
+            raise self.exc
+        self.inner.step()
+        self.inner.step()
+        return self.inner.snapshot()
+
+    def latest(self):
+        return self.inner.latest()
+
+    def latest_age(self):
+        return self.inner.latest_age()
+
+
+def _wait_for(cond, timeout=3.0):
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if cond():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def test_an_exception_in_a_step_does_not_stop_the_loop(tmp_path):
+    """review 3: one exception in step() ended the loop thread silently; the machine looked alive"""
+    m = dm.Machine(dm.Store(tmp_path / "s1"), session="s1", robot="P10")
+    d = dm.Daemon(m, FlakyCapture(fail=3), detector=lambda pair: _done((None, None)), to_obs=lambda det: None,
+                  sampler=lambda: {}, clock=time.time)
+    d.preflight_done(pf.Result([], {}, {}))
+    th = threading.Thread(target=d.loop, kwargs={"period_s": 0.01}, daemon=True)
+    th.start()
+    try:
+        assert _wait_for(lambda: int(m.state.get("step_n") or 0) >= 10)
+    finally:
+        d.stop_flag.set()
+        th.join(2.0)
+    errs = [e for e in m.store.events() if e["kind"] == "step_error"]
+    assert errs and "shm read failed" in errs[0]["error"] and "Traceback" in errs[0]["trace"]
+    assert len(errs) == 1                       # the same error repeated is logged once, then counted
+    st = m.store.load_state()
+    assert st["step_errors"] == 3 and st["step_error_run"] == 0
+
+
+def test_a_step_that_keeps_failing_says_so_in_the_banner(tmp_path):
+    m = dm.Machine(dm.Store(tmp_path / "s1"), session="s1", robot="P10")
+    d = dm.Daemon(m, FlakyCapture(fail=10 ** 6), detector=lambda pair: _done((None, None)), to_obs=lambda det: None,
+                  sampler=lambda: {}, clock=time.time)
+    for _ in range(3):
+        d.safe_step()
+    st = m.store.load_state()
+    assert st["step_n"] == 3 and st["step_error_run"] == 3
+    assert any("calibd step failing" in b and "shm read failed" in b for b in st["banner"]), st["banner"]
+
+
+def test_a_broken_detection_pool_is_rebuilt(tmp_path):
+    """review 3: BrokenProcessPool from submit() went uncaught and killed the loop"""
+    from concurrent.futures.process import BrokenProcessPool
+    c = Clock()
+    m = machine(tmp_path, c)
+    cap = cp.Capture(FakeSource(), 3, 0, clock=c)
+    calls = {"broken": 0, "good": 0, "rebuilt": 0}
+
+    def broken(pair):
+        calls["broken"] += 1
+        raise BrokenProcessPool("a worker died")
+
+    def good(pair):
+        calls["good"] += 1
+        return _done((None, None))
+
+    def rebuild():
+        calls["rebuilt"] += 1
+        return good
+    d = dm.Daemon(m, cap, detector=broken, to_obs=lambda det: _obs(1.1), sampler=lambda: {}, clock=c,
+                  rebuild_detector=rebuild)
+    d.preflight_done(pf.Result([], {}, {}))
+    for _ in range(6):
+        c.t += 0.15
+        cap.step()
+        cap.step()
+        d.safe_step()
+    assert calls["rebuilt"] == 1 and calls["good"] >= 3
+    assert m.state["board"] is not None and m.state["step_error_run"] == 0
+    assert "detect_pool_rebuilt" in kinds(m.store)
+
+
+class _Die(BaseException):
+    pass
+
+
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+def test_the_main_thread_restarts_a_dead_loop(tmp_path):
+    m = dm.Machine(dm.Store(tmp_path / "s1"), session="s1", robot="P10")
+    cap = FlakyCapture(fail=1, exc=_Die())
+    d = dm.Daemon(m, cap, detector=lambda pair: _done((None, None)), to_obs=lambda det: None, sampler=lambda: {},
+                  clock=time.time)
+    d.start_loop(period_s=0.01)
+    try:
+        assert _wait_for(lambda: not d.loop_alive())
+        assert d.watch_loop() is True
+        assert _wait_for(lambda: int(m.state.get("step_n") or 0) >= 5)
+        assert d.watch_loop() is False
+    finally:
+        d.stop_flag.set()
+    assert "loop_died" in kinds(m.store) and m.state["loop_restarts"] == 1

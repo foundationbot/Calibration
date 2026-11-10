@@ -39,6 +39,7 @@ STEP_S = 0.15            # 9 Nov trial: guidance felt laggy at 0.5 s, then 0.25 
 SAYS_KEEP = 8            # the recent prompts kept in the state: a step can make two (an end and the next intro)
 SAMPLE_S = 1.0
 HEALTH_KEEP = 30
+POOL_REBUILD_S = 5.0     # a detection pool that keeps breaking is rebuilt at most this often
 STALE_S = 1.0            # no new left/right pair for this long = the camera stalled (frozen or dropped)
 STALL_TEXT = "The camera stopped. Please wait."
 
@@ -362,8 +363,12 @@ class Daemon:
     producer, k0s_ok)"""
 
     def __init__(self, machine: Machine, capture, detector, to_obs, sampler, trial=None, clock=time.time,
-                 sample_every_s=SAMPLE_S):
+                 sample_every_s=SAMPLE_S, rebuild_detector=None):
         self.m, self.capture, self.detector, self.to_obs = machine, capture, detector, to_obs
+        self.rebuild_detector = rebuild_detector    # () -> a new detector when the process pool broke
+        self._rebuilt_at = None
+        self._last_error = None
+        self._thread = None
         self.sampler, self.trial, self.clock = sampler, trial, clock
         self.sample_every_s = sample_every_s
         self.watch = None
@@ -407,6 +412,8 @@ class Daemon:
             out.append("READ-ONLY session: the tool changes nothing on the robot (producer, motors, OKVIS as found)")
         if st["phase"] == "HOLD":
             out.append(f"HOLD: no TUI heartbeat; nothing resumes by itself: press G (from {st.get('held_from')})")
+        if st.get("step_error_run"):
+            out.append(f"calibd step failing ({st['step_error_run']} in a row): {st.get('last_step_error')}")
         if st.get("camera_stalled_s") is not None:
             out.append(f"CAMERA STALLED: no new left/right pair for {st['camera_stalled_s']:.0f} s (frozen or dropped); "
                        "the trial waits")
@@ -435,6 +442,8 @@ class Daemon:
             except Exception as e:  # noqa: BLE001
                 self.m.store.event("detect_error", t=self.clock(), error=f"{type(e).__name__}: {e}")
                 obs = None
+                if _broken_pool(e):
+                    self._rebuild(e)
             self.m.state["board"] = None if obs is None else {
                 "z_m": round(float(obs.z), 3), "u": round(float(obs.centroid[0]), 1),
                 "v": round(float(obs.centroid[1]), 1), "tags": int(obs.n_tags), "corners": int(obs.n_corners),
@@ -444,11 +453,33 @@ class Daemon:
         if self._pending is None:
             p = self.capture.latest()
             if p is not None and p.t0 != self._last_t0:
-                self._last_t0 = p.t0
-                self._pending = self.detector(p)
+                try:
+                    self._pending = self.detector(p)
+                    self._last_t0 = p.t0
+                except Exception as e:  # noqa: BLE001
+                    if not _broken_pool(e):
+                        raise
+                    self._pending = None
+                    self._rebuild(e)
         if fresh is False and self._pending is not None and self._pending.done():
             return self._detect()
         return fresh
+
+    def _rebuild(self, e):
+        """a broken detection process pool (a worker killed, e.g. by the OOM killer) is replaced, at most every
+        POOL_REBUILD_S; detection pauses meanwhile (review 3: BrokenProcessPool from submit ended the loop)"""
+        t = time.monotonic()
+        if self.rebuild_detector is None or (self._rebuilt_at is not None and t - self._rebuilt_at < POOL_REBUILD_S):
+            return
+        self._rebuilt_at = t
+        self.m.store.event("detect_pool_broken", t=self.clock(), error=f"{type(e).__name__}: {e}")
+        try:
+            self.detector = self.rebuild_detector()
+        except Exception as e2:  # noqa: BLE001
+            self.m.store.event("detect_pool_rebuild_failed", t=self.clock(), error=f"{type(e2).__name__}: {e2}")
+            return
+        self.m.state["pool_rebuilds"] = int(self.m.state.get("pool_rebuilds") or 0) + 1
+        self.m.store.event("detect_pool_rebuilt", t=self.clock(), rebuilds=self.m.state["pool_rebuilds"])
 
     def _health(self, t):
         if self.watch is None:
@@ -498,8 +529,9 @@ class Daemon:
 
     def step(self):
         t = self.clock()
-        self.m.tick()
         st = self.m.state
+        st["step_n"] = int(st.get("step_n") or 0) + 1       # the TUI flags a daemon whose counter stops (review 3)
+        self.m.tick()
         st["capture"] = self.capture.snapshot()
         fresh = self._detect()
         stalled = self._stall(t)
@@ -543,14 +575,67 @@ class Daemon:
                 self._paused_at = t
             # always the trial's own state: a stored line from before a restart is stale (9 Nov: "placement 2 of 6")
             st["trial"] = self.trial.state(t)
+        st["step_error_run"] = 0
         st["banner"] = self.banner()
         self.m.save()
+
+    def safe_step(self):
+        """one step; an exception is logged (once per distinct error, then counted), shown in the banner and the
+        loop goes on (review 3: one exception ended the loop thread and nothing said so)"""
+        try:
+            self.step()
+        except Exception as e:  # noqa: BLE001
+            import traceback
+            st = self.m.state
+            err = f"{type(e).__name__}: {e}"
+            st["step_errors"] = int(st.get("step_errors") or 0) + 1
+            st["step_error_run"] = int(st.get("step_error_run") or 0) + 1
+            st["last_step_error"] = err
+            if err != self._last_error or st["step_errors"] % 100 == 0:
+                self._last_error = err
+                try:
+                    self.m.store.event("step_error", t=time.time(), error=err, count=st["step_errors"],
+                                       trace=traceback.format_exc()[-4000:])
+                except Exception:  # noqa: BLE001
+                    pass
+            try:
+                st["banner"] = self.banner()
+            except Exception:  # noqa: BLE001
+                st["banner"] = [f"calibd step failing: {err}"]
+            try:
+                self.m.save()
+            except Exception:  # noqa: BLE001
+                pass
 
     def loop(self, period_s=STEP_S):
         while not self.stop_flag.is_set():
             t0 = time.monotonic()
-            self.step()
+            self.safe_step()
             self.stop_flag.wait(max(0.0, period_s - (time.monotonic() - t0)))
+
+    def start_loop(self, period_s=STEP_S):
+        self._period = period_s
+        self._thread = threading.Thread(target=self.loop, args=(period_s,), name="calibd-loop", daemon=True)
+        self._thread.start()
+
+    def loop_alive(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def watch_loop(self) -> bool:
+        """the main thread's check: a loop thread that died anyway (an error safe_step does not catch) is logged and
+        started again -> True when it was restarted"""
+        if self._thread is None or self.stop_flag.is_set() or self._thread.is_alive():
+            return False
+        st = self.m.state
+        st["loop_restarts"] = int(st.get("loop_restarts") or 0) + 1
+        self.m.store.event("loop_died", t=time.time(), restarts=st["loop_restarts"])
+        self.start_loop(self._period)
+        return True
+
+
+def _broken_pool(e) -> bool:
+    from concurrent.futures.process import BrokenProcessPool
+    return isinstance(e, BrokenProcessPool)
 
 
 # ---------------------------------------------------------------- system samples on the robot
@@ -683,7 +768,7 @@ def cmd_run(a):
     board = rig.board
     cpus = detect.usable_cpus()
     workers = a.detect_workers or detect.pool_size(cpus, os.getloadavg()[0])
-    pool = detect.DetectPool(board, workers)
+    pools = {"pool": detect.DetectPool(board, workers)}
     m.state["detect_workers"] = workers
     W, H = (int(v) for v in rig.resolution)
 
@@ -702,22 +787,36 @@ def cmd_run(a):
     sampler.refresh()
     sampler.refresh_slow()
     sampler.start()
-    # the placement trial only needs where the board is (left image): the fast guidance detection
-    submit = (lambda p: pool.submit_guide(p.left.y)) if trial is not None else \
-        (lambda p: pool.submit_pair(p.left.y, p.right.y))
-    d = Daemon(m, cap, submit, to_obs, sampler, trial=trial)
+    def submitter():
+        pool = pools["pool"]
+        # the placement trial only needs where the board is (left image): the fast guidance detection
+        return (lambda p: pool.submit_guide(p.left.y)) if trial is not None else \
+            (lambda p: pool.submit_pair(p.left.y, p.right.y))
+
+    def rebuild():
+        try:
+            pools["pool"].close()
+        except Exception:  # noqa: BLE001  (a broken pool may not close cleanly)
+            pass
+        pools["pool"] = detect.DetectPool(board, workers)
+        return submitter()
+    d = Daemon(m, cap, submitter(), to_obs, sampler, trial=trial, rebuild_detector=rebuild)
     d.preflight_done(res)
-    t = threading.Thread(target=d.loop, name="calibd-loop", daemon=True)
-    t.start()
+    d.start_loop()
     try:
         while not stop.is_set():
             stop.wait(0.5)
+            d.watch_loop()
     finally:
         d.stop_flag.set()
-        t.join(3.0)
+        if d._thread is not None:
+            d._thread.join(3.0)
         sampler.stop()
         cap.stop()
-        pool.close()
+        try:
+            pools["pool"].close()
+        except Exception:  # noqa: BLE001
+            pass
         m.store.event("daemon_stop", t=time.time(), phase=m.phase)
         m.save()
         srv.stop()

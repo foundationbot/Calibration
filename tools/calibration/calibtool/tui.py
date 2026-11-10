@@ -15,6 +15,7 @@ import time
 
 SPEAK_MAX_AGE_S = 5.0
 HB_S = 1.0
+NOT_STEPPING_S = 3.0     # calibd's step counter unchanged this long (laptop clock) = its loop stopped
 KEYS = "A = abort | G = continue after HOLD | T = start the placement trial | C = can't put it there | " \
        "Q = leave (calibd keeps running)"
 MARK = {"ok": "ok  ", "warn": "WARN", "fail": "FAIL", "info": "info"}
@@ -27,15 +28,17 @@ def _motors(state):
     return "motors ?"
 
 
-def render(state, width=100) -> str:
+def render(state, width=100, notes=()) -> str:
+    """notes: the laptop's own NOT NORMAL lines (e.g. calibd not stepping), shown before calibd's banner"""
     s = state or {}
     L = []
     L.append(f"calib  {s.get('robot', '?')}  session {s.get('session', '?')}  phase {s.get('phase', '?')}  "
              f"{_motors(s)}  link {'up' if s.get('attached') else 'down'}   [A = abort]")
     L.append("-" * width)
-    for b in s.get("banner") or ():
+    banner = list(notes) + list(s.get("banner") or ())
+    for b in banner:
         L.append(f"NOT NORMAL: {b}")
-    if s.get("banner"):
+    if banner:
         L.append("-" * width)
     checks = s.get("checks") or []
     if checks:
@@ -150,6 +153,8 @@ class Tui:
         self._fresh = True              # nothing seen yet: old prompts (attaching late) are not spoken
         self._hb = None
         self.state = None
+        self._step_n = None             # calibd's step counter and when (laptop clock) it last changed
+        self._step_seen = None
 
     def step(self, line):
         try:
@@ -171,8 +176,23 @@ class Tui:
                     self.speaker.say(x["text"])
                 self.spoken = x["id"]
             self._fresh = False
-        self.out(render(st))
+        self.out(render(st, notes=self.notes(st)))
         return st
+
+    def notes(self, st) -> list:
+        """the laptop's own NOT NORMAL lines: calibd's step counter not advancing while its state keeps coming (its
+        loop stopped: review 3)"""
+        n, now = st.get("step_n"), self.clock()
+        if n is None:
+            return []
+        if n != self._step_n:
+            self._step_n, self._step_seen = n, now
+            return []
+        idle = now - self._step_seen
+        if idle > NOT_STEPPING_S:
+            return [f"calibd not stepping: its loop has not advanced for {idle:.0f} s (the prompts and the trial are "
+                    "stopped; check calibd.log)"]
+        return []
 
     def heartbeat(self):
         t = self.clock()

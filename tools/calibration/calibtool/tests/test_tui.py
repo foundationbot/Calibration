@@ -154,3 +154,21 @@ def test_ssml_pauses_escape_and_count():
 
 def test_silent_speaker():
     tui.Silent().say("x")
+
+
+def test_a_daemon_that_stopped_stepping_is_flagged():
+    """review 3: the socket kept sending the same state after the loop died; nothing on screen said so"""
+    t, sent, out, sp, c = make()
+    t.step(json.dumps(state(step_n=10)))
+    c.t = 1.0
+    t.step(json.dumps(state(step_n=17)))
+    assert "not stepping" not in out[-1]
+    c.t = 2.0
+    t.step(json.dumps(state(step_n=17)))
+    assert "not stepping" not in out[-1]
+    c.t = 1.0 + tui.NOT_STEPPING_S + 0.5
+    t.step(json.dumps(state(step_n=17)))
+    assert "NOT NORMAL: calibd not stepping" in out[-1]
+    c.t += 0.2
+    t.step(json.dumps(state(step_n=18)))
+    assert "not stepping" not in out[-1]
