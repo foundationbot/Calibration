@@ -172,3 +172,128 @@ def test_write_split_refuses_a_session_with_unobserved_holds(rig, tmp_path):
     a.observe(next(assign.capture_holds(s)))
     with pytest.raises(ValueError, match="not observed"):
         a.write_split(s, tmp_path)
+
+
+# ---------------------------------------------------------------- 2-4. the stratified rule
+
+# three placements feeding four entries, cells interleaved within each take
+MIXED = [("P1", [("centre", 0.5, 2), ("left", 0.75, 2)] * 6 + [("centre", 0.5, 2)]),
+         ("P2", [("centre", 0.5, 2), ("left", 0.75, 2), ("right", 1.1, 2)] * 5 + [("left", 0.75, 2)]),
+         ("P3", [("right", 1.1, 2), ("centre", 0.5, 2), ("top", 1.1, 1)] * 3)]
+
+
+def _per_entry(a, labels=None):
+    """{entry: [(placement, label)]} in observation order (labels: {hold: label} overriding the final ones)"""
+    out = {}
+    for h in a.holds.values():
+        if h.entry is not None:
+            out.setdefault(h.entry, []).append((h.placement, (labels or {}).get(h.hold, h.label)))
+    return out
+
+
+def test_entries_are_known_by_construction(rig):
+    a, _ = run(rig, synth_session(rig.board, MIXED))
+    assert set(_per_entry(a)) == {("centre", (0.4, 0.6)), ("left", (0.6, 0.9)), ("right", (0.9, 1.3)),
+                                  ("top", (0.9, 1.3))}
+
+
+@pytest.mark.parametrize("every", [2, 3])
+def test_test_fraction_per_entry_within_one_hold(rig, every):
+    s = synth_session(rig.board, MIXED)
+    a, seen = run(rig, s, holdout_every=every)
+    a.finish()
+    for e, rows in _per_entry(a).items():
+        k, t = len(rows), sum(lab == "TEST" for _, lab in rows)
+        assert abs(t - k / every) <= 1, (e, k, t)
+    # with no single-placement hold-back in play (target_test large) the bound holds at every hold, as captured
+    a, seen = run(rig, s, holdout_every=every, target_test=1000)
+    cap = {h: lab for h, _, lab in seen}
+    for e, rows in _per_entry(a, cap).items():
+        for i in range(1, len(rows) + 1):
+            t = sum(lab == "TEST" for _, lab in rows[:i])
+            assert abs(t - i / every) <= 1, (e, i, t)
+
+
+def test_entry_counts_match_the_labels(rig):
+    a, _ = run(rig, synth_session(rig.board, MIXED))
+    a.finish()
+    ec = a.entry_counts()
+    per = _per_entry(a)
+    assert set(ec) == set(per)
+    for e, rows in per.items():
+        c = ec[e]
+        assert c.holds == len(rows)
+        assert c.test == sum(lab == "TEST" for _, lab in rows) and c.fit == c.holds - c.test
+        assert c.placements == len({p for p, _ in rows})
+        assert c.test_placements == len({p for p, lab in rows if lab == "TEST"})
+
+
+def test_every_entry_fed_by_two_placements_tests_both(rig):
+    a, _ = run(rig, synth_session(rig.board, MIXED))
+    a.finish()
+    for e, rows in _per_entry(a).items():
+        if len({p for p, _ in rows}) >= 2:
+            assert len({p for p, lab in rows if lab == "TEST"}) >= 2, (e, rows)
+
+
+@pytest.mark.parametrize("m", range(1, 14))
+def test_a_second_placements_single_hold_is_tested(rig, m):
+    """m holds of one entry from placement P1, then one from P2: TEST holds come from both"""
+    a, seen = run(rig, synth_session(rig.board, [("P1", [("centre", 0.5, 2)] * m), ("P2", [("centre", 0.5, 2)])]))
+    assert seen[-1][2] == "TEST"
+    a.finish()
+    rows = _per_entry(a)[("centre", (0.4, 0.6))]
+    assert {p for p, lab in rows if lab == "TEST"} == {"P1", "P2"}
+    assert abs(sum(lab == "TEST" for _, lab in rows) - (m + 1) / 2) <= 1
+
+
+@pytest.mark.parametrize("target,cap", [(10, 5), (6, 3), (7, 4)])
+def test_one_placement_holds_back_at_most_half_the_target(rig, target, cap):
+    """while one placement feeds an entry, at most ceil(target_test / 2) of its holds are TEST as captured; a second
+    placement then takes TEST until the entry is back at its share"""
+    s = synth_session(rig.board, [("P1", [("centre", 0.5, 2)] * 14), ("P2", [("centre", 0.5, 2)] * 4)])
+    a, seen = run(rig, s, target_test=target)
+    p1 = [lab for _, p, lab in seen if p == "P1"]
+    assert p1.count("TEST") == cap
+    assert [lab for _, p, lab in seen if p == "P2"] == ["TEST"] * 4
+    a.finish()
+    rows = _per_entry(a)[("centre", (0.4, 0.6))]
+    assert abs(sum(lab == "TEST" for _, lab in rows) - 18 / 2) <= 1
+
+
+def test_entry_never_given_a_second_placement(rig):
+    """at the end of the session, an entry still fed by one placement gets the holds it held back released to TEST up
+    to its share (release_at_end=True, the default); without release it keeps ceil(target_test / 2)"""
+    s = synth_session(rig.board, [("P1", [("centre", 0.5, 2)] * 14)])
+    a, seen = run(rig, s)
+    assert [lab for *_, lab in seen].count("TEST") == 5
+    a.finish()
+    labs = [h.label for h in a.holds.values()]
+    assert labs.count("TEST") == 7
+    assert a.entry_counts()[("centre", (0.4, 0.6))].released == 2
+    a, _ = run(rig, s, release_at_end=False)
+    a.finish()
+    assert [h.label for h in a.holds.values()].count("TEST") == 5
+
+
+def test_observe_after_finish_is_refused(rig):
+    from calibtool import assign
+    s = synth_session(rig.board, [("P1", [("centre", 0.5, 2)] * 2)])
+    a = assigner(rig)
+    hs = list(assign.capture_holds(s))
+    a.observe(hs[0])
+    a.finish()
+    with pytest.raises(RuntimeError, match="finish"):
+        a.observe(hs[1])
+
+
+def test_deterministic_for_the_same_input(rig, tmp_path):
+    s = synth_session(rig.board, MIXED)
+    out = []
+    for i in range(2):
+        a, seen = run(rig, s)
+        sp = a.write_split(s, tmp_path / str(i))
+        out.append((seen, {h.hold: h.label for h in a.holds.values()},
+                    {k: np.load(f)[k].tolist() for f in (sp.fit_npz, sp.test_npz) for k in ("img_t0", "img_hold")}))
+    assert out[0][0] == out[1][0] and out[0][1] == out[1][1]
+    assert out[0][2] == out[1][2]

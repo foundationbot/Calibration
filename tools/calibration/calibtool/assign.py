@@ -14,10 +14,23 @@ The rule, per hold in capture order:
   1. a pair beyond max_fit_z, or with no distance (too few corners), is TEST, as in step 16; a hold whose pairs are
      all such is TEST and feeds no entry
   2. otherwise the hold joins its entry: k = holds of the entry so far (this one included), t = its TEST holds
-     before this one; TEST when t < k / holdout_every (so an entry's TEST count is ceil(k / holdout_every))
+     before this one, N = holdout_every
+     a. hold back: while fewer than min_placements placements have fed the entry and t >= ceil(target_test / 2),
+        FIT (the entry's TEST side waits for another placement: holds of one placement are correlated with its own
+        FIT holds)
+     b. share: TEST when t < k / N (the entry's TEST count is ceil(k / N): an odd entry gives TEST the extra hold)
+     c. new placement: TEST when the hold's placement has no TEST hold in the entry yet and t <= k / N (so a second
+        placement's first hold is TEST, one hold ahead of the share at most)
+     d. FIT otherwise
+  3. finish() (write_split calls it), the end of the session: an entry still short of its share because it held
+     holds back (2a) gets that many of its held-back holds released to TEST, spread evenly over them in capture
+     order (release_at_end=True; False keeps them FIT). Holds observe() returned FIT can thus end up TEST; the
+     final labels are self.holds[h].label, the capture-time ones observe()'s return values.
+So every entry ends with |TEST - holds / N| <= 1, and an entry fed by >= 2 placements tests at least two of them (for
+N = 2; for larger N when the second placement brings enough holds).
 """
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -59,7 +72,22 @@ class HoldInfo:
     v: float
     z: float                    # median rough distance of its near pairs (nan without one)
     entry: tuple                # (cell, (lo, hi)) or None (no near pair)
-    label: str                  # FIT | TEST
+    label: str                  # FIT | TEST: the final label (after finish())
+    captured: str = ""          # FIT | TEST: what observe() returned
+    held_back: bool = False     # FIT by rule 2a
+    released: bool = False      # held back, then released to TEST by finish()
+
+
+@dataclass
+class EntryCount:
+    holds: int = 0
+    fit: int = 0
+    test: int = 0
+    placements: int = 0         # placements that fed the entry
+    test_placements: int = 0    # placements with a TEST hold in it
+    held_back: int = 0          # holds rule 2a kept FIT at capture
+    released: int = 0           # of those, released to TEST by finish()
+    placement_names: list = field(default_factory=list)
 
 
 def entry_of(cell, z):
@@ -73,7 +101,7 @@ def entry_of(cell, z):
 
 class Assigner:
     def __init__(self, rig, pp_nominal, focal_nominal, max_fit_z=3.0, target_test=10, min_placements=2,
-                 holdout_every=2):
+                 holdout_every=2, release_at_end=True):
         self.rig = pipeline.load_rig(rig)
         self.pp = (float(pp_nominal[0]), float(pp_nominal[1]))
         self.focal = float(focal_nominal)
@@ -81,6 +109,9 @@ class Assigner:
         self.target_test = int(target_test)
         self.min_placements = int(min_placements)
         self.holdout_every = int(holdout_every)
+        self.release_at_end = bool(release_at_end)
+        self.cap = math.ceil(self.target_test / 2)
+        self.finished = False
         if self.holdout_every < 1:
             raise ValueError("holdout_every must be >= 1")
         self.holds = {}             # hold id -> HoldInfo, in observation order
@@ -111,20 +142,62 @@ class Assigner:
 
     def observe(self, hold) -> str:
         """FIT or TEST for one hold (CaptureHold), called once per hold in capture order"""
+        if self.finished:
+            raise RuntimeError("observe() after finish(): the session is closed")
         if hold.hold in self.holds:
             raise ValueError(f"hold {hold.hold} observed twice")
         z, near, u, v, zh, entry = self._measure(hold)
+        held = False
         if entry is None:
             label = TEST
         else:
             ids = self._entries.setdefault(entry, [])
-            k = len(ids) + 1
-            t = sum(self.holds[i].label == TEST for i in ids)
-            label = TEST if t < k / self.holdout_every else FIT
+            rows = [self.holds[i] for i in ids]
+            k, N = len(ids) + 1, self.holdout_every
+            t = sum(r.label == TEST for r in rows)
+            placements = {r.placement for r in rows} | {hold.placement}
+            tested = {r.placement for r in rows if r.label == TEST}
+            if len(placements) < self.min_placements and t >= self.cap:
+                label, held = FIT, True                                     # 2a
+            elif t < k / N:
+                label = TEST                                                # 2b
+            elif hold.placement not in tested and t <= k / N:
+                label = TEST                                                # 2c
+            else:
+                label = FIT                                                 # 2d
             ids.append(hold.hold)
         self.holds[hold.hold] = HoldInfo(hold.hold, hold.placement, int(hold.t0),
-                                         np.asarray(hold.data["img_t0"], np.int64), z, near, u, v, zh, entry, label)
+                                         np.asarray(hold.data["img_t0"], np.int64), z, near, u, v, zh, entry, label,
+                                         captured=label, held_back=held)
         return label
+
+    def finish(self):
+        """close the session: release held-back holds of entries short of their share (rule 3). Idempotent"""
+        if self.finished:
+            return
+        self.finished = True
+        if not self.release_at_end:
+            return
+        for ids in self._entries.values():
+            rows = [self.holds[i] for i in ids]
+            need = math.ceil(len(rows) / self.holdout_every) - sum(r.label == TEST for r in rows)
+            hb = [r for r in rows if r.held_back]
+            need = min(need, len(hb))
+            for i in range(need):
+                r = hb[int((i + 0.5) * len(hb) / need)]
+                r.label, r.released = TEST, True
+
+    def entry_counts(self) -> dict:
+        """{entry: EntryCount} with the current labels (final after finish())"""
+        out = {}
+        for e, ids in self._entries.items():
+            rows = [self.holds[i] for i in ids]
+            names = list(dict.fromkeys(r.placement for r in rows))
+            test = sum(r.label == TEST for r in rows)
+            out[e] = EntryCount(len(rows), len(rows) - test, test, len(names),
+                                len({r.placement for r in rows if r.label == TEST}),
+                                sum(r.held_back for r in rows), sum(r.released for r in rows), names)
+        return out
 
     # ------------------------------------------------------------ results
 
@@ -141,12 +214,14 @@ class Assigner:
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         lab = self.pair_labels()
-        zof = {int(t): float(z) for hi in self.holds.values() for t, z in zip(hi.pair_t0, hi.pair_z)}
         t0 = session.pairs["t0"]
         missing = [int(t) for t in t0 if int(t) not in lab]
         if missing:
             raise ValueError(f"{len(missing)} pairs of session {session.name!r} were not observed (first left stamp "
                              f"{missing[0]}): feed every hold before writing the split")
+        self.finish()
+        lab = self.pair_labels()
+        zof = {int(t): float(z) for hi in self.holds.values() for t, z in zip(hi.pair_t0, hi.pair_z)}
         is_test = np.array([lab[int(t)] == TEST for t in t0])
         zz = np.array([zof[int(t)] for t in t0])
         files = []
