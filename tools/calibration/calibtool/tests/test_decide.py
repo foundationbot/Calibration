@@ -157,10 +157,19 @@ def test_step66_fail_keeps_live_and_no_result_is_not_enough_data():
     assert v.decision == "NOT_ENOUGH_DATA"
 
 
-def test_live_not_scorable_deploys_on_step66_alone():
-    v = decide.verdict(synthetic(0.3, 0.3), None, step66())
+def test_live_not_scorable_needs_the_explicit_gate():
+    """no live scores: deploying without comparing with the robot's current calibration contradicts "deploy only if
+    shown better", so it takes Gates.allow_deploy_without_live=True; by default NOT_ENOUGH_DATA, the error in the
+    reasons"""
+    v = decide.verdict(synthetic(0.3, 0.3), None, step66(), live_error="NotScorable: distortion_type ['omni']")
+    assert v.decision == "NOT_ENOUGH_DATA" and v.paired is None
+    assert any("omni" in r and "allow_deploy_without_live" in r for r in v.reasons), v.reasons
+    g = decide.Gates(allow_deploy_without_live=True)
+    v = decide.verdict(synthetic(0.3, 0.3), None, step66(), g, live_error="NotScorable: distortion_type ['omni']")
     assert v.decision == "LIVE_NOT_SCORABLE_DEPLOY" and v.paired is None
-    assert decide.verdict(synthetic(), None, step66(verdict="FAIL")).decision == "KEEP_LIVE"
+    assert any("omni" in r for r in v.reasons), v.reasons
+    assert decide.verdict(synthetic(), None, step66(verdict="FAIL"), g).decision == "KEEP_LIVE"
+    assert decide.Gates().allow_deploy_without_live is False
 
 
 def test_thresholds_are_named_parameters():

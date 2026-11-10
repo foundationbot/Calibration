@@ -36,6 +36,14 @@ RADTAN_N = 4                    # k1, k2, p1, p2: what OKVIS's radialtangential 
 NEWTON_STEPS = 30
 
 
+
+
+class NotScorable(ValueError):
+    """the config cannot be scored by this package: a distortion type it does not know (or mixed ones), camera blocks
+    it cannot read, cameras of different sizes, a size it cannot be brought to. The one error a replay reads as "live
+    not scorable" (with pipeline.PipelineError); any other error is a bug and stops the run"""
+
+
 # ---------------------------------------------------------------- the RADTAN lens
 
 
@@ -172,25 +180,30 @@ def _fs_read(text):
 
 
 def load(okvis_yaml, at_size=None) -> LiveCalib:
-    """the stereo calibration of an OKVIS config (cameras 0 and 1). at_size=(W, H): a config written for another size is
-    unscaled to it first (scaling.unscale_config: focal / s, principal point (c + 0.5) / s - 0.5), resize_factor left
-    as it is (vio=None): a config without one (VIO at the image size, as scale_config writes 640x400) loads too"""
+    """the stereo calibration of an OKVIS config (cameras 0 and 1); NotScorable for a config the package cannot score
+    (unknown distortion type, unreadable camera blocks, a size it cannot be brought to). at_size=(W, H): a config
+    written for another size is unscaled to it first (scaling.unscale_config: focal / s, principal point
+    (c + 0.5) / s - 0.5), resize_factor left as it is (vio=None): a config without one (VIO at the image size, as
+    scale_config writes 640x400) loads too"""
     import okviscfg
     path = Path(okvis_yaml)
     text = path.read_text()
     try:
         types, sizes = _fs_read(text)
     except ValueError as e:
-        raise ValueError(f"{path}: {e}") from None
+        raise NotScorable(f"{path}: {e}") from None
     if len(set(types)) != 1 or types[0] not in DISTORTION_MODELS:
-        raise ValueError(f"{path}: distortion_type {sorted(set(types))}; known: {sorted(DISTORTION_MODELS)}")
+        raise NotScorable(f"{path}: distortion_type {sorted(set(types))}; known: {sorted(DISTORTION_MODELS)}")
     if len(sizes) < 2 or sizes[0] != sizes[1]:
-        raise ValueError(f"{path}: need two cameras of one image size, got {sizes}")
+        raise NotScorable(f"{path}: need two cameras of one image size, got {sizes}")
     scaled_from = None
     if at_size is not None and tuple(at_size) != sizes[0]:
         from calibtool import scaling
-        s = scaling.factor(sizes[0], at_size)
-        text = scaling.unscale_config(text, s, vio=None)    # the lens only: scoring never reads resize_factor
+        try:
+            s = scaling.factor(sizes[0], at_size)
+            text = scaling.unscale_config(text, s, vio=None)    # the lens only: scoring never reads resize_factor
+        except ValueError as e:
+            raise NotScorable(f"{path}: not scalable to {tuple(at_size)}: {e}") from None
         scaled_from = sizes[0]
     with tempfile.TemporaryDirectory() as td:
         p = Path(td) / path.name

@@ -242,10 +242,90 @@ def test_decision_section_both_gates_and_paired_table():
 
 def test_decision_without_live_scores():
     rp = replay()
-    dec = rp.decision(TD.synthetic(), None, TD.step66(), decide.Gates())
+    dec = rp.decision(TD.synthetic(), None, TD.step66(), decide.Gates(), live_error="live config not loaded: X")
     assert dec["paired"] is None
+    assert {v["decision"] for v in dec["verdicts"].values()} == {"NOT_ENOUGH_DATA"}
+    assert all(any("not loaded: X" in r for r in v["reasons"]) for v in dec["verdicts"].values())
+    dec = rp.decision(TD.synthetic(), None, TD.step66(), decide.Gates(allow_deploy_without_live=True))
     assert {v["decision"] for v in dec["verdicts"].values()} == {"LIVE_NOT_SCORABLE_DEPLOY"}
     assert "LIVE_NOT_SCORABLE_DEPLOY" in "\n".join(rp.decision_md(dec))
+
+
+def _fake_steps(monkeypatch, tmp_path, live_score_error=None):
+    """evaluate() without the slow steps: step 45 and 66 stand-ins, decide.score of synthetic scores (the live config's
+    JSON scores as TD.synthetic(), the new fit as 0.3 x it; live_score_error: raised when the live config is scored)
+    -> evaluate's arguments after the session"""
+    from calibtool import livecfg
+    fit = SimpleNamespace(converged=True, json_path=tmp_path / "fit.json", verdict="converged",
+                          as_dict=lambda: {"verdict": "converged"})
+    v66 = TD.step66()
+    v66.as_dict = lambda: {"verdict": "PASS"}
+    monkeypatch.setattr(pipeline, "fit45", lambda *a, **k: fit)
+    monkeypatch.setattr(pipeline, "validate66", lambda *a, **k: v66)
+    monkeypatch.setattr(livecfg, "validate66", lambda *a, **k: v66)
+    monkeypatch.setattr(decide, "placements", lambda *a, **k: None)
+
+    def score(calib_json, *a, **k):
+        if Path(calib_json).name.startswith("live"):
+            if live_score_error is not None:
+                raise live_score_error
+            return TD.synthetic()
+        return TD.synthetic(0.3, 0.3)
+
+    monkeypatch.setattr(decide, "score", score)
+    (tmp_path / "out").mkdir(exist_ok=True)
+    split = SimpleNamespace(fit_npz=tmp_path / "fit.npz", test_npz=tmp_path / "test.npz")
+    return RIG_PATH, split
+
+
+def _live(tmp_path, dtype="equidistant"):
+    p = tmp_path / f"live-{dtype}.yaml"
+    p.write_text(TL.okvis_yaml(dtype, (0.01, -0.02, 0.003, -0.001)))
+    return p
+
+
+def test_evaluate_scores_a_readable_live_config(monkeypatch, tmp_path):
+    rig_path, split = _fake_steps(monkeypatch, tmp_path)
+    ev = replay().evaluate(None, rig_path, split, _live(tmp_path), tmp_path / "out", decide.Gates(), jobs=1)
+    assert ev["live"]["scorable"] and ev["live"]["error"] is None
+    assert ev["verdicts"]["require_all_edges=False"]["decision"] == "DEPLOY"
+
+
+def test_evaluate_unsupported_live_config_is_not_enough_data_with_the_error(monkeypatch, tmp_path):
+    """a live config the package cannot score (a distortion type it does not know): NOT_ENOUGH_DATA by default, the
+    error text in every verdict's reasons; LIVE_NOT_SCORABLE_DEPLOY only with allow_deploy_without_live"""
+    rig_path, split = _fake_steps(monkeypatch, tmp_path)
+    live = _live(tmp_path, "omni")
+    ev = replay().evaluate(None, rig_path, split, live, tmp_path / "out", decide.Gates(), jobs=1)
+    assert not ev["live"]["scorable"] and "omni" in ev["live"]["error"]
+    for v in ev["verdicts"].values():
+        assert v["decision"] == "NOT_ENOUGH_DATA"
+        assert any("omni" in r for r in v["reasons"]), v["reasons"]
+    ev = replay().evaluate(None, rig_path, split, live, tmp_path / "out", decide.Gates(allow_deploy_without_live=True),
+                           jobs=1)
+    assert ev["verdicts"]["require_all_edges=False"]["decision"] == "LIVE_NOT_SCORABLE_DEPLOY"
+    assert any("omni" in r for r in ev["verdicts"]["require_all_edges=False"]["reasons"])
+
+
+def test_evaluate_a_step_error_while_scoring_live_is_not_scorable(monkeypatch, tmp_path):
+    rig_path, split = _fake_steps(monkeypatch, tmp_path, live_score_error=pipeline.PipelineError("no JSON"))
+    ev = replay().evaluate(None, rig_path, split, _live(tmp_path), tmp_path / "out", decide.Gates(), jobs=1)
+    assert not ev["live"]["scorable"] and "no JSON" in ev["live"]["error"]
+    assert all(any("no JSON" in r for r in v["reasons"]) for v in ev["verdicts"].values())
+
+
+@pytest.mark.parametrize("where", ["load", "score"])
+def test_evaluate_an_unexpected_error_stops_the_run(monkeypatch, tmp_path, where):
+    """a bug (KeyError, ImportError, ...) while loading or scoring the live config is not "live not scorable": it
+    stops the run"""
+    from calibtool import livecfg
+    rig_path, split = _fake_steps(monkeypatch, tmp_path, live_score_error=KeyError("bug") if where == "score" else None)
+    if where == "load":
+        def broken(*a, **k):
+            raise ImportError("bug")
+        monkeypatch.setattr(livecfg, "load", broken)
+    with pytest.raises((KeyError, ImportError), match="bug"):
+        replay().evaluate(None, rig_path, split, _live(tmp_path), tmp_path / "out", decide.Gates(), jobs=1)
 
 
 # ---------------------------------------------------------------- stored sessions, collection only (fast)

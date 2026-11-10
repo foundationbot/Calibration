@@ -19,7 +19,9 @@ Verdict (verdict()):
                             counts for both its edges) without a judged entry; or too few placements to compare
   KEEP_LIVE                 step 66 FAILs the new fit; or the paired interval does not show new better on depth and
                             on rows; or a judged band where the interval shows new worse
-  LIVE_NOT_SCORABLE_DEPLOY  no live scores (the live config could not be scored): step 66 PASS alone decides
+                            ; or no live scores (the live config could not be scored, the error in the reasons)
+                            without Gates.allow_deploy_without_live
+  LIVE_NOT_SCORABLE_DEPLOY  no live scores and Gates.allow_deploy_without_live=True: step 66 PASS alone decides
   DEPLOY                    otherwise
 Every threshold is a field of Gates; the defaults are PLACEHOLDERS, to be fixed from the stored sessions (M1 C3)."""
 from dataclasses import asdict, dataclass, field
@@ -46,6 +48,9 @@ class Gates:
     seed: int = 20261109                # bootstrap seed (fixed: the same data gives the same intervals)
     level_pct: float = 95.0             # interval
     min_valid_frac: float = 0.5         # a band's interval needs data in this share of the resamples
+    # without live scores, deploy on step 66 alone (LIVE_NOT_SCORABLE_DEPLOY) only when this is set: "deploy only if
+    # shown better than live" cannot be checked then, so it takes an explicit choice (else NOT_ENOUGH_DATA)
+    allow_deploy_without_live: bool = False
 
 
 # ---------------------------------------------------------------- scores of one calibration
@@ -283,9 +288,10 @@ def _fmt(s: Stat, unit):
     return f"{s.new:.3f} vs live {s.live:.3f} {unit}, difference {s.diff:+.3f} (95 % {ci})"
 
 
-def verdict(new: Scores, live, step66_new, gates: Gates = Gates()) -> Verdict:
+def verdict(new: Scores, live, step66_new, gates: Gates = Gates(), live_error=None) -> Verdict:
     """the decision (DECISIONS) with its reasons. new / live: Scores on the same TEST file (live None: the live
-    config could not be scored); step66_new: step 66 of the new fit (pipeline.ValidateResult: .verdict, .entries)"""
+    config could not be scored, live_error saying why); step66_new: step 66 of the new fit (pipeline.ValidateResult:
+    .verdict, .entries)"""
     v66 = getattr(step66_new, "verdict", None)
     judged = sorted(getattr(step66_new, "entries", {}) or {})
     edges = edges_judged(judged)
@@ -296,6 +302,7 @@ def verdict(new: Scores, live, step66_new, gates: Gates = Gates()) -> Verdict:
         return Verdict("NOT_ENOUGH_DATA", [f"step 66 gave no result on the new fit: {text or v66}"], **base)
     if v66 == "FAIL":
         return Verdict("KEEP_LIVE", [f"the new fit fails step 66: {text}"], **base)
+    no_live = f"the live config could not be scored ({live_error or 'no reason given'})"
     short = []
     if len(judged) < gates.min_judged:
         short.append(f"{len(judged)} judged entries (step 66 validated), {gates.min_judged} needed")
@@ -303,11 +310,15 @@ def verdict(new: Scores, live, step66_new, gates: Gates = Gates()) -> Verdict:
         short.append("no judged entry on the image's " + ", ".join(missing) + " edge" + ("s" if len(missing) > 1
                                                                                          else ""))
     if short:
-        return Verdict("NOT_ENOUGH_DATA", short, **base)
+        return Verdict("NOT_ENOUGH_DATA", short + ([no_live] if live is None else []), **base)
     if live is None:
+        if not gates.allow_deploy_without_live:
+            return Verdict("NOT_ENOUGH_DATA",
+                           [f"{no_live}: the new fit is not compared with the robot's current calibration; deploying "
+                            f"on its step-66 PASS alone needs allow_deploy_without_live=True"], **base)
         return Verdict("LIVE_NOT_SCORABLE_DEPLOY",
-                       [f"the live config could not be scored: deploy rests on the new fit's step-66 PASS alone "
-                        f"({len(judged)} judged entries)"], **base)
+                       [f"{no_live}: deploy rests on the new fit's step-66 PASS alone ({len(judged)} judged entries; "
+                        f"allow_deploy_without_live=True)"], **base)
     pr = paired(new, live, gates)
     depth, rows = pr.stat("depth"), pr.stat("rows")
     if not (depth.judged and rows.judged):

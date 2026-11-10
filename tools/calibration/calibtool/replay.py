@@ -42,6 +42,9 @@ ASSIGNMENTS = ("capture", "split16")
 REGION_TALLY = "all"            # "all" | "fit": which corners the region deficits count (see the module text)
 MD_SENTENCES = 6                # gap sentences per placement in report.md (all of them are in report.json)
 VERDICT_KEYS = {False: "require_all_edges=False", True: "require_all_edges=True"}
+# the errors that make the live config "not scorable" (the verdict says so, with the error); any other error while
+# loading, scoring or validating it is a bug and stops the run
+NOT_SCORABLE = (livecfg.NotScorable, pipeline.PipelineError)
 
 
 # ---------------------------------------------------------------- labelers: the FIT/TEST assignment
@@ -368,14 +371,16 @@ def _js(o):
 # ---------------------------------------------------------------- the decision
 
 
-def decision(new, live, step66_new, gates: decide.Gates) -> dict:
+def decision(new, live, step66_new, gates: decide.Gates, live_error=None) -> dict:
     """decide.verdict with require_all_edges False and True, the paired statistics (new - live) and each side's own
-    statistics. new / live: decide.Scores (live None: not scorable); step66_new: step 66 of the new fit"""
+    statistics. new / live: decide.Scores (live None: not scorable, live_error saying why); step66_new: step 66 of the
+    new fit"""
     out = {"verdicts": {}, "paired": None, "stats": {"new": decide.stats(new) if new is not None else None,
                                                      "live": decide.stats(live) if live is not None else None}}
     for flag in (False, True):
         out["verdicts"][VERDICT_KEYS[flag]] = decide.verdict(new, live, step66_new,
-                                                             replace(gates, require_all_edges=flag)).as_dict()
+                                                             replace(gates, require_all_edges=flag),
+                                                             live_error=live_error).as_dict()
     if new is not None and live is not None:
         out["paired"] = decide.paired(new, live, gates).as_dict()
     return _js(out)
@@ -454,7 +459,7 @@ def evaluate(session, rig_path, split: pipeline.Split, live_config, out_dir, gat
     live, live_err = None, None
     try:
         live = livecfg.load(live_config, at_size=rig.resolution)
-    except Exception as e:      # noqa: BLE001  (an unreadable live config is "live not scorable", with the reason)
+    except NOT_SCORABLE as e:   # a config the package cannot score; anything else is a bug and stops the run
         live_err = f"live config not loaded: {type(e).__name__}: {e}"
     res = {"fit": fit.as_dict(), "validate_new": None, "validate_live": None,
            "live": {"config": str(live_config), "model": live.model if live else None,
@@ -479,19 +484,19 @@ def evaluate(session, rig_path, split: pipeline.Split, live_config, out_dir, gat
                 try:
                     js = live.write_json(out_dir / f"live-{live.model.lower()}.json")
                     live_sc = decide.score(js, split.test_npz, rig_path, place)
-                except Exception as e:      # noqa: BLE001
+                except NOT_SCORABLE as e:
                     live_err = f"live config not scored: {type(e).__name__}: {e}"
             v_new = f_new.result()
             v_live = None
             if f_live is not None:
                 try:
                     v_live = f_live.result()
-                except Exception as e:      # noqa: BLE001
+                except NOT_SCORABLE as e:
                     live_err = live_err or f"step 66 on the live config: {type(e).__name__}: {e}"
         res["validate_new"] = v_new.as_dict()
         res["validate_live"] = v_live.as_dict() if v_live else None
         res["live"].update(scorable=live_sc is not None, error=live_err)
-        dec = decision(new_sc, live_sc, v_new, gates)
+        dec = decision(new_sc, live_sc, v_new, gates, live_error=live_err)
     tm["validate_score_s"] = time.time() - t
     res.update(dec)
     res["timings"] = tm
