@@ -1164,7 +1164,8 @@ def _full_flow(prof, m, d, dirs, cap, pools, rig, size, res, probes, dry_run, se
                   "stand": place.Stand(prof.stand_raise_m, prof.stand_lower_m, prof.stand_auto_skip, prof.stand_steps)},
         make_collection=lambda: replay.Collection(rig, replay.capture_labeler(rig),
                                                   targets=coverage.Targets.for_per_hold(protocol.PER_HOLD)),
-        fit_decide=flowrobot.pipeline_fit_decide(prof.rig_path, lambda: live_path, name, live_fit=live_fit),
+        # jobs 3: the new and the live validation in parallel (phantom11: FIT 40 s with one at a time)
+        fit_decide=flowrobot.pipeline_fit_decide(prof.rig_path, lambda: live_path, name, live_fit=live_fit, jobs=3),
         live_fit=live_fit, dry_run=dry_run,
         imu=nk.DmaImu(dma_ipc, gravity.HEAD_IMU),
         sweep_detect=lambda g: imusweep.board_normal(board.detect(g), board, live.model, live.intr[0]),

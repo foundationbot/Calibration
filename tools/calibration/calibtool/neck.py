@@ -53,6 +53,12 @@ STILL_TIMEOUT_S = 1.0
 # 10 Nov, phantom11: its neck lags the tool's ramp; a pose the tool reports short is polled this long for the neck to
 # arrive within MAX_ERR_DEG before it counts as missed
 ARRIVE_TIMEOUT_S = 4.0
+# 10 Nov (phantom11 measured 2.53 s per grid pose: 1.0 s ramp + 0.8 s fixed hold + capture): the ramp scales with the
+# step (grid neighbours are 8-11 deg apart) and the hold is short; the capture still waits until the measured neck is
+# within MAX_ERR_DEG (ARRIVE) and still (STILL_DEG between reads), so nothing is captured while the head moves
+SPEED_DEG_S = 30.0
+RAMP_MIN_S = 0.35
+FAST_SETTLE_S = 0.2
 N_JOINTS = 29
 TOOL_TIMEOUT_S = 30.0
 RESULT = re.compile(r"RESULT targets joint=(\d+) target_deg=\S+ ss_err=(\S+)")
@@ -172,10 +178,11 @@ class Neck:
     joints() (ShmRobot); tool_info: motors.motor_tool()'s dict (md5, has_targets)"""
 
     def __init__(self, tool, run, robot, tool_info, clock=time.monotonic, sleep=time.sleep, kp=None, ramp_s=RAMP_S,
-                 settle_s=SETTLE_S, max_err_deg=MAX_ERR_DEG):
+                 settle_s=SETTLE_S, max_err_deg=MAX_ERR_DEG, fast=True):
         self.tool, self.run, self.robot, self.tool_info = str(tool), run, robot, dict(tool_info or {})
         self.clock, self.sleep, self.kp = clock, sleep, kp
         self.ramp_s, self.settle_s, self.max_err = float(ramp_s), float(settle_s), float(max_err_deg)
+        self.fast = bool(fast)
         if kp is not None:
             motion_argv(self.tool, 0, 0, "", 1, 1, kp=kp)     # validates kp now
         self.armed = False
@@ -232,6 +239,18 @@ class Neck:
             prev = cur
         return prev, False
 
+    def timing(self, p, y):
+        """(ramp, hold) for a move to (p, y): fast = the ramp at SPEED_DEG_S over the larger joint step from where the
+        neck is (RAMP_MIN_S .. ramp_s) and a FAST_SETTLE_S hold; else the fixed ramp_s / settle_s (step 08's)"""
+        if not self.fast:
+            return self.ramp_s, self.settle_s
+        try:
+            mp, my = self.neck_deg()
+            step = max(abs(float(p) - float(mp)), abs(float(y) - float(my)))
+        except Exception:  # noqa: BLE001  (no reading: the full ramp)
+            return self.ramp_s, FAST_SETTLE_S
+        return round(min(self.ramp_s, max(RAMP_MIN_S, step / SPEED_DEG_S)), 2), FAST_SETTLE_S
+
     def _arrive(self, p, y):
         """(seconds it took, None) once the measured neck is within max_err of (p, y), or (None, its last offsets)
         after ARRIVE_TIMEOUT_S"""
@@ -250,10 +269,11 @@ class Neck:
             raise NeckRefused("the neck is not armed (Neck.arm(): refusals and pins first)")
         p, y, clamped = clamp(pitch, yaw)
         self._foreign_check()
-        argv = motion_argv(self.tool, p, y, self.pins, self.ramp_s, self.settle_s, kp=self.kp)
+        ramp, settle = self.timing(p, y)
+        argv = motion_argv(self.tool, p, y, self.pins, ramp, settle, kp=self.kp)
         t_start = self.clock()
         self.commands.append(argv)
-        rc, out = self.run(argv, timeout=self.ramp_s + self.settle_s + TOOL_TIMEOUT_S)
+        rc, out = self.run(argv, timeout=ramp + settle + TOOL_TIMEOUT_S)
         t_end = self.clock()
         errs = neck_errors(out, self.neck_idx)
         self.log.append({"argv": argv, "t_start": t_start, "t_end": t_end, "rc": rc, "errors": errs})

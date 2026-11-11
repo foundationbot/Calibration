@@ -675,3 +675,45 @@ def test_the_quality_block_is_at_most_8_lines():
     L = r.splitlines()
     k = next(i for i, x in enumerate(L) if x.startswith("image sections"))
     assert sum(1 for x in L[k:k + 9] if x and not x.startswith(("preflight", "-", "board", "cameras"))) <= 8
+
+
+# ---------------------------------------------------------------- 10 Nov: a key cuts the sentence being said
+
+
+def test_a_key_interrupts_the_speech_and_drops_what_waits():
+    import threading as th
+    started, release, cut = th.Event(), th.Event(), []
+
+    class Slow:
+        def say(self, text):
+            started.set()
+            release.wait(2.0)
+
+        def interrupt(self):
+            cut.append(1)
+            release.set()
+    bg = tui.Background(Slow())
+    bg.say_prompt("Motor check. If the robot hangs on the gantry and nobody is at its head, press Y.", "motors")
+    bg.say_prompt("A second long sentence.", "intro")
+    assert started.wait(2.0)
+    sent = []
+    t = tui.Tui(sent.append, bg, out=lambda s: None)
+    t.key("y")
+    assert cut == [1] and len(bg._q) == 0
+    assert '"key": "Y"' in sent[-1]
+
+
+def test_piper_interrupt_stops_the_playing_process(tmp_path):
+    sp = tui.PiperSay(binary=tmp_path / "piper", model=tmp_path / "m.onnx")
+
+    class P:
+        terminated = False
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            P.terminated = True
+    sp._proc = P()
+    sp.interrupt()
+    assert P.terminated and sp._cut

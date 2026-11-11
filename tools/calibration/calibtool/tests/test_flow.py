@@ -985,3 +985,22 @@ def test_u_without_a_board_in_view_says_so(tmp_path):
         update=lambda t, obs, miss=None: None, done=False, result=None, interrupted=lambda: None, last_obs=None)
     s.run()
     assert fl.USE_NOT_SEEN_TEXT in [x.text for x in s.says]
+
+
+def test_the_operator_is_told_when_the_cameras_restart(tmp_path):
+    """10 Nov: 'tool should tell me when it restarts camera producer' (the flow's producer is 960x600 -> 1280x800)"""
+    s = Session(tmp_path, keys=FULL_KEYS).run()
+    texts = [x.text for x in s.says]
+    i = texts.index("Restarting the cameras. A few seconds.")
+    assert "Cameras back." in texts[i:]
+
+
+def test_a_robot_already_at_1280_keeps_its_frame_rate_and_the_producer_is_not_restarted(tmp_path):
+    """10 Nov: phantom10/11 run 1280x800 @ 25; not every camera does 25 at 1280, so only a robot already there keeps it"""
+    s = Session(tmp_path, keys=FULL_KEYS)
+    s.flow.spec = fl.Spec.from_yaml(TD.PRODUCER_YAML)          # 1280x800 @ 25 before the session
+    s.flow.producer.spec = s.flow.spec
+    s.flow.producer.size = tuple(s.flow.spec.size())
+    s.run()
+    setup = [x for x in s.lines("producer") if '"--fps"' in x or "--fps" in x]
+    assert not any('"15"' in x for x in s.lines()), [x[:120] for x in setup]

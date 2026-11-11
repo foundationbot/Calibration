@@ -483,6 +483,12 @@ class SpdSay:
         self.run([self.path, "-w", "-x", "-l", self.lang, "-t", self.voice, "-r", str(self.rate),
                   ssml_with_pauses(text, self.word_ms, self.sentence_ms)], timeout=90)
 
+    def interrupt(self):
+        try:
+            self.run([self.path, "-S"], timeout=5)      # speech-dispatcher: stop what is being said
+        except Exception:  # noqa: BLE001
+            pass
+
 
 PIPER_DIR = Path.home() / ".local" / "share" / "calib-voice"
 
@@ -504,10 +510,34 @@ class PiperSay:
         return self.binary.is_file() and self.model.is_file()
 
     def say(self, text):
+        self._cut = False
         self.run([str(self.binary), "--model", str(self.model), "--length_scale", str(self.length_scale),
                   "--sentence_silence", str(self.sentence_silence), "--output_file", self.wav],
                  input=(text.strip() + "\n").encode(), timeout=60, capture_output=True)
-        self.run([self.player, self.wav], timeout=90)
+        if self._cut:
+            return                                      # interrupted while synthesising
+        if self.run is subprocess.run:
+            # played as a process interrupt() can stop (10 Nov: "it does not need to finish the sentence for M and Y
+            # if the next thing is pressed")
+            self._proc = subprocess.Popen([self.player, self.wav], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                self._proc.wait(timeout=90)
+            except subprocess.TimeoutExpired:
+                self._proc.kill()
+            finally:
+                self._proc = None
+        else:
+            self.run([self.player, self.wav], timeout=90)
+
+    def interrupt(self):
+        """stop the sentence being played now"""
+        self._cut = True
+        p = getattr(self, "_proc", None)
+        if p is not None and p.poll() is None:
+            try:
+                p.terminate()
+            except OSError:
+                pass
 
 
 def make_speaker(voice="espeak", piper_dir=None):
@@ -583,6 +613,19 @@ class Background:
 
     def say(self, text):
         self.say_prompt(text, None)
+
+    def interrupt(self):
+        """the operator pressed a key: what is being said stops and what waits is dropped (the answer to the key
+        comes next)"""
+        with self._cv:
+            self.dropped += len(self._q)
+            self._q.clear()
+        f = getattr(self.speaker, "interrupt", None)
+        if f is not None:
+            try:
+                f()
+            except Exception:  # noqa: BLE001
+                pass
 
 
 def _trial_line(tr) -> str:
@@ -777,6 +820,9 @@ class Tui:
 
     def key(self, k):
         k = str(k).upper()
+        stop = getattr(self.speaker, "interrupt", None)
+        if stop is not None:
+            stop()                      # 10 Nov: a key cuts the sentence being said; its answer comes next
         with self._lock:
             self._pressed = {"key": k, "at": self.clock(), "before": (self.state or {}).get("last_key"),
                              "answer": None, "answer_at": None, "unsent": not self.connected}

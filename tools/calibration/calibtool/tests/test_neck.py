@@ -76,13 +76,13 @@ class FakeTool:
         return self.rc, "\n".join(lines)
 
 
-def make(tool_info=None, **kw):
+def make(tool_info=None, fast=True, **kw):
     c = Clock()
     r = FakeRobot(c)
     t = FakeTool(r, c, **kw)
     info = tool_info if tool_info is not None else {"path": "/k/dma_motor_motion", "md5": "208231a2",
                                                      "has_targets": True, "error": None}
-    n = neck.Neck("/k/dma_motor_motion", t, r, info, clock=c, sleep=c.sleep)
+    n = neck.Neck("/k/dma_motor_motion", t, r, info, clock=c, sleep=c.sleep, fast=fast)
     return n, r, t, c
 
 
@@ -211,7 +211,7 @@ def test_arm_pins_start_angles():
 
 
 def test_goto_argv_and_posedone():
-    n, r, t, c = make()
+    n, r, t, c = make(fast=False)                       # step 08's fixed timing
     n.arm()
     d = n.goto(30, -11)
     assert d.command == (26.0, -11.0) and d.clamped
@@ -425,3 +425,19 @@ def test_dma_imu_against_fake_dma_ipc():
     imu = neck.DmaImu(D, slot=2, sleep=slept.append)
     a = imu.accel(2.0)
     assert a.shape == (5, 3) and slept == [2.0] and a[4, 0] == pytest.approx(0.4)
+
+
+
+def test_fast_timing_scales_the_ramp_with_the_step_and_holds_briefly():
+    """10 Nov: 2.53 s per grid pose on phantom11, 1.8 s of it the fixed 1.0 s ramp + 0.8 s hold"""
+    n, r, t, c = make()
+    n.arm()
+    n.goto(8, 11)                                        # from home: 11 deg -> 0.37 s
+    a = n.commands[-1]
+    assert a[a.index("--ramp") + 1] == "0.37" and a[a.index("--hold") + 1] == str(neck.FAST_SETTLE_S)
+    n.goto(8, 34)                                        # the neck at ~8.5/11 now: 23 deg -> 0.77 s
+    a = n.commands[-1]
+    assert 0.7 <= float(a[a.index("--ramp") + 1]) <= 0.8
+    n.goto(8, 35)                                        # a tiny step still gets RAMP_MIN_S
+    a = n.commands[-1]
+    assert float(a[a.index("--ramp") + 1]) == neck.RAMP_MIN_S

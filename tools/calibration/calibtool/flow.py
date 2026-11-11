@@ -280,7 +280,7 @@ class FullFlow:
         self.spec = Spec.from_yaml(robot.producer_yaml)
         self.producer = sc.ProducerCtl(robot.kube, self.spec, robot.lease, robot.session,
                                        Path(dirs.root) / "producer.saved.yaml", clock=clock, sleep=sleep)
-        self.producer.on_change = lambda: self.m.state.__setitem__("producer_own_t", self.clock())
+        self.producer.on_change = self._producer_change
         self.snap = None
         self.okvis = None
         self.neck = None
@@ -600,6 +600,21 @@ class FullFlow:
         self._sweep = None
         self._say("grid", GRID_DONE_TEXT)
 
+    def _producer_change(self):
+        """ProducerCtl calls this before and after each own camera producer restart: health takes the next minute as
+        the tool's own (producer_own_t), and the operator is told (10 Nov: "tool should tell me when it restarts the
+        camera producer")"""
+        self.m.state["producer_own_t"] = self.clock()
+        if not getattr(self, "_producer_restarting", False):
+            self._producer_restarting = True
+            self._upd(busy={"what": "restarting the cameras (the camera producer): a few seconds; the camera may drop "
+                                    "off USB and come back", "since": self.clock()})
+            self._say("cameras", "Restarting the cameras. A few seconds.")
+        else:
+            self._producer_restarting = False
+            self._upd(busy=None)
+            self._say("cameras", "Cameras back.")
+
     def _quality(self):
         """the per-section data status for the operator's screen (state["quality"]); never stops the session"""
         try:
@@ -865,7 +880,13 @@ class FullFlow:
         self._try(self.okvis.stop, "stopping OKVIS")
         self._persist_ctl()
         self._event("okvis_stopped", how=self.okvis.kind, node=self.okvis.node)
-        self._try(lambda: self.producer.to_size(*self.robot.collect_size), "the producer to the collection size")
+        w, h, fps = self.robot.collect_size
+        sw, sh, sfps = self.spec.size()
+        if (int(sw), int(sh)) == (int(w), int(h)) and sfps:
+            # 10 Nov: the robot already runs the collection size; keep its frame rate (proven on that hardware: 25 on
+            # phantom10/11; not every camera does 25 at 1280) and the producer is not restarted at all
+            fps = int(sfps)
+        self._try(lambda: self.producer.to_size(w, h, fps), "the producer to the collection size")
         self._persist_ctl()
         self._event("producer_size", size=list(self.producer.size))
 
