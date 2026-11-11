@@ -439,6 +439,8 @@ def _full_lines(s, width=100) -> list:
             L.append(f"deploy: {dep.get('drift') or dep.get('refused')}"[:width * 2])
         else:
             L.append(f"deploy: {dep.get('detail', '')}; rollback script {dep.get('rollback_script')}"[:width * 2])
+            if dep.get("handeye"):
+                L.append(str(dep["handeye"])[:width * 2])
     pc_ = s.get("postcheck")
     if pc_:
         dec = pc_.get("decision") or {}

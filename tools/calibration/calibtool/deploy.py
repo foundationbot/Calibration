@@ -16,6 +16,7 @@ The transaction (Deployer.deploy), steps in this order, each logged in DeployRes
                    snapshot into the session's deploy folder
   rollback_script  <deploy>/rollback.sh written BEFORE the first change (rollback_script(): robot.env as saved, the
                    producer as saved through the no-overlap cycle, OKVIS restarted by the detected path)
+  files            DeployPlan.extra_files (the hand-eye deploy's URDF), each a new file, before the config naming it
   config           the new config installed in /etc/phantomos/okvis (= /etc/okvis in the pod)
   robot_env        OKVIS_CALIBRATION pointed at it; every other line kept as it was
   producer         producer_apply(size) (the lead wires producer.resize / restore; dry run: the cycle's commands)
@@ -23,7 +24,10 @@ The transaction (Deployer.deploy), steps in this order, each logged in DeployRes
                    or the older robots' `okvis.sh restart`
   verify           robot.env and the config read back; the OKVIS log names the new file's sha256 prefix (the
                    entrypoint's `(<sha12>)`) and, for kb4t, the reader's `KB4T pinhole camera`; a crash loop is
-                   reported (crash_loop), never hidden. Deciding to roll back is postcheck's job.
+                   reported (crash_loop), never hidden. Deciding to roll back is postcheck's job. With a plan's
+                   log_expect / log_fail (the hand-eye deploy: the URDF reader's lines) those lines too.
+DeployResult.handeye: one line when the new config makes a deployed hand-eye stale (T_BS / T_SC changed; see
+handeye_deploy.stale_line); reported, never a reason to refuse.
 Deployer.rollback: first the robot is compared with what the deploy left (someone changed it since -> RollbackDrift:
 ask); then robot.env as saved, producer_restore(), OKVIS restarted, verified (robot.env, the old sha in the log, no
 crash loop). A failed rollback raises RollbackFailed with a loud message naming the rollback.sh to run by hand; nothing
@@ -501,11 +505,27 @@ def rollback_script(snap: DeploySnapshot, deploy_dir, new_name, producer_ns="dma
 # ---------------------------------------------------------------- the transaction
 
 
+def _handeye_line(new_text, live_text) -> str:
+    """handeye_deploy.stale_line: one line when this config makes the deployed hand-eye stale, else "" (never stops a
+    deploy: a broken marker reads as no line)"""
+    try:
+        from calibtool import handeye_deploy
+        return handeye_deploy.stale_line(new_text, live_text)
+    except Exception as e:  # noqa: BLE001  (the head deploy must not fail over the hand-eye's bookkeeping)
+        return f"hand-eye: could not tell whether this deploy makes it stale ({type(e).__name__}: {e})"
+
+
 @dataclass
 class DeployPlan:
     name: str                   # file name in /etc/phantomos/okvis
     config_text: str
     size: tuple                 # (W, H) the producer runs at after the deploy
+    # the hand-eye deploy (handeye_deploy.py): more new files the config names (host path, text), written before the
+    # config; log lines (literal) the load check needs / that fail it at once (the URDF reader's "[Urdf] loaded '...'"
+    # / "Failed to load URDF '...'")
+    extra_files: tuple = ()
+    log_expect: tuple = ()
+    log_fail: tuple = ()
 
 
 @dataclass
@@ -519,6 +539,7 @@ class DeployResult:
     dry_run: bool = False
     dependents: list = field(default_factory=list)
     detail: str = ""
+    handeye: str = ""           # one line when this deploy makes the deployed hand-eye stale (handeye_deploy.stale_line)
 
     def as_dict(self) -> dict:
         d = asdict(self)
@@ -564,14 +585,18 @@ class Deployer:
         if rc != 0:
             raise DeployFailed(f"OKVIS restart failed (rc {rc}): {out.strip()[:300]}")
 
-    def _wait_okvis(self, sha, kb4t):
+    def _wait_okvis(self, sha, kb4t, expect=(), fail=()):
         t0 = self.clock()
         while True:
             pods = okvis_pods(self.remote)
             crash = crash_loop(pods)
             lines = okvis_log(self.remote, pods)
             seen = log_has(lines, sha, kb4t)
-            if crash or (seen["log_sha"] and seen["kb4t_line"] is not False):
+            txt = "\n".join(lines)
+            seen["expect"] = all(e in txt for e in expect) if expect else None
+            seen["fail"] = [f for f in fail if f in txt]
+            if crash or seen["fail"] or (seen["log_sha"] and seen["kb4t_line"] is not False
+                                         and seen["expect"] is not False):
                 break
             if self.clock() - t0 >= self.up_timeout_s:
                 break
@@ -605,7 +630,12 @@ class Deployer:
         cur = self.remote.read(new_host)
         if cur is not None and cur != plan.config_text:
             problems.append(f"{new_host} already exists with other contents: not overwriting it; pick another name")
-        step("checks", problems=problems)
+        extra_cur = [self.remote.read(p) for p, _ in plan.extra_files]
+        for (p, t), c in zip(plan.extra_files, extra_cur):
+            if c is not None and c != t:
+                problems.append(f"{p} already exists with other contents: not overwriting it; pick another name")
+        handeye = _handeye_line(plan.config_text, self.snap.config_text)
+        step("checks", problems=problems, **({"handeye": handeye} if handeye else {}))
         if problems:
             raise DeployRefused("not deploying: " + "; ".join(problems))
         old = PurePosixPath(self.snap.calibration or "none").name
@@ -624,6 +654,11 @@ class Deployer:
             self.remote.write(self.rollback_path, rollback_script(self.snap, self.deploy_dir, plan.name,
                                                                   self.producer_ns, self.producer_deploy), "0755")
             step("rollback_script", path=self.rollback_path)
+            for (p, t), c in zip(plan.extra_files, extra_cur):
+                if c is None:
+                    self.remote.write(p, t)
+            if plan.extra_files:
+                step("files", paths=[p for p, _ in plan.extra_files])
             if cur is None:
                 self.remote.write(new_host, plan.config_text)
             step("config", path=new_host, sha12=sha)
@@ -633,7 +668,8 @@ class Deployer:
             self.left = [("robot.env", "file", ROBOT_ENV, env), ("the new calibration", "file", new_host,
                                                                  plan.config_text),
                          ("head_camera.json", "file", HEAD_CAMERA_JSON, self.snap.head_camera_json),
-                         ("the OKVIS image", "image", None, self.snap.okvis_image)]
+                         ("the OKVIS image", "image", None, self.snap.okvis_image)] + [
+                ("a new file", "file", p, t) for p, t in plan.extra_files]
             self.plan = plan
             if self.remote.dry_run:
                 if self.snap.producer_yaml:
@@ -657,17 +693,23 @@ class Deployer:
         if self.remote.dry_run:
             return DeployResult(False, steps, sha, self.rollback_path, dry_run=True,
                                 dependents=[asdict(x) for x in self.snap.dependents],
-                                detail="dry run: nothing sent; the commands are in Remote.text()")
-        v = self._wait_okvis(sha, "kb4t" in plan.config_text)
+                                detail="dry run: nothing sent; the commands are in Remote.text()", handeye=handeye)
+        v = self._wait_okvis(sha, "kb4t" in plan.config_text, plan.log_expect, plan.log_fail)
         v["robot_env"] = parse_env(self.remote.read(ROBOT_ENV)).get("OKVIS_CALIBRATION") == container_path(plan.name)
         v["config"] = sha12(self.remote.read(new_host)) == sha
-        step("verify", **{k: v[k] for k in ("log_sha", "kb4t_line", "crash_loop", "robot_env", "config")})
-        ok = v["robot_env"] and v["config"] and v["log_sha"] and v["kb4t_line"] is not False and not v["crash_loop"]
-        why = [] if ok else [k for k in ("robot_env", "config", "log_sha", "kb4t_line") if v[k] is False] + (
-            ["crash_loop"] if v["crash_loop"] else [])
+        v["files"] = all(self.remote.read(p) == t for p, t in plan.extra_files) if plan.extra_files else None
+        keys = ("log_sha", "kb4t_line", "crash_loop", "robot_env", "config") + (
+            ("files", "expect", "fail") if plan.extra_files or plan.log_expect or plan.log_fail else ())
+        step("verify", **{k: v[k] for k in keys})
+        ok = (v["robot_env"] and v["config"] and v["log_sha"] and v["kb4t_line"] is not False and not v["crash_loop"]
+              and v["files"] is not False and v["expect"] is not False and not v["fail"])
+        why = [] if ok else [k for k in ("robot_env", "config", "log_sha", "kb4t_line", "files", "expect")
+                             if v[k] is False] + (["crash_loop"] if v["crash_loop"] else []) + (
+            [f"log says: {f}" for f in v["fail"]])
         return DeployResult(ok, steps, sha, self.rollback_path, v, v["crash_loop"],
                             dependents=[asdict(x) for x in self.snap.dependents],
-                            detail="deployed and verified" if ok else "not verified: " + ", ".join(why))
+                            detail="deployed and verified" if ok else "not verified: " + ", ".join(why),
+                            handeye=handeye)
 
     def rollback(self, reason, force=False, target_failed_today=False) -> RollbackResult:
         steps, notes = [], []

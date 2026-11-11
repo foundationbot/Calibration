@@ -178,6 +178,15 @@ def _comment(lines) -> str:
 def write_variant(base: Urdf, change: dict, out, provenance: list[str]) -> Path:
     """the base file's text with the changed joints' <origin> rewritten and a provenance comment after the XML
     declaration; refuses to write a file whose own FK differs from the in-memory changed model"""
+    text = variant_text(base, change, provenance)
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(text)
+    return out
+
+
+def variant_text(base: Urdf, change: dict, provenance: list[str]) -> str:
+    """write_variant's text, not written anywhere (the deploy sends it to the robot)"""
     if base.text is None:
         raise ValueError("the base URDF has no text to edit")
     new = base.changed(change)
@@ -196,7 +205,4 @@ def write_variant(base: Urdf, change: dict, out, provenance: list[str]) -> Path:
         d = np.abs(written.joint(name).origin - new.joint(name).origin).max()
         if d > WRITE_FK_TOL_M:
             raise ValueError(f"the written {name} origin differs from the fit by {d:.2e}")
-    out = Path(out)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(text)
-    return out
+    return text

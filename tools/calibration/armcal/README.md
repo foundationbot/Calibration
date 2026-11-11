@@ -74,12 +74,34 @@ What it gives on phantom14's wave 2, against FAST:
 - model changes move a capture about 0.3 mm (FAST: 0.7 mm, p90 3-4 mm);
 - about a third of the captures fail the settled check and are not used.
 
-## The HEAD term (open)
+## The HEAD term and the deploy (H4)
 
 M12+head fits the camera's position in the head. That is not a URDF origin: the camera sits in the Head link through
 OKVIS's T_BS, which the head calibration owns. `urdffit.write_urdf` writes the URDF terms only and states the HEAD
-term in the file's header. Where it goes on a robot (T_BS's translation, once, or a camera joint) is still open. It must
-not be applied twice.
+term in the file's header.
+
+The deploy (`calibtool/handeye_deploy.py`, module text = its README) puts HEAD into T_BS's translation, once:
+T_BS' = D(HEAD) T_BS, the rotation kept (the fit's prediction is T_TC = T_TB(neck) · D · T_BS · T_SC, so this is the
+only place it can go without changing the prediction; a test composes the written URDF and config and gets the fit's
+offsets back to 1e-6 mm, and the other order misses by > 5 mm). In short:
+
+- **What it writes** on the robot, next to the old files (never changing them): `<robot>_mk1_handeye_<date>.urdf` (the
+  robot's own URDF with the fitted origins and a provenance header) and a copy of the LIVE OKVIS config with T_BS moved
+  by HEAD, `urdf:` pointing at the new URDF and a `# handeye: {...}` line; then robot.env names the new config and
+  OKVIS restarts by the path the head tool uses (DaemonSet or okvis.sh; never a zero grace period).
+- **Its checks** (any one refuses, nothing written): the machine-id names the fit's robot; robot.env, the config and the
+  URDF are what the snapshot read; the URDF OKVIS reads is the one the captures were matched with (md5); the live
+  T_BS and cameras' T_SC are the ones the captures were taken with (else "hand-eye stale for this camera geometry");
+  the live config does not carry this fit already (HEAD never twice); the written files reproduce the fit.
+- **Verified** by OKVIS's log: the new config's sha (entrypoint) and `[Urdf] loaded '<new URDF>'`. A crash loop or a
+  failed load rolls back by itself.
+- **Rolling back:** R in the tool, or `bash <deploy dir>/rollback.sh`: robot.env as it was, OKVIS restarted.
+- **Model only** (`--model-only`): T_BS kept, the M12 URDF (fitted without HEAD).
+- **Other consumers** (`calibtool/config/handeye_consumers.yaml`): the burst point cloud (Moonstone, hard-coded URDF)
+  gets the per-robot URDF published as a file; cuRobo and box-pick are listed as not updated.
+
+Fit folder it reads: `fit.json`, `readb-{right,left}.json` and `geometry.json` (what the captures were taken with:
+`python -m calibtool.handeye_deploy geometry BURST.npz... --robot P10 --session S --out geometry.json`).
 
 ## Tests
 
