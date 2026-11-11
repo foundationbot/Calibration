@@ -6,15 +6,21 @@ view checks -- and the record of the phantom14 driver urdfx/fitrun.py that produ
 base_w2.json / base_L.json. The depth fusion is armcal/fuse.py, not the C++ module.)
 
     python3 -m armcal.readb BURST.npz... --side right --urdf ROBOT.urdf --out captures.json [--frames N]
+                            [--matcher robust|fast|reference] [--jobs N]
+
+The matcher (results/handeye-readb2-2026-11-11/): "robust" (the default) runs B0 twice per capture -- from the
+encoders, then from the wave's median offset -- and calls a capture clean only when the two land within SETTLED_MM;
+"fast" computes the phantom14 algorithm's numbers (the stored records), "reference" is that algorithm as it ran.
 
 The record (JSON-able; the stage-2 fit reads it): name, off (wrist offset, mm, Torso frame: where the depth puts the
 wrist point minus where the encoders + URDF put it), norm, rot (the match's rotation, deg), cov (coverage), ok
 (converged, enough inliers, conditioned), clean, E, T_TC, T_BC, q, yaw, pitch, wrist, rms, inl, steps, cond,
 motion_deg / motion_joint (how far a joint moved inside the burst), view (the view gate at the encoders), timings.
 
-clean = ok and rot <= CLEAN_ROT_DEG and cov >= CLEAN_COVERAGE (the hand-eye plan, section 4); the arm-median outlier
-cut is the stage-2 selection's (urdffit.select). Motion above MAX_MOTION_DEG and a failed view gate are reported, not
-folded into clean: the stored phantom14 decisions did not use them."""
+clean = ok and rot <= CLEAN_ROT_DEG and cov >= CLEAN_COVERAGE (the hand-eye plan, section 4), and for the robust
+matcher settled (its two passes agree); the arm-median outlier cut is the stage-2 selection's (urdffit.select).
+Motion above MAX_MOTION_DEG and a failed view gate are reported, not folded into clean: the stored phantom14
+decisions did not use them."""
 from __future__ import annotations
 
 import argparse
@@ -37,6 +43,10 @@ MAX_MOTION_DEG = 0.2
 CLEAN_ROT_DEG = 12.0
 CLEAN_COVERAGE = 0.6
 SPACING = 0.001                    # m, mesh sampling
+MATCHERS = {"robust": meshfit.ROBUST, "fast": meshfit.FAST, "reference": meshfit.REFERENCE}
+DEFAULT_MATCHER = "robust"         # readb2 (11 Nov 2026); "fast" reproduces the stored phantom14 records
+PASS2_GATES = (0.015, 0.008, 0.005)  # the robust matcher's pass 2 (from the wave's median offset)
+SETTLED_MM = 3.0                     # the robust matcher: pass 2 within this of pass 1, or the capture is not clean
 
 
 def sided(names, side: str) -> tuple:
@@ -47,9 +57,12 @@ def sided(names, side: str) -> tuple:
     return tuple(side + n[len("Right"):] for n in names)
 
 
-def arm_model(urdf, side: str, mesh_dir=MESHES, spacing: float = SPACING,
-              cfg: meshfit.FitConfig = meshfit.FAST) -> meshfit.ArmModel:
-    return meshfit.ArmModel.load(Urdf.of(urdf), mesh_dir, sided(LINKS, side), spacing, cfg.model_voxel)
+def arm_model(urdf, side: str, mesh_dir=MESHES, spacing: float | None = None,
+              cfg: meshfit.FitConfig = meshfit.FAST, **kw) -> meshfit.ArmModel:
+    """the side's fitted links, sampled as cfg says (sampler, spacing unless given, model_voxel); kw: ArmModel's
+    phase / jitter / seed"""
+    return meshfit.ArmModel.load(Urdf.of(urdf), mesh_dir, sided(LINKS, side), cfg.spacing if spacing is None else
+                                 spacing, cfg.model_voxel, sampler=cfg.sampler, **kw)
 
 
 def capture_name(path, side: str) -> str:
@@ -103,12 +116,15 @@ def load_capture(path, urdf, side: str, frames_used: int = 0, depth=None, with_r
                    rgb=fuse.fuse_rgb(b.rgb, frames_used) if with_rgb else None, fuse_s=fuse_s)
 
 
-def match(arm: meshfit.ArmModel, cap: Capture, cfg: meshfit.FitConfig = meshfit.FAST, view: bool = True) -> tuple:
-    """(record, PoseFit) of one capture"""
+def match(arm: meshfit.ArmModel, cap: Capture, cfg: meshfit.FitConfig = meshfit.FAST, view: bool = True,
+          start_off=None) -> tuple:
+    """(record, PoseFit) of one capture. start_off (mm, Torso frame; the robust matcher's pass 2): start at the
+    model moved by this offset and run only PASS2_GATES"""
     H, W = cap.depth.shape
     t0 = time.perf_counter()
     data = meshfit.unproject(cap.depth, cap.K, cfg.data_stride)
-    f = meshfit.fit_pose(arm, cap.q, cap.T_TC, data, cap.K, W, H, cfg)
+    kw = {} if start_off is None else dict(E0=consensus_start(cap.T_TC, start_off), gates=PASS2_GATES)
+    f = meshfit.fit_pose(arm, cap.q, cap.T_TC, data, cap.K, W, H, cfg, **kw)
     fit_s = time.perf_counter() - t0
     off = 1e3 * f.wrist_offset_T
     rec = dict(name=cap.name, side=cap.side, off=off.tolist(), norm=float(np.linalg.norm(off)), rot=f.rotation_deg,
@@ -118,10 +134,29 @@ def match(arm: meshfit.ArmModel, cap: Capture, cfg: meshfit.FitConfig = meshfit.
                inl={k: v["inliers"] for k, v in f.per_link.items()}, frames=cap.frames,
                motion_deg=cap.motion_deg, motion_joint=cap.motion_joint, fit_s=round(fit_s, 3),
                fuse_s=round(cap.fuse_s, 3))
+    if f.score is not None:            # the robust matcher: its score, the starts it compared, the margin
+        rec.update(score=f.score, margin=f.margin, starts=f.candidates)
+    if start_off is not None:
+        rec["start_off"] = np.asarray(start_off, float).tolist()
     rec["clean"] = is_clean(rec)
     if view:
         rec["view"] = meshfit.view_gate(arm, cap.q, cap.T_TC, cap.K, W, H)
     return rec, f
+
+
+def wave_median(recs, min_clean: int = 3) -> np.ndarray:
+    """(3,) mm: the median wrist offset of one arm's captures (the clean ones when there are at least min_clean)"""
+    use = [r for r in recs if r["clean"]]
+    use = use if len(use) >= min_clean else list(recs)
+    return np.median(np.array([r["off"] for r in use], float), axis=0)
+
+
+def consensus_start(T_TC, off_mm) -> np.ndarray:
+    """the camera-frame correction that moves the model by off_mm (Torso frame): pass 2's start at the arm's median
+    offset, so that every capture starts where the wave as a whole puts the arm"""
+    E = np.eye(4)
+    E[:3, 3] = np.linalg.inv(np.asarray(T_TC, float))[:3, :3] @ (1e-3 * np.asarray(off_mm, float))
+    return E
 
 
 def is_clean(rec: dict) -> bool:
@@ -151,6 +186,50 @@ def overlay(cap: Capture, arm: meshfit.ArmModel, fit: meshfit.PoseFit):
     return img
 
 
+_W = {}
+
+
+def _work(job):
+    """one capture in a worker: (record, overlay picture or None)"""
+    path, start_off, pic = job
+    a = _W["args"]
+    cap = load_capture(path, _W["urdf"], a["side"], a["frames"], with_rgb=pic)
+    rec, f = match(_W["arm"], cap, _W["cfg"], start_off=start_off)
+    return rec, (overlay(cap, _W["arm"], f) if pic else None)
+
+
+def match_wave(paths, urdf, side: str, cfg: meshfit.FitConfig = meshfit.FAST, frames: int = 0,
+               consensus: bool | None = None, jobs: int = 1, overlays: bool = False, arm=None, log=print) -> list:
+    """[(record, overlay or None)] of one arm's captures. consensus (default: on for the robust matcher): pass 1 as
+    match() (from the encoders), then pass 2 starts every capture at the wave's median offset (wave_median of pass 1;
+    the record keeps pass 1's in rec["pass1"]). A capture is "settled" when its two passes land within SETTLED_MM of
+    each other: its answer does not hang on where the matcher started. clean then also needs settled. jobs > 1:
+    captures in parallel (fork)"""
+    consensus = cfg.robust if consensus is None else consensus
+    _W.update(urdf=Urdf.of(urdf), cfg=cfg, arm=arm or arm_model(urdf, side, cfg=cfg),
+              args=dict(side=side, frames=frames))
+
+    def run(job_list):
+        if jobs > 1 and len(job_list) > 1:
+            from multiprocessing import get_context
+            with get_context("fork").Pool(min(jobs, len(job_list))) as pool:
+                return pool.map(_work, job_list, chunksize=1)
+        return [_work(j) for j in job_list]
+
+    out = run([(p, None, overlays and not consensus) for p in paths])
+    if consensus and out:
+        med = wave_median([r for r, _ in out])
+        log(f"pass 2 from the wave's median offset {np.round(med, 1).tolist()} mm")
+        out2 = run([(p, med.tolist(), overlays) for p in paths])
+        for (r1, _), (r2, _) in zip(out, out2):
+            r2["pass1"] = {k: r1[k] for k in ("off", "rot", "cov", "clean", "fit_s")}
+            r2["agree_mm"] = float(np.linalg.norm(np.subtract(r2["off"], r1["off"])))
+            r2["settled"] = r2["agree_mm"] <= SETTLED_MM
+            r2["clean"] = bool(r2["clean"] and r2["settled"])
+        out = out2
+    return out
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("bursts", nargs="+")
@@ -159,21 +238,27 @@ def main(argv=None) -> int:
     ap.add_argument("--out", required=True, help="the records, JSON")
     ap.add_argument("--meshes", default=str(MESHES))
     ap.add_argument("--frames", type=int, default=0, help="fuse only the first N depth frames (0 = all)")
-    ap.add_argument("--reference", action="store_true", help="the algorithm exactly as it ran on phantom14 (slow)")
+    ap.add_argument("--matcher", choices=tuple(MATCHERS), default=DEFAULT_MATCHER,
+                    help="robust: the even model and the robust solver (readb2, 11 Nov 2026); fast: the phantom14 "
+                         "algorithm's numbers, computed faster (what stored records were made with); reference: "
+                         "the phantom14 algorithm exactly as it ran (slow)")
+    ap.add_argument("--reference", action="store_true", help="= --matcher reference")
     ap.add_argument("--overlay", help="a directory for overlay-<name>.png")
+    ap.add_argument("--no-consensus", action="store_true", help="the robust matcher without its pass 2")
+    ap.add_argument("--jobs", type=int, default=1, help="captures matched in parallel (one core each)")
     a = ap.parse_args(argv)
     urdf = Urdf.load(a.urdf)
-    cfg = meshfit.REFERENCE if a.reference else meshfit.FAST
+    cfg = MATCHERS["reference" if a.reference else a.matcher]
     arm = arm_model(urdf, a.side, a.meshes, cfg=cfg)
+    out = match_wave(a.bursts, urdf, a.side, cfg, a.frames, consensus=False if a.no_consensus else None,
+                     jobs=a.jobs, overlays=bool(a.overlay), arm=arm)
     recs = []
-    for path in a.bursts:
-        cap = load_capture(path, urdf, a.side, a.frames, with_rgb=bool(a.overlay))
-        rec, f = match(arm, cap, cfg)
+    for rec, img in out:
         recs.append(rec)
-        if a.overlay:
+        if img is not None:
             import cv2
             Path(a.overlay).mkdir(parents=True, exist_ok=True)
-            cv2.imwrite(str(Path(a.overlay) / f"overlay-{cap.name}.png"), overlay(cap, arm, f))
+            cv2.imwrite(str(Path(a.overlay) / f"overlay-{rec['name']}.png"), img)
         print(f"{rec['name']}: wrist {np.round(rec['off'], 1).tolist()} mm |{rec['norm']:.1f}|, rot {rec['rot']:.1f} "
               f"deg, coverage {rec['cov']:.2f}, {'CLEAN' if rec['clean'] else 'NOT CLEAN'}, motion "
               f"{rec['motion_deg']:.2f} deg ({rec['motion_joint']}), {rec['fit_s']:.1f} s", flush=True)

@@ -106,3 +106,25 @@ def test_stage2_reproduces_phantom14s_deployed_urdf(p14, tmp_path):
     mine = Urdf.load(out)
     for j in deployed.joints:
         assert np.allclose(mine.joint(j).origin, deployed.joint(j).origin, atol=1e-8), j
+
+
+# the robust matcher (readb2, 11 Nov 2026): its two passes on stored captures, pinned to the runs reported in
+# results/handeye-readb2-2026-11-11/ (r_K1_base / r_K2_base: pass 1 from the encoders, pass 2 from the wave's median)
+ROBUST_PINS = [   # burst, wave median of pass 1 (mm), pass 1 offset, pass 2 offset (mm)
+    ("p14-armwave-1104a-right-07-p09-10-0", "Right", (13.5082, -23.9855, 20.4139), (12.694, -25.896, 23.142),
+     (12.728, -25.867, 23.167)),
+    ("p14-armwave-1104b-left-17-pL04-22-0", "Left", (9.9047, -10.3041, 15.8224), (15.01, -17.072, 11.947),
+     (14.627, -16.701, 11.859)),
+]
+
+
+@pytest.mark.parametrize("name,side,med,off1,off2", ROBUST_PINS)
+def test_robust_passes_reproduce_the_reported_runs(p14, name, side, med, off1, off2):
+    urdf = Urdf.load(p14 / "phantom_mk1.urdf")
+    cap = readb.load_capture(p14 / "bursts" / f"{name}.npz", urdf, side)
+    arm = readb.arm_model(urdf, side, cfg=meshfit.ROBUST)
+    r1, _ = readb.match(arm, cap, meshfit.ROBUST, view=False)
+    r2, _ = readb.match(arm, cap, meshfit.ROBUST, view=False, start_off=med)
+    assert np.linalg.norm(np.subtract(r1["off"], off1)) < 0.05
+    assert np.linalg.norm(np.subtract(r2["off"], off2)) < 0.05
+    assert r1["clean"] and r2["clean"] and np.linalg.norm(np.subtract(r1["off"], r2["off"])) <= readb.SETTLED_MM

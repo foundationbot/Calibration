@@ -145,3 +145,47 @@ def visible(P, N, T_CM, K, W: int, H: int, tol: float = 0.003, facing: float = -
     faces = np.abs(nv) > -facing if two_sided else nv < facing
     zb = np.where(ok, depth[np.clip(v, 0, H - 1), np.clip(u, 0, W - 1)], 0.0)
     return ok & faces & (zb > 0) & (pc[:, 2] <= zb + tol)
+
+
+_R2 = 1.32471795724474602596          # the plastic number: the R2 low-discrepancy sequence's base
+
+
+def sample_even(V, F, spacing: float, phase: float = 0.5):
+    """(P, N, w) as sample(), with about one point per spacing² of surface on every triangle, however long and thin
+    (sample() puts ceil(longest edge / spacing)² points on each: 5.2 M points for an arm's 0.24 m² at 1 mm, 1.1 M of
+    them visible, where this gives about 0.25 M). Each triangle gets k = max(1, round(area / spacing²)) points at
+    the first k terms of the R2 sequence (folded into the triangle), started at `phase`: deterministic, evenly
+    spread inside each triangle; another phase is another, equally even, choice of the points"""
+    V, F = np.asarray(V, np.float64), np.asarray(F, np.int64)
+    A, B, C = V[F[:, 0]], V[F[:, 1]], V[F[:, 2]]
+    cr = np.cross(B - A, C - A)
+    area2 = np.linalg.norm(cr, axis=1)
+    keep = area2 > 1e-14
+    A, B, C, cr, area2 = A[keep], B[keep], C[keep], cr[keep], area2[keep]
+    if not len(A):
+        return np.zeros((0, 3)), np.zeros((0, 3)), np.zeros(0)
+    sign = 1.0 if np.einsum("ij,ij->i", A, np.cross(B, C)).sum() >= 0 else -1.0
+    normal = sign * cr / area2[:, None]
+    k = np.maximum(1, np.rint(area2 / 2 / spacing ** 2)).astype(np.int64)
+    tri = np.repeat(np.arange(len(A)), k)
+    j = np.arange(len(tri)) - np.repeat(np.cumsum(k) - k, k) + 1            # 1..k within each triangle
+    s = np.mod(phase + j / _R2, 1.0)
+    t = np.mod(phase + j / _R2 ** 2, 1.0)
+    fold = s + t > 1.0
+    s[fold], t[fold] = 1.0 - s[fold], 1.0 - t[fold]
+    P = A[tri] + s[:, None] * (B - A)[tri] + t[:, None] * (C - A)[tri]
+    return P, normal[tri], (area2 / 2 / k)[tri]
+
+
+def fill_holes(depth, gap: float = 0.01, min_nearer: int = 6):
+    """a z-buffer with its see-through pinholes closed: a pixel at least `gap` behind `min_nearer` or more of its 8
+    neighbours (a gap in a sparse splat, through which a surface behind shows) gets the nearest of them; real depth
+    edges (at most about 5 nearer neighbours) stay. Empty pixels (0) stay empty"""
+    H, W = depth.shape
+    z = np.where(depth > 0, depth, np.inf)
+    pad = np.pad(z, 1, constant_values=np.inf)
+    nb = np.stack([pad[1 + dv:1 + dv + H, 1 + du:1 + du + W] for dv in (-1, 0, 1) for du in (-1, 0, 1)
+                   if dv or du])
+    nearer = (nb < z - gap).sum(0)
+    zmin = nb.min(0)
+    return np.where((depth > 0) & (nearer >= min_nearer), zmin, depth)
