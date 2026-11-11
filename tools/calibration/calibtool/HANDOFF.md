@@ -99,8 +99,9 @@ Written by the calibration agent session `CalibrationV10 [9d7ba3]` for the next 
 ## Open issues, most important first
 
 1. **Push and first release** (the user), then CircleCI's first run (an org owner gives the app access).
-2. **Hand-eye calibration:** `docs/plans/2026-11-11-handeye-plan.md` rev 0 needs a critical review and the user's
-   answers (its section 9) before milestone H0.
+2. **Hand-eye calibration:** `docs/plans/2026-11-11-handeye-plan.md` is at rev 1 after an independent review
+   (`docs/plans/2026-11-11-handeye-plan-review.md`, session CalibrationV11). It waits for the user's answers (its
+   section 9). The first milestone is now H-1, an offline go/no-go on Moonstone with no robot.
 3. **Not yet measured live:** the deploy time after the OKVIS-label fix (should be seconds), and the
    step-scaled-ramp neck timing on a robot other than phantom10.
 4. **The menu's look** doesn't yet list sessions under a profile's old root (`/tmp/calibtool-m2` on phantom10, all

@@ -1,10 +1,21 @@
-# Hand-eye calibration in `calib` — plan rev 0 (11 Nov 2026), for review
+# Hand-eye calibration in `calib` — plan rev 1 (11 Nov 2026), for the user's answers
 
-Status: **proposal, not started.** It needs a reviewer's pass (the successor session's first job) and the user's
-answers to section 9 before any milestone starts. No robot motion comes from this document.
+Status: **proposal, not started.** Rev 0 was reviewed by two independent reads (`2026-11-11-handeye-plan-review.md`);
+rev 1 folds the findings in. It needs the user's answers to section 9. The first step is now an offline go/no-go on
+stored data (H-1, no robot). No robot motion comes from this document.
 
-"Hand-eye" here means **camera-to-arm**: after it, a point the head cameras see and the hand's pose computed from
-the joint angles agree, so a grasp planned in the camera's view lands where the hand goes.
+"Hand-eye" here means **camera-to-arm**: after it, a point the head cameras see and the arm's pose computed from the
+joint angles agree, so a grasp planned in the camera's view lands where the hand goes.
+
+**What changed from rev 0, in short:**
+- The 3 mm gate is withdrawn until H-1 measures what the method can reach (phantom14's own data: about 4.5-5 mm
+  per capture).
+- The fit is the two-stage method that actually ran on phantom14, ported as it ran.
+- Each arm pose is captured at several neck angles (that is what made phantom14 work).
+- Times come from measurements: about 10-12 min of motion for both arms (estimate), not 3-4 min.
+- Motion keeps the proven slow ramps, and pins every joint it doesn't move.
+- No hand commands in v1.
+- OKVIS is a definite URDF consumer.
 
 ---
 
@@ -12,194 +23,261 @@ the joint angles agree, so a grasp planned in the camera's view lands where the 
 
 For one robot, both arms, run from the same `calib` tool:
 - **Tag-free.** No plate, AprilTag or fixture on the robot (the user's rule since 24 Oct: robots get swapped; per-robot
-  fixtures don't scale). The free-standing board is used only by the head stereo calibration.
-- **Output:** a per-robot URDF whose kinematic corrections make camera and arm agree to **≤ 3 mm at the hand** on
-  held-out poses (proposal; section 9). It is **deployed on the robot automatically**: the programs that read the
-  URDF are switched to it, with a rollback, and only if it beats the live URDF on the same held-out data.
-- **Fast:** ≤ about 5 min of arm motion for both arms, the fit finished seconds after the last pose. Past runs were
-  16 min for one arm (phantom12 `selfcal_run.py`), plus hours of hand work around it.
+  fixtures don't scale).
+- **Output:** a per-robot URDF whose corrections make camera and arm agree at the **wrist point** (the WristRoll
+  origin, which is what read B measures).
+- **Deploy rule:** deployed automatically, with a rollback, only when it beats the live URDF on held-out arm poses (the
+  paired rule of the head calibration).
+- **The absolute bar is set in H-1** from the measured noise floor. On phantom14's data it will be near 5 mm, not 3 mm
+  (review finding 1). The user decides whether that is enough for grasping (section 9).
 - **The same operator experience** as the head calibration: voice, screen, the operator's Y before motion,
   countdowns, HOLD / abort, progress and quality on screen, report, discard / continue.
+- **Speed:** as fast as the measured costs allow (section 5). Past runs: 16 min for one arm (phantom12), plus hours of
+  hand work around it.
 
 ---
 
-## 2. What exists (reuse, don't rewrite)
+## 2. What exists
 
 | What | Where | State |
 |---|---|---|
-| URDF forward kinematics of the arms and neck | `tools/calibration/scripts/armchain.py`, `neckfk.py` | tested |
-| Fit models with a plate (M0/M1/M2: plate X, camera ΔT, joint zero offsets δ) | `scripts/armfit.py`, `armfit_multi.py`, step 92 | tested; plate route is **not** the target any more |
-| Pose list from a view and information model | `scripts/armplan.py`, step 90 | plate-based; its information and coverage logic carries over |
-| MuJoCo clearance and gravity sag | `scripts/armsafety.py` | tested (needs `mujoco`, the MJCF) |
-| One-command arm-wave runner, park the other arm | `scripts/selfcal.py`, `selfcal_run.py`, `selfcal_park.py` | ran live on phantom12 (25-26 Oct) |
-| phantom21 arm-wave route (view model, MuJoCo variants) | `results/phantom21-2026-11-02-armwave/` | planned, not executed |
-| **Tag-free arm matcher "read B"** (arm mesh registered in head depth) | OKVIS2-X `tools/burst_pointcloud/experiments/arm816/blind_b.py` on a point-cloud branch (`git log --all -- '*blind_b.py'`) | **not in this repo**; trans-only passed blind on phantom12 (1.5-1.8 mm) |
-| **URDF route fit** (phantom14, 4 Nov: NeckYaw origin + shoulder-roll rpy per arm) | ad-hoc scripts on Moonstone `/data/kaustabh/p14arm/` (`ab14*.py`, `b2_14*.py`, `evalX.py`, `urdfx/`), bursts there too | **not in this repo**; the result passed: held-out R 2.5/2.0/3.2 mm, L 2.9/3.8/6.1 mm |
-| Depth bursts (depth + joints) | OKVIS2-X `tools/burst_pointcloud/grab.py` | live on several robots |
+| URDF forward kinematics of the arms and neck | `tools/calibration/scripts/armchain.py` (right arm only), `neckfk.py` | tested |
+| Plate fit models (M0/M1/M2) | `scripts/armfit.py`, `armfit_multi.py`, step 92 | tested; plate route not the target |
+| Pose list from a view and information model | `scripts/armplan.py`, step 90 | plate-based; its information logic carries over |
+| MuJoCo clearance and gravity sag | `scripts/armsafety.py` | tests **skipped in every automated run** (no mujoco in `requirements-dev.txt` or CI; no MJCF in this repo) |
+| Arm-wave runner, park the other arm | `scripts/selfcal.py`, `selfcal_run.py`, `selfcal_park.py` | ran live on (old) phantom12, 25-26 Oct; lists only the 7 arm joints + neck |
+| Read B matcher (B0: per capture, the arm mesh matched in head depth) | OKVIS2-X `tools/burst_pointcloud/meshfit.py`, `hand_check.py` (3 links: forearm, wrist yaw, wrist roll), `frames.py`, `armfk.py`, `mesh.py`, `burst_io.py` + `_burstfusion` (pybind11 C++, OpenMP); driver `experiments/arm816/blind_b.py` (c5b4c6b0) | **not in this repo**; about 80 s per capture on one Moonstone core |
+| Arm meshes | Moonstone `~/burst-pc/meshes/cycloidal_arm/` | **in no repo** |
+| `BURST_URDF` (the matcher reads a chosen URDF) | uncommitted patch to `frames.py` in Moonstone `/data/kaustabh/p21arm/code-repo` (unversioned copy) | **in no repo** |
+| URDF-route fit (phantom14, 4 Nov) | Moonstone `/data/kaustabh/p14arm/urdfx/` (`twoarm.py`, `predict.py`, `fitrun.py`, `urdfvar.py`), drivers `ab14w2.py`, `abL.py`, `evalX.py` | **in no repo**; result in section 2.1 |
+| phantom21 arm wave (2 Nov) | OKVIS2-X `feat/calibration-agent-p21-armwave` (ddeaba11); bursts Moonstone `p21arm/bursts-1102a/` | **run and failed** (section 2.1) |
+| Depth bursts (depth + joints) | OKVIS2-X `tools/burst_pointcloud/grab.py` | live on several robots; 7.7 s per burst at 1280 |
 
-How to read it: left, the capability; middle, where its code is; right, how far it is proven. The two rows in bold
-are the core of a tag-free method and must be ported here first (milestone H0).
+How to read it: left, the capability; middle, where its code is; right, how far it is proven. Bold marks gaps that
+H0 must close.
+
+### 2.1 What the three robots showed
+
+| Robot | Date | Views | Result |
+|---|---|---|---|
+| (old) phantom12 | 25-26 Oct | right arm, neck 28° only, translation only | 1.5-1.8 mm against the plate fit B1 (itself 1.75 mm RMS); rotation had no tag-free source |
+| phantom14 wave 1 | 3 Nov | forearm only | match rotation 29-49° wrong; held-out 12.8 / 5.0 / 41.3 mm: **failed** |
+| phantom14 wave 2 | 4 Nov | 5 arm poses x 3-4 neck angles, elbow in view, wrist roll varied | URDF fit M12: 34-36 mm (R) and 21-22 mm (L) before; after, about 4.5-5 mm median per capture (several 7-11 mm). Held-out captures shared arm poses with the fit and served for model choice. |
+| phantom21 | 2 Nov | right arm, neck fixed at 22.7° | 5 of 13 captures excluded (coverage); held-out 12.5 / 3.3 / 12.6 mm: **failed** |
+
+How to read it:
+- one row per arm wave so far, oldest first;
+- "(old) phantom12" is the robot called that before the 9 Nov renames;
+- numbers are the wrist-point disagreement between camera and arm.
 
 **Lessons that shape this plan:**
-- **Forearm-only views fail.** A forearm is nearly a cylinder; its mesh match can rotate 29-49° about its axis
-  (phantom14, 3 Nov: held-out 5/13/41 mm). The poses that worked showed **the elbow and upper arm**, varied **wrist
-  roll**, with the **hand open**.
-- **Rotation needs the right views.** On phantom12, rotation had no tag-free source from the views tried (T3, R1, the
-  torso CAD "route 2"); phantom14's URDF route did fit shoulder-roll rotations with the wave-2 poses. Which URDF
-  parameters are observable must be decided from the information of the actual poses (section 4).
-- **Cables.** phantom12's right arm lost 7 EtherCAT slaves mid-sweep on a move with 55° of shoulder yaw and 80° of
-  wrist roll in 6 s at kp 100 (23 Oct). Cap per-move travel of those joints; read the motor diagnostics before every
-  move; a drop stops everything.
-- **Every arm joint in every command.** `dma_motor_motion` holds an unlisted joint at its *measured* (sagged) pose, so
-  partial commands make a sagging arm sink. List all seven arm joints (and the neck).
-- **The other arm** must be parked out of the route (the left route passes the right hand at the rest pose).
+- **Views.** Forearm-only views fail: a forearm is nearly a cylinder, and its match can spin about its axis. Poses
+  must show the elbow and vary wrist roll.
+  - Even then, wave 2 had 6 of 18 right captures matched with 14-39° rotation. The rotation and coverage gates
+    (≤ 12°, ≥ 0.6) are part of the method.
+- **Neck angles.** Vary them at every arm pose. The head-mount correction (NeckYaw origin) is measurable only that
+  way; phantom21's fixed neck failed.
+- **What read B matches.** Forearm and wrist links only: no hand, no upper arm. The hand's state doesn't help the
+  match.
+- **Parameters.** Few, chosen in advance. Joint zero offsets beyond shoulder roll ran away before (B2: shoulder pitch
+  to 1e4 rad; wrist yaw 14°, camera 6.75° on phantom14).
+- **Cables.** phantom12's right arm lost 7 EtherCAT slaves on a move of 55° shoulder yaw and 80° wrist roll in 6 s
+  (about 9-13°/s) at kp 100. Don't go faster; cap the travel per move.
+- **Pin every joint the move doesn't drive.** List the other arm, spine and legs too, at their measured angles, as
+  `calibtool/neck.py` does. The 2.1.1 master leaves unlisted joints at zero stiffness; a tool re-hold made
+  phantom14's body creep.
+- **Sag.** At kp 100 the arm sags: shoulder pitch −6 to −12°, roll −10°, elbow −3 to −5.5°. Plan views and clearance on
+  the sagged pose; arrival has a tolerance.
+- **The other arm** must be parked clear, in both orders.
 - **kp only**, never kd.
-- **A plate on the hand blocks read B.**
-- **The head calibration comes first.** Read B uses head depth, so its scale error goes straight into the arm.
+- **The head calibration comes first.** Read B uses head depth; 0.21 % depth error is 1.7 mm at 0.8 m.
+- **T_BS and the URDF go together.** The URDF is fitted with a given T_BS. A later head calibration that changes T_BS
+  makes the hand-eye stale.
 
 ---
 
 ## 3. Inputs the session needs
 
-- A **current head stereo calibration**, from the same session or deployed recently. Depth scale error at 0.6-1 m
-  must be well under the 3 mm gate.
-- `T_BS` (camera in the head) as deployed. The URDF route absorbs the head mount through the NeckYaw origin. Don't
-  also fold an arm correction into `T_BS` (phantom14's note).
-- The robot's live URDF, its MJCF (for clearance), a joint snapshot (spine and legs as they hang now).
-- Motors on (the tool's Y), loco and policies off, robot on the gantry, **space around both arms clear**, the operator
-  standing back during the wave.
+- **A current head stereo calibration** (same session or recent), and its T_BS as deployed. The URDF route absorbs the
+  head mount in the NeckYaw origin; never also fold an arm correction into T_BS.
+- **Per consumer:** the URDF it reads now (they differ per robot and per consumer, e.g. phantom21's is pre-#816).
+- **The robot's state:** its MJCF for clearance, and a joint snapshot (spine and legs as they hang).
+- **At the robot:** motors on (the tool's Y), loco and policies off, the robot on the gantry, space around both arms
+  clear, the operator outside the arms' fall zone during the wave.
 
 ---
 
 ## 4. The model: what is fitted
 
-Per arm, from K captures (depth burst + joint angles), each matched by read B to the arm's links seen in the cloud:
-- **Candidate parameters:**
-  - the NeckYaw joint origin (translation; the head's place on the torso, shared by both arms);
-  - per arm, the shoulder-roll joint rpy (phantom14's result);
-  - optionally, small zero offsets of shoulder pitch, shoulder yaw and elbow;
-  - optionally, a camera rotation term.
-- **Fit:** minimise the read-B residual of every capture's matched links (point-to-surface, robust) over the
-  parameters, with a prior that keeps them near the URDF.
-- **Choosing the parameter set:** an **identifiability check** on the planned poses (Fisher information of each
-  parameter; condition number). Parameters the poses can't separate are fixed at the URDF. M0-M2-style model
-  selection on held-out captures, as in `armfit.py`. A reviewer should challenge this choice first.
-- **Held out:** 3 captures per arm not used in the fit, plus 1 repeat (noise floor). The gate is the hand's position
-  error at those captures.
-- **Paired against the live URDF:** the same held-out captures scored with the live URDF. Deploy only if the new one
-  is better (as the head calibration decides).
+**Stage 1, per capture (read B, B0, as ported).**
+- The forearm and wrist meshes are matched in the head depth. The result is the wrist offset, the coverage and the
+  rotation of the match.
+- Clean = rotation ≤ 12° and coverage ≥ 0.6, plus phantom14's distance-to-median outlier cut (≤ 15 mm).
+- Unclean captures are shown on screen and never used silently.
+
+**Stage 2, both arms jointly.**
+- A robust least squares of the clean wrist offsets over a small parameter set.
+- **Default = phantom14's M12:** NeckYaw origin xyz (shared) plus a ShoulderRoll zero offset per arm (5 parameters).
+- **The candidate list is fixed before any data are seen.** Proposal:
+  - M12;
+  - M9 (one shoulder roll);
+  - X1 (a head translation only).
+  - No other joint zero offsets (they ran away before).
+- **The model is chosen by cross-validation inside the fit data**, leaving one arm pose out at a time; never on the
+  held-out set.
+- **Identifiability.** The parameter covariance from the Jacobian (condition number, standard errors) is reported. A
+  parameter whose standard error exceeds its value is fixed at the URDF and said so.
+
+**Held out and gate.**
+- **Held out:** whole arm poses (all their neck angles), named in the plan before the session, at least 2 per arm.
+- **Paired:** the same held-out captures scored with the live URDF. Deploy only if the new one is better (paired, as
+  the head calibration decides).
+- **Absolute bar:** the median wrist error over held-out captures within the bar set in H-1.
+- **Noise floor:** the per-capture scatter of B0 over repeated and neck-varied captures of the same arm pose. One
+  repeat alone measures repeatability, not the matcher's pose-dependent bias.
+
+**Not measured by this method:** a bias of read B itself (mesh against the real arm covers, depth scale). The only
+independent yardstick is the (old) phantom12 plate data; H0 scores the ported matcher against it.
 
 ---
 
 ## 5. The session (per arm)
 
-1. **Park the other arm** (`selfcal_park.py` logic: a cleared hang pose, no wrist twist).
-2. **Open the hand:** `inspire_hand_poses --hand <0 left | 1 right> --pose open --no-loop` (on the robot; checked
-   10 Nov on phantom10: poses `open`, `relax`, `fist`, …). Verify that it opened from the hand's state (the readback
-   source is to be found in H2), and keep it open for the wave. An open hand's fingers give read B a distinctive
-   shape; a fist ends the arm like a cylinder.
-3. **Neck to the view band:** pitch about 18-28°, the band where the arm workspace is in view on phantom12/14.
-4. **The wave: stop-and-go over K poses.** It is not a continuous motion: stereo depth needs the arm still, and a
-   moving arm blurs and lags. For each pose:
-   1. Move. Every arm joint is listed, kp as decided. The ramp scales with the largest joint step, about 30-40°/s with
-      a minimum of about 1.5 s. Per-move caps on shoulder yaw and wrist roll come from the cable lesson.
-   2. Settle: wait until the measured joints are still (as the neck does).
-   3. Burst: a few depth frames plus joints.
-   4. Go on.
-5. **Live quality:** each capture gets read B right away in background workers, and the screen shows per capture:
-   - how much of hand, forearm, elbow and upper arm was seen;
-   - the match residual;
-   - the running fit;
-   - "parameters well determined: yes/no".
-
-   A bad capture is retaken once or skipped, never silently used.
-6. **Home**, hand back to `relax`, and the next arm.
+1. **Park the other arm** clear (checked in MuJoCo for both orders).
+2. **Hands:** not commanded in v1 (read B doesn't use them). Their state is recorded.
+3. **For each arm pose** (proposal: 5-6 per arm, chosen per robot):
+   1. **Move the arm.**
+      - Every joint is listed: this arm at its target, everything else at its measured angle.
+      - kp as decided; ramp ≥ 6 s (the proven rule) until H3 measures faster moves as safe.
+      - Per-move travel caps on shoulder yaw and wrist roll, below the 23 Oct values.
+      - The motor diagnostics are checked before each move.
+   2. **Arrival:** the joints are still and within a stated tolerance of the sagged target.
+   3. **For each of 3-4 neck angles** (pitch within `neck.py`'s ±26° clamp, yaw about ±24°): a neck move (about
+      1.3 s, the head tool's measurement), then a burst (7.7 s at 1280 measured; a shorter burst only if H0 shows the
+      same accuracy).
+4. **Quality on screen** per capture as soon as read B has run on it: coverage, match rotation, wrist offset, clean
+   yes/no, the running fit and "parameters determined: yes/no".
+   - A bad capture gets one retake, or it is skipped by the operator (C).
+   - Live per-capture quality depends on where read B runs and how fast it is (section 9.3; H0 measures it).
+5. **Home**, and the next arm.
 
 **Pose planning, per robot, automatically:**
-- **Source:** the robot's snapshot (spine and legs as they hang), the live URDF, the MJCF and the live head config.
-- **View:** enough of the arm's surface visible in both cameras, with the elbow and upper arm in view, at 0.4-1.2 m.
-- **Information:** greedy selection maximising the log-det of the parameter Fisher matrix. This forces wrist-roll and
-  elbow variety (`armplan.py`'s idea, with the URDF parameters).
-- **Safety:** MuJoCo clearance along every leg against the body as it hangs now, joint limits and gravity sag
-  (`armsafety.py`).
-- **Order:** the shortest joint-space tour under the per-move caps, with held-out poses interleaved.
-- **Pose count:** about 12-16 per arm, against phantom14's 18-19. Fewer if the information saturates. Measure, don't
-  assume.
+- **View:** forearm and wrist visible in both cameras with the elbow in view, at 0.4-1.2 m, at every planned neck
+  angle, computed on the sagged pose.
+- **Information:** greedy selection over arm poses times neck angles, maximising the log-det of the stage-2 Fisher
+  matrix. Wrist roll and elbow variety come out of it.
+- **Safety:** MuJoCo clearance along every move against the body as it hangs now; joint limits; sag (`armsafety.py`).
+- **Order:** the shortest joint-space tour under the caps.
 
-**Time budget (estimate; measure in H3):**
-- per pose: about 2.5 s move, 1 s settle, 0.5 s burst ≈ 4 s;
-- 14 poses ≈ 1 min per arm, plus park, hand and neck about 30 s;
-- **about 3-4 min for both arms**, the fit done about 30 s after the last pose.
+**Time (estimate from measured parts; to be measured in H3):**
+
+| Part | Measured cost | Per arm (6 poses x 3.5 neck angles = 21 captures) |
+|---|---|---|
+| Arm move + settle | about 8 s at ramp 6 | 6 x 8 s ≈ 50 s |
+| Neck move | about 1.3 s | 21 x 1.3 s ≈ 30 s |
+| Burst at 1280 | 7.7 s | 21 x 7.7 s ≈ 160 s |
+| Park, home, checks | not measured; guess 60 s | 60 s |
+| **Total** | | **about 5 min per arm, 10-12 min for both** |
+
+How to read it:
+- each row is one cost, with the measured number it comes from;
+- a shorter burst, if H0 proves it as accurate, would cut the total to about 2.5 min per arm;
+- read B's compute (about 80 s per capture per core on Moonstone) comes on top unless it runs in parallel with the
+  wave; H0 measures it on a Thor CPU.
 
 ---
 
-## 6. Deploying the URDF ("auto update URDF on the robot")
+## 6. Deploying the URDF
 
-- **The file:** `<robot>_mk1_handeye_<date>.urdf`. Template = the URDF the robot uses now; only the fitted origins
-  change; the diff is shown on screen and in the report.
-- **Who reads it — inventory first (H4).** Known or likely:
-  - the burst point cloud (`BURST_URDF`), as on phantom14;
-  - the cuRobo planner (Mk2-locomotion `feat/planner`). Its arm model lacks the shoulder-roll terms: it needs its own
-    generator, agreed with its owner;
-  - box-pick;
-  - possibly OKVIS (neck FK / self-mask).
+- **The file:** `<robot>_mk1_handeye_<date>.urdf`, written per consumer from the URDF that consumer reads now. Only
+  the fitted origins change. It carries a provenance header:
+  - the session;
+  - the T_BS (config sha) it was fitted with;
+  - the parameters and held-out results;
+  - the base file's md5.
 
-  For each: where it reads the URDF (env var, file, config), how it reloads, who owns it.
+  It is validated by parsing it and comparing FK against the fit.
+- **Consumers (inventory in H2, read-only on the robot):**
+
+  | Consumer | How it reads the URDF | State |
+  |---|---|---|
+  | OKVIS | `OKVIS_URDF` / `dma:urdf` (`mk12_stereo_holevisor.yaml:306`; `okvis2x_app_dma_live.cpp:613`, TF tree and pelvis FK) | definite; a NeckYaw change moves its head-in-body pose |
+  | Burst point cloud | `BURST_URDF` (phantom14) | the patch must be committed first |
+  | cuRobo (Mk2-locomotion `feat/planner`, ghost-wbc-manip) | its own arm model, without the shoulder-roll terms | needs its own generator, its owner's agreement, and a permission rule for restarting it |
+  | box-pick | to be found | to be found |
+
+  How to read it: one row per program that uses the robot's geometry. Each needs a switch point, a reload path, an
+  owner and a load check before the tool may deploy to it.
 - **One transaction,** like the head calibration's deploy:
-  1. a snapshot of every switch point;
-  2. write the file;
+  1. snapshot every switch point;
+  2. write the files;
   3. switch the consumers;
-  4. restart or reload them;
+  4. reload them (OKVIS through the path the head tool already uses);
   5. verify that each one loaded the new file (sha in its log, or a read-back);
-  6. `rollback.sh`;
-  7. **R** rolls back.
-- **Post-check:** two fresh poses per arm after the deploy. The hand error with the new URDF, through the consumers'
-  own path where possible, must be within the gate; otherwise roll back.
+  6. `rollback.sh`; **R** rolls back.
+- **Post-check:** fresh captures at two arm poses per arm, each at its neck angles, scored with the same paired
+  statistic as the gate. No single-capture threshold: at about 5 mm of noise per capture it would roll back by chance.
+- **Coupling with the head calibration:** the head tool's deploy flags "hand-eye stale" when it changes T_BS, and
+  offers the hand-eye run.
 
 ---
 
 ## 7. Integration in `calib`
 
-- **Menu:** *hand-eye calibration* as a session type, and an offer at the end of a head calibration ("Hand-eye next?
-  Y").
+- **Menu:** *hand-eye calibration* as a session type, and an offer at the end of a head calibration.
 - **Reuse:** motors (enable / takeover / disable), the motion gate, HOLD / abort / deadman, countdown and voice,
   progress bar and quality panel, the deploy transaction and rollback, the report, continue / discard.
 - **New modules (proposal):**
-  - `armmotion.py`, like `neck.py`: all joints listed, caps, arrival and stillness, motor-diagnostics check per move;
-  - `hands.py`: open, relax, verify;
-  - `armplan2.py`: the per-robot planner;
-  - `readb.py`: the port of `blind_b.py`;
-  - `urdffit.py`: the model, identifiability, held-out;
+  - `armmotion.py`, like `neck.py`: every joint listed, caps, arrival with tolerance on the sagged pose, a diagnostics
+    check per move, behaviour on a fault;
+  - `armplan2.py`: the per-robot planner over arm poses x neck angles;
+  - `readb.py`: the port of meshfit and hand_check, with `_burstfusion`;
+  - `urdffit.py`: stage 2, cross-validation, identifiability, held-out;
   - `urdfdeploy.py`: consumers, transaction, post-check.
-- **Permissions:** the operator's Y before any arm motion and before deploy. Hand commands are new for the tool:
-  **ask the user** (section 9).
+- **Permissions:** the operator's Y before any arm motion and before deploy.
+- **On a fault** (EtherCAT drop, master stop, a fault latch) with the arm raised, the arm falls. So:
+  - poses stay over clear space;
+  - the operator is outside the fall zone;
+  - the tool stops, holds what still holds, says what happened, and waits for the operator (no automatic retry).
 
 ---
 
 ## 8. Milestones (each gets its own TDD plan and the user's go)
 
-| # | Milestone | Done when |
-|---|---|---|
-| H0 | Port read B and the URDF-route fit into this repo; stored data (phantom14 wave-2 + left bursts on Moonstone; phantom12 sessions as offline yardstick only) | replay tests reproduce phantom14's 4 Nov URDF and its held-out numbers within tolerance |
-| H1 | Per-robot pose planner (view + information + MuJoCo + tour) | on phantom14's stored data, fewer poses reach the same held-out error; plans for phantom10/11 pass clearance |
-| H2 | `armmotion.py` + `hands.py` with fakes; a safety review by a separate reviewer before any robot use | review says safe; dry run records every command |
-| H3 | Live capture on one arm of one robot (phantom10 proposed), operator present | captures land with quality on screen; time per pose measured |
-| H4 | URDF deploy: consumer inventory, transaction, post-check | deploy and rollback verified on the robot |
-| H5 | Both arms, speed tuning, offered after a head calibration | full hand-eye run ≤ ~5 min of motion; the gate held |
+| # | Milestone | Where | Done when |
+|---|---|---|---|
+| H-1 | **Offline go/no-go** on stored data with the existing Moonstone scripts: leave-one-arm-pose-out cross-validation on phantom14 wave 2 (both arms); a fixed-neck subset (pitch 22 only); the noise floor from B0 scatter; M12's standard errors and condition number; phantom21 `1102a` as a failure case | Moonstone only | a written verdict: what error the method reaches on unseen arm poses, whether neck variety is needed, the proposed bar. **Stop here if unseen-pose error is not clearly below the live URDF's.** |
+| H0 | Port read B (meshfit, hand_check, `_burstfusion`, meshes, `BURST_URDF`) and the stage-2 fit into this repo (subject to section 9.2), with mujoco + MJCF in the test venv and CI | Moonstone, CI | replay reproduces phantom14's M12 URDF and its per-capture numbers within tolerance; scored against the (old) phantom12 plate yardstick; B0 time per capture measured on a Thor CPU (needs the user's OK) |
+| H1 | Per-robot planner (arm poses x neck angles, view on the sagged pose, information, MuJoCo, tour) | Moonstone | on phantom14's data it picks a subset that reaches H-1's error; plans for phantom10/11 pass clearance |
+| H2 | `armmotion.py` with fakes; consumer inventory (read-only on robots); a safety review by a separate reviewer | Moonstone; robots read-only | review says safe; a dry run records every command; consumer table filled with owners |
+| H3 | Live capture on one arm of one robot (phantom10 proposed), operator present | robot | captures land with quality on screen; time per pose measured; ramp speed decided from it |
+| H4 | URDF deploy: transaction, post-check, the head tool's "stale" flag | robot | deploy and rollback verified on the robot for each agreed consumer |
+| H5 | Both arms, speed tuning, offered after a head calibration | robot | full run within the measured budget; the gate held |
 
-How to read it: in order; each row's right column is what must be true before the next row starts.
+How to read it: in order; each row's right column must be true before the next row starts. H-1 is the only one that
+can end the project early, and it needs no robot.
 
 ---
 
-## 9. Questions for the user (before H0)
+## 9. Questions for the user (before H-1)
 
 1. **Robots and arms:** both arms on every robot; first live robot phantom10?
-2. **Hands:** may the tool open and relax the hands itself (`inspire_hand_poses … --pose open`)? It's a new kind of
-   command for it.
-3. **Who must use the new URDF:** burst point cloud, cuRobo, box-pick, OKVIS, others? And who owns each (cuRobo needs
-   its own model update)?
-4. **The gate:** ≤ 3 mm at the hand on held-out poses, as on phantom14?
-5. **Arm motion limits:** kp for arm moves (100 was used), per-move caps for shoulder yaw and wrist roll, minimum ramp.
-   Past rule "ramps ≥ 6 s" made it slow; the proposal is travel-scaled ramps with caps.
-6. **Space and people:** gantry, a clear radius around the arms, the operator behind a line during the wave?
-7. **phantom12's plate data** as an offline yardstick only (allowed on 24 Oct): still fine?
+2. **Public repository:** porting read B means putting the arm meshes (robot CAD) and the `_burstfusion` C++ code from
+   OKVIS2-X into the public Calibration repo. Is that allowed? If not, they stay in OKVIS2-X, and the kit fetches them
+   at install time from a private source.
+3. **Where read B runs:**
+   - on Thor (images stay on the robot, as D10; needs an aarch64 build of `_burstfusion`; runs beside OKVIS);
+   - or on Moonstone (about 55 MB per burst copied off the robot; an exception to D10)?
+
+   H0 measures Thor's speed.
+4. **The gate:** phantom14's data point to about 5 mm at the wrist per capture, not 3 mm. What does the grasp need?
+   Proposal: deploy when paired-better than the live URDF and the held-out median is within the floor H-1 measures.
+5. **Hands:** v1 doesn't command the hands (read B doesn't model them). Agreed?
+6. **Consumers:** OKVIS (`OKVIS_URDF`) is definite. Is it in scope for v1, or does v1 deploy to the burst point cloud
+   only? Who owns cuRobo's model update, and may the tool restart it?
+7. **Arm motion limits:** kp 100; ramp ≥ 6 s until H3 measures faster moves; travel caps on shoulder yaw and wrist
+   roll below the 23 Oct values. Agreed?
+8. **Space and people:** gantry, a clear radius around both arms, the operator outside the fall zone during the wave?
+9. **The (old) phantom12 plate data** as an offline yardstick only (allowed on 24 Oct): still fine?
+10. **Go for H-1?** It is offline, Moonstone only (light, niced, 1 BLAS thread per job), no robot, about an hour of
+    compute and writing (an estimate).
