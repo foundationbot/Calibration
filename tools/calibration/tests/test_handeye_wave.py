@@ -158,3 +158,35 @@ def test_pins_refuse_arm_and_neck(tmp_path):
     for bad in ({"RightShoulderPitch": 0}, {"NeckPitch": 0}, {"Mystery": 0}):
         with pytest.raises(ValueError):
             w.move_pins(bad)
+
+
+def test_profiles_switch_per_pose_and_restore(tmp_path):
+    r = hw.DryRun(NAMES, START)
+    r._profile = "1280"
+    w = hw.Wave(r, plan(), "Right", tmp_path, log=lambda s: None, profiles=["1280", "768"])
+    w.run(hand_pose=None)
+    prof = [a[1] for a in r.sent if a[0] == "profile"]
+    assert prof == ["768", "1280"]              # 1280 already active: no switch to it; to 768 once; back at the end
+    assert r.read_profile() == "1280"
+    grabs = [Path(a[a.index("--out") + 1]) for a in r.sent if hw.GRAB in a]
+    assert [g.parent.name for g in grabs] == [tmp_path.name] * 2 + ["r768"] * 2
+    assert [g.name for g in grabs[:2]] == [g.name for g in grabs[2:]]   # same capture names in both folders
+
+
+def test_profile_restored_on_stop_and_default_when_unset(tmp_path):
+    class Dies(hw.DryRun):
+        def run(self, argv, timeout):
+            if hw.GRAB in argv:
+                raise hw.Stop("burst failed")
+            return super().run(argv, timeout)
+    r = Dies(NAMES, START)                       # no request file before: restore to the config default
+    w = hw.Wave(r, plan(), "Right", tmp_path, log=lambda s: None, profiles=["768"], restore_profile="1280")
+    with pytest.raises(hw.Stop):
+        w.run(hand_pose=None)
+    assert r.read_profile() == "1280"
+
+
+def test_no_profiles_never_touches_okvis(tmp_path):
+    w, r = make(tmp_path)
+    w.run(hand_pose=None)
+    assert not [a for a in r.sent if a[0] == "profile"]

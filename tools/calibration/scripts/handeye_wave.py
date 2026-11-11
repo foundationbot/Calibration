@@ -46,6 +46,8 @@ ARM_HOLD_S = 2.0
 NECK_HOLD_S = 0.8
 MAX_MISS_DEG = 30.0
 MAX_PITCH, MAX_YAW = 26.0, 34.0
+PROFILE_FILE = "/dev/shm/okvis_depth_profile"   # OKVIS's runtime depth-profile request (all engines pre-loaded)
+PROFILE_SETTLE_S = 3.0                          # > one 1280 period (1.93 s) + latency: no old-profile frame in a burst
 DESIRED_STILL_S = 0.5
 
 
@@ -117,6 +119,16 @@ class Robot:
         p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
         return p.returncode, p.stdout + p.stderr
 
+    def read_profile(self):
+        try:
+            return Path(PROFILE_FILE).read_text().strip() or None
+        except OSError:
+            return None
+
+    def write_profile(self, name):
+        Path(PROFILE_FILE).write_text(f"{name}\n")
+        time.sleep(PROFILE_SETTLE_S)
+
 
 class DryRun(Robot):
     def __init__(self, names, angles):
@@ -135,14 +147,24 @@ class DryRun(Robot):
         self.sent.append(argv)
         return 0, "RESULT dry-run"
 
+    def read_profile(self):
+        return getattr(self, "_profile", None)
+
+    def write_profile(self, name):
+        self._profile = name
+        self.sent.append(["profile", name])
+
 
 class Stop(Exception):
     pass
 
 
 class Wave:
-    def __init__(self, robot, plan, arm, out: Path, frames=5, kp=None, tool=MOTOR_TOOL, log=print):
+    def __init__(self, robot, plan, arm, out: Path, frames=5, kp=None, tool=MOTOR_TOOL, log=print, profiles=(),
+                 restore_profile="1280"):
         self.r, self.plan, self.arm, self.out, self.frames, self.kp, self.tool = robot, plan, arm, out, frames, kp, tool
+        self.profiles = [str(p) for p in profiles]        # [] = leave OKVIS's depth profile alone
+        self.restore_profile = restore_profile            # written back when the request file did not exist
         self.say = log
         self.names, start = robot.names_and_angles()
         mine = {arm + j for j in ARM_J} | {"NeckPitch", "NeckYaw"}
@@ -206,9 +228,23 @@ class Wave:
         tgt = clamp_neck(pitch, yaw)
         self._command(f"neck:{tgt[0]:g}/{tgt[1]:g}", self.arm_now, tgt, neck_ramp(self.neck_now, tgt), NECK_HOLD_S)
 
+    def set_profile(self, name):
+        if self.r.read_profile() != name:
+            self.r.write_profile(name)
+            self._event("profile", profile=name)
+        self.profile = name
+
+    def _burst_dir(self):
+        p = getattr(self, "profile", None)
+        if not self.profiles or p == self.profiles[0]:
+            return self.out
+        d = self.out / f"r{p}"
+        d.mkdir(exist_ok=True)
+        return d
+
     def burst(self, name):
         self._gate()
-        path = self.out / f"{name}.npz"
+        path = self._burst_dir() / f"{name}.npz"
         argv = ["nice", sys.executable, GRAB, "--once", str(self.frames), "--joints", "all", "--out", str(path)]
         t0 = time.time()
         env = dict(os.environ, PYTHONPATH=GRAB_PYDEPS)
@@ -232,11 +268,25 @@ class Wave:
         self._event("hand", pose=pose, rc=rc, dt=round(time.time() - t0, 2), tail=out.strip().splitlines()[-2:])
 
     def run(self, only_burst=False, hand_pose="open", pins=None):
-        self._event("start", arm=self.arm, frames=self.frames, kp=self.kp, start=self.start)
+        self._event("start", arm=self.arm, frames=self.frames, kp=self.kp, start=self.start, profiles=self.profiles)
+        before = self.r.read_profile() if self.profiles else None
+        try:
+            self._run(only_burst, hand_pose, pins)
+        finally:
+            if self.profiles:                              # always, also on Stop / errors
+                back = before or self.restore_profile
+                if self.r.read_profile() != back:
+                    self.r.write_profile(back)
+                self._event("profile_restored", profile=back)
+
+    def _run(self, only_burst, hand_pose, pins):
         if pins:
             self.move_pins(pins)
         if only_burst:
-            self.burst("00-rest")
+            for prof in self.profiles or [None]:
+                if prof:
+                    self.set_profile(prof)
+                self.burst("00-rest")
             return
         if hand_pose:
             self.hand(hand_pose)
@@ -244,11 +294,16 @@ class Wave:
         for m in self.plan["moves"]:
             self.move_arm(m["name"], m["deg"])
             if m.get("burst"):
-                for pitch, yaw in m["necks"]:
-                    self.move_neck(pitch, yaw)
-                    pitch, yaw = self.neck_now
-                    k += 1
-                    self.burst(f"{k:02d}-{m['name']}-{int(round(pitch))}-{int(round(yaw))}".replace("--", "-m"))
+                k0 = k
+                for prof in self.profiles or [None]:       # one profile switch per arm pose and profile
+                    if prof:
+                        self.set_profile(prof)
+                    k = k0
+                    for pitch, yaw in m["necks"]:
+                        self.move_neck(pitch, yaw)
+                        pitch, yaw = self.neck_now
+                        k += 1
+                        self.burst(f"{k:02d}-{m['name']}-{int(round(pitch))}-{int(round(yaw))}".replace("--", "-m"))
         if hand_pose:
             self.hand("relax")
         self._event("done", captures=k)
@@ -265,6 +320,9 @@ def main(argv=None):
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--only-burst", action="store_true", help="one burst at the current pose, nothing moves")
     ap.add_argument("--no-hand", action="store_true")
+    ap.add_argument("--profiles", default="", help="OKVIS depth profiles, e.g. '768' (switch for the wave) or "
+                    "'1280,768' (each pose captured at both; the 2nd+ into <out>/r<name>/); restored at the end")
+    ap.add_argument("--restore-profile", default="1280", help="written back when no profile was requested before")
     ap.add_argument("--pins", default="", help="non-arm joints moved first and held there, e.g. "
                     "'RightAnklePitch=-54,RightKneePitch=8' (deg; slow, alone)")
     a = ap.parse_args(argv)
@@ -279,7 +337,8 @@ def main(argv=None):
         h = subprocess.run([a.tool, "--help"], capture_output=True, text=True)
         if "targets" not in h.stdout + h.stderr:
             raise SystemExit(f"{a.tool} has no 'targets' mode (2.1.1 zeroes unlisted joints): refusing")
-    w = Wave(robot, plan, a.arm, out, a.frames, a.kp, a.tool)
+    w = Wave(robot, plan, a.arm, out, a.frames, a.kp, a.tool,
+             profiles=[p for p in a.profiles.split(",") if p.strip()], restore_profile=a.restore_profile)
     try:
         pins = {kv.split("=")[0].strip(): float(kv.split("=")[1]) for kv in a.pins.split(",") if kv.strip()}
         w.run(only_burst=a.only_burst, hand_pose=None if a.no_hand else "open", pins=pins or None)
