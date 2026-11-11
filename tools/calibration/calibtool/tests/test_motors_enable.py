@@ -331,3 +331,35 @@ def test_r_restarts_the_motor_master_only_with_the_motors_off():
     en2, _ = make(run=r2)
     res2 = en2.restart_master()
     assert res2.refused and not r2.restarted and "drop the head and arms" in res2.detail
+
+
+def test_the_request_roll_call_before_all_n_enabled_is_not_a_partial_enable():
+    """10 Nov, phantom10 (2.1.1): '[ACTIVE] ... enabled 0/29' at the request, 'All 29 motors enabled' 20 ms later;
+    the tool stopped on the first one"""
+    j = ("[CommandDispatcher] ENABLE_MOTORS (request_id=1)\n"
+         "[ACTIVE] none: no SIL socket bit set, no drive fault, no latch (29 motors, enabled 0/29, wkc 144/144)\n"
+         "[MotorEnableManager] All 29 motors enabled (ENABLING -> ENABLED)\n")
+    assert me.parse_enabled(j) == (29, 29)
+    assert me.parse_enabled(j + "[ACTIVE] none: (29 motors, enabled 29/29, wkc 144/144)\n") == (29, 29)
+    assert me.parse_enabled("[ACTIVE] none: (29 motors, enabled 0/29, wkc 144/144)\n") == (0, 29)
+
+
+class LateRun(Run):
+    """the journal shows the request's 0/29 first and the full count only on the next read"""
+
+    def __init__(self):
+        super().__init__(enabled_line="[ACTIVE] none: (29 motors, enabled 0/29, wkc 144/144)", ping_after_enable=2)
+        self.reads = 0
+
+    def __call__(self, argv, timeout=5):
+        if argv[0] == "journalctl" and self.motor_state:
+            self.reads += 1
+            more = "\n[MotorEnableManager] All 29 motors enabled" if self.reads > 1 else ""
+            return 0, "boot\n" + self.enabled_line + more + "\n"
+        return super().__call__(argv, timeout)
+
+
+def test_a_partial_first_count_is_waited_out():
+    en, r = make(run=LateRun())
+    res = en.enable("Y", gantry=True)
+    assert res.ok and (res.n, res.of) == (29, 29), res.detail

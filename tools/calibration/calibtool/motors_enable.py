@@ -57,6 +57,7 @@ POLL_S = 0.5
 DISABLE_WARNING = ("Disabling the motors makes the robot limp: the head and arms drop. Only with the operator next to "
                    "the robot, holding the head if it is not on the gantry. Press D again to disable.")
 _ENABLED = re.compile(r"(?:(\d+) of (\d+) motors enabled|\benabled (\d+)/(\d+))")   # 2.1.0 line | 2.1.1 roll-call
+_ALL_ENABLED = re.compile(r"All (\d+) motors enabled")                                  # 2.1.1 MotorEnableManager
 OPTIONAL = ("bus_v", "head_power", "slaves_op", "fault_latches")
 
 
@@ -64,9 +65,20 @@ def parse_enabled(text):
     """(n, of) from the last "N of M motors enabled" line, or None"""
     m = _ENABLED.findall(text or "")
     if not m:
-        return None
+        al = _ALL_ENABLED.findall(text or "")
+        return (int(al[-1]), int(al[-1])) if al else None
     a, b, c, d = m[-1]
-    return (int(a), int(b)) if a else (int(c), int(d))
+    cnt = (int(a), int(b)) if a else (int(c), int(d))
+    al = _ALL_ENABLED.findall(text or "")
+    if cnt[0] != cnt[1] and al and int(al[-1]) == cnt[1]:
+        # 10 Nov, phantom10 (2.1.1): the roll-call "enabled 0/29" is logged at the request, "All 29 motors enabled"
+        # 20 ms later; a partial count before an "All N" line is the request's, not the result
+        last_all = (text or "").rfind(f"All {al[-1]} motors enabled")
+        last_cnt = max((text or "").rfind(f"{cnt[0]} of {cnt[1]} motors enabled"),
+                       (text or "").rfind(f"enabled {cnt[0]}/{cnt[1]}"))
+        if last_all > last_cnt:
+            return (cnt[1], cnt[1])
+    return cnt
 
 
 def passed(checks) -> bool:
@@ -237,9 +249,13 @@ class Enabler:
                                     "left all motors off (it enables them together). A fault that comes back at once "
                                     "is standing (encoder, cable, power of that joint): it needs hardware attention. "
                                     "R restarts the motor master; then Y", cs)
-            if cnt is not None and cnt[0] != cnt[1]:
+            if cnt is not None and cnt[0] != cnt[1] and self.clock() - t0 >= self.verify_s:
+                # 10 Nov: the first count after the request is the request's ("enabled 0/29"); judged at the end
                 return EnableResult(False, False, f"only {cnt[0]} of {cnt[1]} motors enabled: STOP. Not disabled "
                                     "automatically (that drops the head and arms); the operator decides", cs, *cnt)
+            if cnt is not None and cnt[0] != cnt[1]:
+                self.sleep(POLL_S)
+                continue
             if state and cnt is not None:
                 return EnableResult(True, False, f"{cnt[0]} of {cnt[1]} motors enabled (motor_state {state})", cs,
                                     *cnt)
