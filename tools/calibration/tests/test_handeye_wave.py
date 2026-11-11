@@ -140,3 +140,21 @@ def test_bursts_named_and_logged(tmp_path):
     assert [a[a.index("--pose") + 1] for a in hands] == ["open", "relax"] and hands[0][2] == "1"
     kinds = [json.loads(l)["kind"] for l in (tmp_path / "log.jsonl").read_text().splitlines()]
     assert kinds[0] == "start" and kinds[-1] == "done"
+
+
+def test_pins_move_first_slowly_then_hold(tmp_path):
+    w, r = make(tmp_path)
+    w.run(hand_pose=None, pins={"LeftHipYaw": START["LeftHipYaw"] - 20})
+    motions = [a for a in r.sent if a[0] == hw.MOTOR_TOOL]
+    first = parse(motions[0][1])
+    assert first["LeftHipYaw"] == START["LeftHipYaw"] - 20
+    assert first["RightShoulderPitch"] == pytest.approx(START["RightShoulderPitch"])      # the arm does not move yet
+    assert float(motions[0][motions[0].index("--ramp") + 1]) == max(hw.RAMP_MIN_S, 20 / hw.MAX_RATE_DEG_S)
+    assert all(parse(a[1])["LeftHipYaw"] == START["LeftHipYaw"] - 20 for a in motions)   # held afterwards
+
+
+def test_pins_refuse_arm_and_neck(tmp_path):
+    w, _ = make(tmp_path)
+    for bad in ({"RightShoulderPitch": 0}, {"NeckPitch": 0}, {"Mystery": 0}):
+        with pytest.raises(ValueError):
+            w.move_pins(bad)

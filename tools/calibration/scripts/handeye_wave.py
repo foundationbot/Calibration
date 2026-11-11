@@ -179,6 +179,26 @@ class Wave:
             raise Stop(f"{what}: motor tool rc {rc}: {res[-3:]}")
         self.arm_now, self.neck_now = list(arm_deg), clamp_neck(*neck)
 
+    def move_pins(self, overrides: dict):
+        """move non-arm joints (e.g. a slight leg stretch, the user's OK of 11 Nov) to new pinned angles, alone, at
+        <= MAX_RATE_DEG_S with the RAMP_MIN_S floor; the new angles are then held by every later command"""
+        unknown = [n for n in overrides if n not in self.pins]
+        if unknown:
+            raise ValueError(f"not pinnable here (moving arm/neck or unknown): {unknown}")
+        new = dict(self.pins, **{n: round(float(v), 2) for n, v in overrides.items()})
+        travel = max(abs(new[n] - self.pins[n]) for n in overrides)
+        ramp = round(max(RAMP_MIN_S, travel / MAX_RATE_DEG_S), 1)
+        self._gate()
+        argv = motion_argv(self.tool, spec(self.names, new, self.arm, self.arm_now, self.neck_now), ramp, ARM_HOLD_S,
+                           self.kp)
+        t0 = time.time()
+        rc, out = self.r.run(argv, timeout=ramp + ARM_HOLD_S + 30)
+        res = [ln for ln in out.splitlines() if "RESULT" in ln or "FAIL" in ln or "error" in ln.lower()]
+        self._event("pins", ramp=ramp, rc=rc, dt=round(time.time() - t0, 2), changed=overrides, result=res[-6:])
+        if rc != 0:
+            raise Stop(f"pins: motor tool rc {rc}")
+        self.pins = new
+
     def move_arm(self, name, deg):
         self._command(f"arm:{name}", deg, self.neck_now, arm_ramp(self.arm_now, deg), ARM_HOLD_S)
 
@@ -211,8 +231,10 @@ class Wave:
             rc, out = -1, "timeout"
         self._event("hand", pose=pose, rc=rc, dt=round(time.time() - t0, 2), tail=out.strip().splitlines()[-2:])
 
-    def run(self, only_burst=False, hand_pose="open"):
+    def run(self, only_burst=False, hand_pose="open", pins=None):
         self._event("start", arm=self.arm, frames=self.frames, kp=self.kp, start=self.start)
+        if pins:
+            self.move_pins(pins)
         if only_burst:
             self.burst("00-rest")
             return
@@ -243,6 +265,8 @@ def main(argv=None):
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--only-burst", action="store_true", help="one burst at the current pose, nothing moves")
     ap.add_argument("--no-hand", action="store_true")
+    ap.add_argument("--pins", default="", help="non-arm joints moved first and held there, e.g. "
+                    "'RightAnklePitch=-54,RightKneePitch=8' (deg; slow, alone)")
     a = ap.parse_args(argv)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -257,7 +281,8 @@ def main(argv=None):
             raise SystemExit(f"{a.tool} has no 'targets' mode (2.1.1 zeroes unlisted joints): refusing")
     w = Wave(robot, plan, a.arm, out, a.frames, a.kp, a.tool)
     try:
-        w.run(only_burst=a.only_burst, hand_pose=None if a.no_hand else "open")
+        pins = {kv.split("=")[0].strip(): float(kv.split("=")[1]) for kv in a.pins.split(",") if kv.strip()}
+        w.run(only_burst=a.only_burst, hand_pose=None if a.no_hand else "open", pins=pins or None)
     except Stop as e:
         w._event("stopped", reason=str(e))
         raise SystemExit(2)
