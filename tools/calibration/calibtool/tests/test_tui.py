@@ -717,3 +717,85 @@ def test_piper_interrupt_stops_the_playing_process(tmp_path):
     sp._proc = P()
     sp.interrupt()
     assert P.terminated and sp._cut
+
+
+# ---------------------------------------------------------------- 10 Nov: the voice behind the countdown
+
+
+class Recorder:
+    """a speaker that takes `each` seconds (of a fake clock) per item and records what it said and interrupts"""
+
+    def __init__(self, clock, each=1.4):
+        self.clock, self.each, self.said, self.cut = clock, each, [], 0
+
+    def say(self, text):
+        self.said.append(text)
+        self.clock[0] += self.each
+
+    def interrupt(self):
+        self.cut += 1
+
+
+def _bg(rec, clock):
+    bg = tui.Background.__new__(tui.Background)
+    import collections as co
+    import threading as th
+    bg.speaker, bg._q, bg._cv, bg.dropped, bg.current = rec, co.deque(), th.Condition(), 0, None
+    bg.clock = lambda: clock[0]
+    return bg
+
+
+def _drain(bg):
+    """run the speaking thread's loop by hand until the queue is empty"""
+    while bg._q:
+        text, kind, t = bg._q.popleft()
+        if kind == tui.COUNTDOWN and bg.clock() - t > tui.COUNTDOWN_LATE_S and tui._NUMBER.match(text):
+            bg.dropped += 1
+            continue
+        bg.current = kind
+        bg.speaker.say(text)
+        bg.current = None
+
+
+def test_a_late_countdown_skips_to_the_current_number():
+    clock = [0.0]
+    rec = Recorder(clock)
+    bg = _bg(rec, clock)
+    bg.say_prompt("Step back.", "countdown")
+    text, kind, t = bg._q.popleft()                       # the long first sentence is being said ...
+    bg.current = kind
+    for i, n in enumerate("4321"):                       # ... while the numbers come every second
+        clock[0] = 1.0 + i
+        bg.say_prompt(f"{n}.", "countdown")
+    rec.say(text)
+    bg.current = None
+    assert [x[0] for x in bg._q] == ["1."]              # only the newest number waits
+    _drain(bg)
+    assert rec.said == ["Step back."]                  # and it was already late: the screen shows it
+
+
+def test_the_motion_start_cuts_the_countdown_being_said():
+    clock = [0.0]
+    rec = Recorder(clock)
+    bg = _bg(rec, clock)
+    bg.current = "countdown"
+    bg.say_prompt("2.", "countdown")
+    bg.say_prompt("Moving the head now. About 1 minute.", "grid")
+    assert rec.cut == 1 and [x[0] for x in bg._q] == ["Moving the head now. About 1 minute."]
+
+
+def test_piper_synthesises_a_repeated_prompt_once(tmp_path):
+    binary, model = tmp_path / "piper", tmp_path / "voice.onnx"
+    binary.write_text(""); model.write_text("")
+    synth = []
+
+    def run(argv, **kw):
+        if argv[0] == str(binary):
+            synth.append(argv)
+            from pathlib import Path as P
+            P(argv[argv.index("--output_file") + 1]).write_bytes(b"RIFF")
+    sp = tui.PiperSay(binary=binary, model=model, run=run, wav=tmp_path / "say.wav")
+    for _ in range(3):
+        sp.say("4.")
+    sp.say("Good.")
+    assert len(synth) == 2

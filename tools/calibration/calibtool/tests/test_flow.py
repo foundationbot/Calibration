@@ -337,8 +337,8 @@ def test_a_whole_dry_run_session_in_order(tmp_path):
 def test_each_grid_starts_after_the_spoken_countdown(tmp_path):
     s = Session(tmp_path, keys=FULL_KEYS).run()
     texts = [x.text for x in s.says]
-    i = texts.index("Step back. Starting in 5.")
-    assert texts[i + 1:i + 5] == ["4.", "3.", "2.", "1."]
+    i = texts.index(fl.COUNTDOWN_TEXT)
+    assert texts[i + 1:i + 4] == ["3.", "2.", "1."]       # the voice says the last three; the screen counts 5..1
     ev = s.events()
     cd = [e["t"] for e in ev if e["kind"] == "countdown_done"]
     nc = [e["t"] for e in ev if e["kind"] == "neck_command"]
@@ -711,9 +711,9 @@ def test_every_grid_and_the_imu_sweep_say_start_halfway_and_done(tmp_path):
     texts = [x.text for x in s.says]
     starts = [i for i, x in enumerate(texts) if x.startswith("Moving the head now.")]
     assert len(starts) == 4                                    # two placements, the IMU sweep, the check grid
-    assert texts[starts[0]] == _minutes(len(POSES)) and texts[starts[0] - 1] == "1."
-    assert texts[starts[2]] == _minutes(len(imusweep.serpentine()))
-    assert texts[starts[3]] == _minutes(len(fl.CHECK_POSES))
+    assert texts[starts[0]].startswith("Moving the head now. About") and texts[starts[0] - 1] == "1."
+    assert texts[starts[2]] == fl.minutes_text(len(imusweep.serpentine()), fl.SWEEP_POSE_S)
+    assert texts[starts[3]].startswith("Moving the head now. About")
     for a in starts:
         rest = texts[a + 1:]
         done = rest.index(fl.GRID_DONE_TEXT)
@@ -760,7 +760,7 @@ def test_a_heartbeat_hold_in_the_grid_is_said_once(tmp_path):
     said = "The head stopped. The operator's screen stopped answering. Waiting for the operator."
     assert texts.count(said) == 1
     i = texts.index(said)
-    assert texts[i + 1] == "Step back. Starting in 5."            # after G: the countdown again
+    assert texts[i + 1] == fl.COUNTDOWN_TEXT            # after G: the countdown again
 
 
 @pytest.mark.parametrize("why,plain", [
@@ -817,7 +817,7 @@ def test_a_turned_head_goes_to_the_middle_before_a_placement_is_guided(tmp_path)
     texts = [x.text for x in s.says]
     i_home = next(i for i, t in enumerate(texts) if t.startswith("The head is turned"))
     i_intro = next(i for i, t in enumerate(texts) if t.startswith("Placement 1"))
-    assert i_home < i_intro and "Step back. Starting in 5." in texts[i_home:i_intro]
+    assert i_home < i_intro and fl.COUNTDOWN_TEXT in texts[i_home:i_intro]
 
 
 def test_the_next_placement_waits_until_the_board_has_moved(tmp_path):
@@ -907,10 +907,12 @@ def test_the_finish_screen_lists_e_and_x_with_what_they_do(tmp_path):
     assert "E = more placements" in txt and "X = decide again accepting 5 judged regions instead of 6" in txt
 
 
-def test_a_full_grid_is_said_as_about_2_minutes():
-    """10 Nov, phantom11: 49 poses took 118-119 s; rounding up said "About 3 minutes" """
-    assert fl.minutes_text(49) == "Moving the head now. About 2 minutes."
-    assert fl.minutes_text(7) == "Moving the head now. About 1 minute."
+def test_the_spoken_time_is_the_measured_one():
+    """10 Nov, phantom11: 49 poses took 118-119 s (2.5 s each); the operator: 'fix about 2 min to the real number'"""
+    assert fl.minutes_text(49, 2.5) == "Moving the head now. About 2 minutes."
+    assert fl.minutes_text(49, 1.4) == "Moving the head now. About 70 seconds."
+    assert fl.minutes_text(7, 2.5) == "Moving the head now. About 20 seconds."
+    assert fl.minutes_text(80, 2.5) == "Moving the head now. About 3 and a half minutes."
 
 
 def test_coverage_notes_are_on_screen_not_spoken_and_an_extra_says_what_it_is_for(tmp_path):

@@ -19,6 +19,7 @@ their age), for rooms where a voice is not wanted."""
 import collections
 import json
 import os
+import re
 import subprocess
 import tempfile
 import textwrap
@@ -491,6 +492,7 @@ class SpdSay:
 
 
 PIPER_DIR = Path.home() / ".local" / "share" / "calib-voice"
+PIPER_CACHE_N = 120             # synthesised prompts kept (a few MB in the temp dir)
 
 
 class PiperSay:
@@ -509,17 +511,41 @@ class PiperSay:
     def available(self) -> bool:
         return self.binary.is_file() and self.model.is_file()
 
+    def _wav_for(self, text):
+        """the wav of text: synthesised once and kept (10 Nov: repeated short prompts -- countdown numbers, "Good.",
+        "Not yet." -- paid piper's start every time and the voice fell behind the screen)"""
+        cache = getattr(self, "_cache", None)
+        if cache is None:
+            cache = self._cache = {}
+        hit = cache.get(text)
+        if hit is not None and Path(hit).is_file():
+            return hit
+        import hashlib
+        wav = str(Path(self.wav).with_name(f"calibtool-say-{os.getpid()}-"
+                                          f"{hashlib.sha1(text.encode()).hexdigest()[:12]}.wav"))
+        # a single word or number gets no trailing sentence pause (it made "4." last 1.0 s of audio)
+        pause = 0.0 if len(text.split()) <= 1 else self.sentence_silence
+        self.run([str(self.binary), "--model", str(self.model), "--length_scale", str(self.length_scale),
+                  "--sentence_silence", str(pause), "--output_file", wav],
+                 input=(text.strip() + "\n").encode(), timeout=60, capture_output=True)
+        if len(cache) >= PIPER_CACHE_N:
+            old = next(iter(cache))
+            try:
+                os.unlink(cache.pop(old))
+            except OSError:
+                pass
+        cache[text] = wav
+        return wav
+
     def say(self, text):
         self._cut = False
-        self.run([str(self.binary), "--model", str(self.model), "--length_scale", str(self.length_scale),
-                  "--sentence_silence", str(self.sentence_silence), "--output_file", self.wav],
-                 input=(text.strip() + "\n").encode(), timeout=60, capture_output=True)
+        wav = self._wav_for(text)
         if self._cut:
             return                                      # interrupted while synthesising
         if self.run is subprocess.run:
             # played as a process interrupt() can stop (10 Nov: "it does not need to finish the sentence for M and Y
             # if the next thing is pressed")
-            self._proc = subprocess.Popen([self.player, self.wav], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self._proc = subprocess.Popen([self.player, wav], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             try:
                 self._proc.wait(timeout=90)
             except subprocess.TimeoutExpired:
@@ -527,7 +553,7 @@ class PiperSay:
             finally:
                 self._proc = None
         else:
-            self.run([self.player, self.wav], timeout=90)
+            self.run([self.player, wav], timeout=90)
 
     def interrupt(self):
         """stop the sentence being played now"""
@@ -577,6 +603,13 @@ class TextPrompts:
 
 
 SUPERSEDED = frozenset({"correction", "lost", "status", "still"})   # a newer one of these makes the queued ones stale
+# 10 Nov: the voice said "5 4 3 2 1" while the head already moved (each spoken number took > 1 s). A countdown number
+# replaces the queued ones and is not said once it is COUNTDOWN_LATE_S old; the motion's start (or a HOLD) cuts the
+# countdown being said
+COUNTDOWN = "countdown"
+COUNTDOWN_LATE_S = 0.9
+ENDS_COUNTDOWN = frozenset({"grid", "hold"})
+_NUMBER = re.compile(r"^\s*\d+\.?\s*$")
 
 
 class Background:
@@ -589,6 +622,8 @@ class Background:
         self._q = collections.deque()
         self._cv = threading.Condition()
         self.dropped = 0
+        self.current = None                 # the kind being said now
+        self.clock = time.monotonic
         threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self):
@@ -596,20 +631,39 @@ class Background:
             with self._cv:
                 while not self._q:
                     self._cv.wait()
-                text, _ = self._q.popleft()
+                text, kind, t = self._q.popleft()
+                if kind == COUNTDOWN and self.clock() - t > COUNTDOWN_LATE_S and _NUMBER.match(text):
+                    self.dropped += 1       # a number already late: the screen shows it, the voice skips it
+                    continue
+                self.current = kind
             try:
                 self.speaker.say(text)
             except Exception:  # noqa: BLE001  (a speech failure must not take the TUI down)
                 pass
+            finally:
+                self.current = None
 
     def say_prompt(self, text, kind=None):
+        cut = False
         with self._cv:
             if kind in SUPERSEDED:
                 keep = [x for x in self._q if x[1] not in SUPERSEDED]
                 self.dropped += len(self._q) - len(keep)
                 self._q = collections.deque(keep)
-            self._q.append((text, kind))
+            if kind == COUNTDOWN or kind in ENDS_COUNTDOWN:
+                keep = [x for x in self._q if x[1] != COUNTDOWN]
+                self.dropped += len(self._q) - len(keep)
+                self._q = collections.deque(keep)
+                cut = kind in ENDS_COUNTDOWN and self.current == COUNTDOWN
+            self._q.append((text, kind, self.clock()))
             self._cv.notify()
+        if cut:
+            f = getattr(self.speaker, "interrupt", None)
+            if f is not None:
+                try:
+                    f()
+                except Exception:  # noqa: BLE001
+                    pass
 
     def say(self, text):
         self.say_prompt(text, None)

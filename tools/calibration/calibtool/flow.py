@@ -99,7 +99,9 @@ def snake(poses) -> list:
 
 
 CHECK_POSES = snake([(p, y) for p in (-12.0, 0.0, 12.0) for y in (-24.0, -12.0, 0.0, 12.0, 24.0)])
-POSE_S = 2.5                    # measured seconds per grid pose (move + capture), for the spoken estimate
+SWEEP_POSE_S = 5.6              # the IMU sweep's poses (longer still holds): 84 s for 15 on phantom11
+POSE_S = 1.6                    # seconds per grid pose until this session has measured its own (fast neck timing;
+                                # step 08's timing measured 2.5 on phantom11)
 GRID_DONE_TEXT = "Head sweep done. You can move the board now."
 HALFWAY_TEXT = "Halfway through."
 MOTION_PHASES = frozenset({"GRID", "CHECK_GRID", "IMU_SWEEP"})
@@ -112,6 +114,8 @@ NATIVE = dp.NATIVE
 MOTORS_TEXT = ("Motor check. If the robot hangs on the gantry and nobody is at its head, press Y to enable the motors.")
 FLAT_TEXT = "Put the board flat on the floor in front of the robot. Then step back."
 FINISH_TEXT = "The session is done. Press D to disable the motors, or K to keep them on."
+COUNTDOWN_TEXT = "Step back."
+SPOKEN_COUNT = 3            # the countdown numbers said aloud (the screen shows all of them)
 HOME_TOL_DEG = 3.0          # the head counts as straight within this of neck 0/0 (the guidance assumes it)
 HOME_TEXT = "The head is turned. Moving it to the middle."
 # 10 Nov, phantom11: the board left where the last grid saw it was accepted at once for the next placement (its band
@@ -193,9 +197,19 @@ def plain_reason(why) -> str:
     return "a safety check stopped it"
 
 
-def minutes_text(n_poses) -> str:
-    m = max(1, int(n_poses * POSE_S / 60.0 + 0.5))     # nearest minute (ceil said 3 for a 2-minute grid)
-    return f"Moving the head now. About {m} minute{'' if m == 1 else 's'}."
+def duration_words(s) -> str:
+    """seconds as said: under 2 minutes to 10 s ("70 seconds"), else to half a minute ("2 and a half minutes")"""
+    s = max(0.0, float(s))
+    if s < 115:
+        return f"{max(10, int(round(s / 10.0)) * 10)} seconds"
+    h = int(round(s / 30.0))
+    m, half = divmod(h, 2)
+    return f"{m} and a half minutes" if half else f"{m} minutes"
+
+
+def minutes_text(n_poses, pose_s=None) -> str:
+    """10 Nov: the time from this session's measured seconds per pose (pose_s), not a fixed guess"""
+    return f"Moving the head now. About {duration_words(n_poses * (pose_s or POSE_S))}."
 
 
 def hold_text(why) -> str:
@@ -370,12 +384,16 @@ class FullFlow:
             self._enter(phase)
             self._event("countdown_start", phase=phase)
             self._upd(countdown=n)
-            self._say("countdown", f"Step back. Starting in {n}.")
+            # 10 Nov: "Step back. Starting in 5." took 4.3 s to say and every number 1.4 s, so the voice said
+            # "5 4 3 2 1" while the head already moved. The screen counts n..1; the voice says "Step back." and the
+            # last SPOKEN_COUNT numbers only
+            self._say("countdown", COUNTDOWN_TEXT)
             t0, held = self.mono(), False
             for i in range(n, 0, -1):
                 if i < n:
                     self._upd(countdown=i)
-                    self._say("countdown", f"{i}.")
+                    if i <= SPOKEN_COUNT:
+                        self._say("countdown", f"{i}.")
                 while self.mono() < t0 + (n - i + 1):
                     self.m.tick()
                     ph = self.m.phase
@@ -580,11 +598,12 @@ class FullFlow:
                 continue
             return
 
-    def _moving(self, n_poses):
-        """after the countdown: say how long the head moves (the poses left)"""
+    def _moving(self, n_poses, pose_s=None):
+        """after the countdown: say how long the head moves (the poses left; pose_s: seconds per pose, default this
+        session's measured grid pose)"""
         if self._sweep is None:
             self._sweep = [int(n_poses), 0, False]
-        self._say("grid", minutes_text(n_poses))
+        self._say("grid", minutes_text(n_poses, pose_s or self.fl.get("pose_s")))
 
     def _progress(self):
         """one pose done: "Halfway through." once"""
@@ -627,13 +646,21 @@ class FullFlow:
         self._event(kind, **kw)
         if kind == "pose":
             self._progress()
+            now = self.mono()
+            last = getattr(self, "_last_pose_t", None)
+            if last is not None and self._pose_done > 0 and now - last < 10.0:
+                # this session's seconds per pose (a running mean; a pause between grids is not a pose)
+                old = self.fl.get("pose_s")
+                self.fl["pose_s"] = round(now - last if old is None else 0.8 * old + 0.2 * (now - last), 3)
+            self._last_pose_t = now
             self._pose_done += 1
             cur = self.fl.get("current")
             if cur is not None and self._grid_kind == "collect":
                 cur["poses"] = [list(p) for p in self._grid_poses[self._pose_done:]]
             self._upd(grid={"placement": kw.get("placement"), "pose": self._pose_done, "of": len(self._grid_poses),
                             "last": kw.get("record"),
-                            "eta_s": round(max(0, len(self._grid_poses) - self._pose_done) * POSE_S)})
+                            "eta_s": round(max(0, len(self._grid_poses) - self._pose_done) *
+                                           (self.fl.get("pose_s") or POSE_S))})
             if self._grid_kind == "collect":
                 self._quality()
 
@@ -968,7 +995,7 @@ class FullFlow:
         self._countdown("IMU_SWEEP")
         poses = imusweep.serpentine()
         self._sweep = None
-        self._moving(len(poses))
+        self._moving(len(poses), SWEEP_POSE_S)
 
         def log(line):
             self._event("sweep_pose", line=line)
@@ -984,7 +1011,7 @@ class FullFlow:
                 n = self._arm()
                 self._countdown("IMU_SWEEP")
                 self._sweep = None
-                self._moving(len(poses))
+                self._moving(len(poses), SWEEP_POSE_S)
         self._home(n)
         self._moved()
         try:
