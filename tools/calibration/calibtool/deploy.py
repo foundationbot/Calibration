@@ -51,7 +51,10 @@ CONTAINER_CFG_DIR = "/etc/okvis"
 OKVIS_SH = "/data/okvis-perf/deployment/okvis.sh"
 OKVIS_NS = "positronic"
 OKVIS_DS = "okvis2x"
-OKVIS_LABEL = "app.kubernetes.io/name=okvis2x"
+# 10 Nov: the scheduled DaemonSet's pods carry app.kubernetes.io/name=okvis2x (namespace positronic); on okvis.sh
+# robots (phantom10, phantom11) OKVIS is the pod okvis/okvis2x labelled app.kubernetes.io/name=okvis. With only the
+# first, the tool never found OKVIS there: every deploy waited UP_TIMEOUT_S and read "not verified"
+OKVIS_LABEL = "app.kubernetes.io/name in (okvis2x,okvis)"
 OKVIS_CONTAINER = "okvis2x"
 HEAD_CAMERA_JSON = "/etc/phantom/head_camera.json"
 DEPENDENT_ROOTS = ("/etc/phantomos", "/etc/phantom", "/etc/okvis", "/opt/configs", "/data/configs")
@@ -335,9 +338,14 @@ def crash_loop(pods) -> bool:
     return any(p.get("waiting") == "CrashLoopBackOff" or int(p.get("restarts") or 0) >= CRASH_RESTARTS for p in pods)
 
 
+# the reader's KB4T line: "KB4T pinhole camera 0" (older builds) or "KB4T (VIO: equidistant k1..k4) pinhole camera 0"
+# (10 Nov, phantom10's build: the fixed string never matched and every deploy read "not verified")
+KB4T_LINE = re.compile(r"KB4T\b[^\n]{0,60}?pinhole camera")
+
+
 def log_has(lines, sha, kb4t) -> dict:
     txt = "\n".join(lines)
-    return {"log_sha": bool(sha) and f"({sha})" in txt, "kb4t_line": "KB4T pinhole camera" in txt if kb4t else None}
+    return {"log_sha": bool(sha) and f"({sha})" in txt, "kb4t_line": bool(KB4T_LINE.search(txt)) if kb4t else None}
 
 
 # ---------------------------------------------------------------- dependents

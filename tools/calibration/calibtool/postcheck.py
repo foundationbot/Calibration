@@ -26,7 +26,7 @@ from pathlib import Path
 import numpy as np
 
 from calibtool import decide as dc
-from calibtool.deploy import crash_loop  # noqa: F401  (re-exported: the post-check's crash-loop rule)
+from calibtool.deploy import KB4T_LINE, crash_loop  # noqa: F401  (re-exported: the post-check's crash-loop rule)
 
 SYNC_MS = 0.5
 # agreed with the user on 10 Nov 2026 (were placeholders 0.10 / 0.10 / 0.30)
@@ -146,7 +146,7 @@ class OkvisCheck:
 def okvis_check(log_lines, sha12, latency_s=None, baseline_latency_s=None, rect_new=None, rect_old=None,
                 floor_tilt_deg=None) -> OkvisCheck:
     txt = "\n".join(log_lines or [])
-    kb4t = "KB4T pinhole camera" in txt
+    kb4t = bool(KB4T_LINE.search(txt))
     sha = bool(sha12) and f"({sha12})" in txt
     reasons = []
     if not sha:

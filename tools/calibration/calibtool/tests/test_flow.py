@@ -1030,3 +1030,17 @@ def test_f_during_an_extra_finishes_the_collection(tmp_path):
     assert pressed and "Collection finished. Next the IMU sweep, then the fit." in texts
     assert not any(t.startswith("Extra placement, 2") for t in texts)
     assert "collect_finished_by_operator" in s.kinds() and "sweep_done" in s.kinds() and s.fit_calls == 1
+
+
+def test_d_disables_motors_this_session_only_took_over(tmp_path):
+    """10 Nov, phantom10: 'disabling motors at end does not disable' -- the session had taken the motors over"""
+    s = Session(tmp_path, keys=FULL_KEYS)
+    s.motors.on = True                                  # on before the session: Y takes them over, nothing sent
+    s.run()
+    assert s.m.phase == "DONE" and "disable-motors" in " ".join(s.lines("motors"))
+    assert any(e["kind"] == "motors_disabled" for e in s.events())     # (a dry run records the command only)
+
+
+def test_okvis_pods_are_found_on_okvis_sh_robots_too():
+    """10 Nov: phantom10/11's OKVIS pod is okvis/okvis2x labelled app.kubernetes.io/name=okvis"""
+    assert "okvis2x" in dp.OKVIS_LABEL and "okvis)" in dp.OKVIS_LABEL and " in (" in dp.OKVIS_LABEL

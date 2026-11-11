@@ -549,3 +549,13 @@ def test_okvis_log_reads_the_start_where_the_entrypoint_names_the_config():
     lines = dp.okvis_log(R(), pods=[{"ns": "okvis", "name": "okvis2x"}])
     assert dp.log_has(lines, "abcdef123456", True)["log_sha"]
     assert any(a.startswith("--limit-bytes") for a in calls[0]) and any(a.startswith("--tail") for a in calls[1])
+
+
+def test_the_kb4t_line_of_both_okvis_builds_counts():
+    """10 Nov, phantom10: 'KB4T (VIO: equidistant k1..k4) pinhole camera 0 with T_SC=...' never matched the fixed
+    string, so every deploy read 'not verified'"""
+    new = ["I20261111 ViParametersReader.cpp:264] KB4T (VIO: equidistant k1..k4) pinhole camera 0 with T_SC=[0.99"]
+    old = ["KB4T pinhole camera 0"]
+    for lines in (new, old):
+        assert dp.log_has(lines, None, True)["kb4t_line"] is True
+    assert dp.log_has(["KB4T rectification (stereo network): camera 0 p1=0.0007"], None, True)["kb4t_line"] is False

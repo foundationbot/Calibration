@@ -1354,8 +1354,11 @@ class FullFlow:
     def _motor_key(self) -> bool:
         """one D: the warning first, the disable on the second -> True once disabled (or nothing to disable)"""
         fl = self.fl
-        if not fl.get("motors_by_us"):
-            self._upd(motors_prompt="The motors were not enabled by this session: nothing to disable.")
+        # 10 Nov, phantom10: a session that had taken over motors enabled earlier refused D ("not enabled by this
+        # session: nothing to disable") and the operator had to restart the master. D is the operator's call: it
+        # disables whoever enabled them (the drop warning first)
+        if not self.robot.dry_run and not fl.get("disable_armed") and self.robot.motors_on() is False:
+            self._upd(motors_prompt="The motors are already off.")
             return True
         if not fl.get("disable_armed"):
             fl["disable_armed"] = True
