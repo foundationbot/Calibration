@@ -29,6 +29,7 @@ import json
 import os
 import select
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -311,6 +312,9 @@ class Machine:
         if k == "A":
             self.to("ABORTED", "abort key")
             return True, "aborting: what moves finishes its pose, then the robot goes back as it was"
+        if k == "S" and self.phase == "BLOCKED":
+            self.state["start_master"] = True
+            return True, "starting the motor master (if it is not running); the checks run again in a few seconds"
         if k == "G":
             if self.phase != "HOLD":
                 return False, f"G only continues after a HOLD (now {self.phase})"
@@ -1049,10 +1053,23 @@ def cmd_run(a):
     d.start_loop()
     if full and d.flow is not None:
         threading.Thread(target=run_flow, args=(m, d.flow), name="calibd-flow", daemon=True).start()
+    restart, last_check = False, time.time()
     try:
         while not stop.is_set():
             stop.wait(0.5)
             d.watch_loop()
+            if m.phase == "BLOCKED":
+                # 10 Nov, phantom10: rebooted, the motor master (not started at boot) inactive -> BLOCKED for good;
+                # now S starts the master, the checks run again every BLOCKED_RECHECK_S, and once green calibd
+                # starts itself again (a fresh preflight and session setup, the same session)
+                if m.state.pop("start_master", None):
+                    start_master(m)
+                    last_check = 0.0
+                if time.time() - last_check >= BLOCKED_RECHECK_S:
+                    last_check = time.time()
+                    if blocked_recheck(d, m, probes, prof):
+                        restart = True
+                        stop.set()
     finally:
         d.stop_flag.set()
         if d._thread is not None:
@@ -1070,7 +1087,47 @@ def cmd_run(a):
             (dirs.root / "pid").unlink()
         except FileNotFoundError:
             pass
+    if restart:
+        os.execv(sys.executable, [sys.executable, "-m", "calibtool.daemon", *sys.argv[1:]])
     return 0
+
+
+BLOCKED_RECHECK_S = 10.0
+
+
+def blocked_recheck(d, m, probes, prof, run_preflight=None) -> bool:
+    """the preflight again while BLOCKED: the screen gets the new checks; True once it is green (the caller restarts
+    calibd for a clean setup)"""
+    from calibtool import preflight as pf
+    try:
+        res = (run_preflight or pf.run)(probes, prof)
+    except Exception as e:  # noqa: BLE001  (the next round tries again)
+        m.store.event("preflight_recheck_error", t=time.time(), error=f"{type(e).__name__}: {e}")
+        return False
+    m.state["checks"] = [c.as_dict() for c in res.checks]
+    green = pf.green(res.checks)
+    m.store.event("preflight_recheck", t=time.time(), green=green,
+                  failed=[c.name for c in res.checks if c.status == "fail"])
+    if green:
+        m.state["banner"] = ["preflight green now: calibd starts again for a clean setup (a few seconds)"]
+    else:
+        m.state["banner"] = d.banner()
+    m.save()
+    return green
+
+
+def start_master(m, run=subprocess.run):
+    """S while BLOCKED (approved by the operator on 10 Nov with R): systemctl start dma-ethercat when it is inactive"""
+    try:
+        r = run(["systemctl", "is-active", "dma-ethercat"], capture_output=True, text=True, timeout=10)
+        if r.stdout.strip() == "active":
+            m.store.event("start_master", t=time.time(), done=False, why="already active")
+            return
+        r = run(["systemctl", "start", "dma-ethercat"], capture_output=True, text=True, timeout=90)
+        m.store.event("start_master", t=time.time(), done=r.returncode == 0,
+                      why=(r.stdout or "").strip()[-200:] + (r.stderr or "").strip()[-200:])
+    except Exception as e:  # noqa: BLE001
+        m.store.event("start_master", t=time.time(), done=False, why=f"{type(e).__name__}: {e}")
 
 
 def _full_flow(prof, m, d, dirs, cap, pools, rig, size, res, probes, dry_run, session):

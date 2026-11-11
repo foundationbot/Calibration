@@ -44,7 +44,9 @@ OKVIS_OPT = "O = skip the OKVIS check"
 _GUIDE = f"C = can't put it there | {OKVIS_OPT} | A = abort"
 _MOVING = f"A = abort (the pose in progress finishes, then nothing more moves) | {OKVIS_OPT}"
 _AFTER = "D = disable the motors (twice: the warning first)"
-FULL_KEYS = {"PREFLIGHT": "A = abort", "BLOCKED": "A = abort",
+FULL_KEYS = {"PREFLIGHT": "A = abort",
+             "BLOCKED": "S = start the motor master (when it is not running) | the checks run again every 10 s | "
+                        "A = abort",
              "READY": f"M = motors (the enable screen) | {OKVIS_OPT} | A = abort",
              "MOTORS": "Y = the robot hangs on the gantry and nobody is at its head: enable the motors | "
                        "R = restart the motor master (motors off) | A = abort",

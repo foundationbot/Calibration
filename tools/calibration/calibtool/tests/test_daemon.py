@@ -7,6 +7,7 @@ import socket
 import threading
 import time
 from concurrent.futures import Future
+from types import SimpleNamespace
 
 import pytest
 
@@ -1110,3 +1111,35 @@ def test_a_session_error_is_said_on_the_screen_not_a_silent_stop(tmp_path):
     dm.run_flow(m, Boom())
     assert any("FileNotFoundError" in b and "urdf" in b for b in m.state["flow_banner"])
     assert kinds(m.store)[-1] == "flow_error"
+
+
+def test_blocked_s_asks_for_the_motor_master_and_the_recheck_restarts_once_green(tmp_path):
+    """10 Nov, phantom10: rebooted, the motor master inactive -> BLOCKED for good"""
+
+    m = full(tmp_path)
+    m.to("BLOCKED", "test")
+    m.key("S")
+    assert m.state.get("start_master") is True and m.state["last_key"]["accepted"]
+    bad = SimpleNamespace(checks=[pf.Check("master", "fail", "dma-ethercat is inactive", "motion"),
+                                  pf.Check("imu", "fail", "no ring", "collect")])
+    good = SimpleNamespace(checks=[pf.Check("master", "ok", "active", "motion")])
+    d = SimpleNamespace(banner=lambda: ["preflight failed: imu"])
+    assert dm.blocked_recheck(d, m, None, None, run_preflight=lambda p, q: bad) is False
+    assert m.state["banner"] == ["preflight failed: imu"]
+    assert dm.blocked_recheck(d, m, None, None, run_preflight=lambda p, q: good) is True
+    assert "starts again" in m.state["banner"][0]
+
+
+def test_start_master_starts_only_an_inactive_master(tmp_path):
+    m = full(tmp_path)
+    calls = []
+
+    def run(argv, **kw):
+        calls.append(argv)
+        return SimpleNamespace(returncode=0, stdout="inactive\n" if "is-active" in argv else "", stderr="")
+    dm.start_master(m, run=run)
+    assert ["systemctl", "start", "dma-ethercat"] in calls
+    calls.clear()
+    dm.start_master(m, run=lambda argv, **kw: calls.append(argv) or SimpleNamespace(returncode=0, stdout="active\n",
+                                                                                      stderr=""))
+    assert ["systemctl", "start", "dma-ethercat"] not in calls
