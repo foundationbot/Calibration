@@ -16,7 +16,7 @@ Plain numbered prompts (input()), nothing to remember:
        new calibration, the placement trial, status. When a dead session still holds the producer lease, a new
        session first runs the robot's own self-restore for it (`python -m calibtool restore --if-stale-hours 0`:
        producer as saved, OKVIS back, the lease released), shows its output, and starts nothing if it failed.
-  4. The voice: asked once per start ("1) Piper (recommended) 2) espeak 3) text on screen"), remembered in
+  4. The voice: asked once per start ("1) Piper voice 2) text on screen"; text without Piper), remembered in
      ~/.config/calibtool/laptop.json (with the robot) and offered as the default next time; the menu works without
      that file.
 The kit is always copied (cli.bootstrap) before calibd is started or restarted. Stdlib only."""
@@ -33,7 +33,8 @@ from calibtool import cli, daemon, profile as prof_mod, robots
 
 ENDED = daemon.TERMINAL             # DONE, ABORTED, STOPPED_LOUD: nothing to continue
 SHOW_UNFINISHED = 3                 # the newest unfinished sessions offered to continue
-VOICES = (("piper", "Piper (recommended)"), ("espeak", "espeak"), ("text", "text on screen"))
+# 10 Nov: espeak is not offered ("why is espeak even an option?"); a PC without Piper shows the prompts as text
+VOICES = (("piper", "Piper voice (recommended)"), ("text", "text on screen, no voice"))
 PROBE_MARK = "calibtool-menu-probe"
 
 # Read-only look at <root> (argv[1]) on the robot, stdlib only (no kit needed): the lease, the lock's last holder, the
@@ -323,10 +324,14 @@ class Menu:
         return 0 if st in ("done", "nothing-to-do", "dry-run", "declined") else 1
 
     def pick_voice(self) -> str:
+        """Piper or text on screen; the menu's text says the prompt is on screen either way"""
         if self.voice:
             return self.voice
         keys = [k for k, _ in VOICES]
         last = self.cfg.get("voice") if self.cfg.get("voice") in keys else "piper"
+        if not piper_available():
+            self.out("  Piper is not installed on this PC: the prompts are shown as text on screen.")
+            return "text"
         d = keys.index(last)
         line = "  ".join(f"{i}) {t}" for i, (_, t) in enumerate(VOICES, 1))
         while True:
@@ -340,7 +345,7 @@ class Menu:
             if a.lower() in keys:
                 v = a.lower()
                 break
-            self.out(f"  type 1, 2 or 3")
+            self.out(f"  type 1 or 2")
         self.cfg["voice"] = v
         save_cfg(self.cfg_path, self.cfg)
         return v
@@ -481,3 +486,11 @@ def all_profiles() -> list:
 
 def main(robot=None, voice=None, **kw) -> int:
     return Menu(voice=voice, **kw).main(robot)
+
+
+def piper_available() -> bool:
+    try:
+        from calibtool import tui
+        return tui.PiperSay().available()
+    except Exception:  # noqa: BLE001
+        return False

@@ -9,6 +9,12 @@ pytest.importorskip("yaml")
 
 from calibtool import menu, profile  # noqa: E402
 
+
+@pytest.fixture(autouse=True)
+def _piper_installed(monkeypatch):
+    """the tests run on a box without the Piper files; a test about a PC without Piper says so itself"""
+    monkeypatch.setattr(menu, "piper_available", lambda: True)
+
 KIT = "kit-laptop"
 NOW = 1_762_800_000.0          # robot clock of the fake probe
 LIVE_SID, DEAD_SID = "20261110-140500-P10", "20261110-123252-P10"
@@ -223,7 +229,7 @@ def test_a_failed_restore_starts_nothing_and_goes_back_to_the_menu(tmp_path):
 
 
 def test_a_live_session_running_this_kit_is_attached_as_it_is(tmp_path):
-    op = Op("1", "1", "3")
+    op = Op("1", "1", "2")
     r = Robot([probe([sess(LIVE_SID, "HOLD", live=True)], lease={"session": LIVE_SID, "heartbeat": NOW - 30})])
     rc, attached = run(op, r, tmp_path)
     t = op.transcript
@@ -287,16 +293,26 @@ def test_status_only_prints_the_state_and_comes_back(tmp_path):
 # ------------------------------------------------------------------ voice
 
 
-def test_voice_is_asked_remembered_and_offered_as_the_default(tmp_path):
+def test_voice_is_asked_remembered_and_offered_as_the_default(tmp_path, monkeypatch):
+    monkeypatch.setattr(menu, "piper_available", lambda: True)
     lv = probe([sess(LIVE_SID, "HOLD", live=True)])
     op = Op("1", "1", "2")
     run(op, Robot([lv]), tmp_path)
-    assert "1) Piper (recommended)" in op.transcript and "3) text on screen" in op.transcript
+    assert "1) Piper voice (recommended)" in op.transcript and "2) text on screen" in op.transcript
+    assert "espeak" not in op.transcript                  # 10 Nov: not offered
     cfg = json.loads((tmp_path / "laptop.json").read_text())
-    assert cfg["voice"] == "espeak" and cfg["robot"] == "phantom10"
+    assert cfg["voice"] == "text" and cfg["robot"] == "phantom10"
     op2 = Op("", "1", "")
     _, attached = run(op2, Robot([lv]), tmp_path)
-    assert "Enter = 2" in op2.transcript and attached[0][2] == "espeak"
+    assert "Enter = 2" in op2.transcript and attached[0][2] == "text"
+
+
+def test_a_pc_without_piper_shows_the_prompts_as_text(tmp_path, monkeypatch):
+    monkeypatch.setattr(menu, "piper_available", lambda: False)
+    lv = probe([sess(LIVE_SID, "HOLD", live=True)])
+    op = Op("1", "1")
+    _, attached = run(op, Robot([lv]), tmp_path)
+    assert "Piper is not installed" in op.transcript and attached[0][2] == "text"
 
 
 def test_the_menu_works_without_a_writable_config(tmp_path):
