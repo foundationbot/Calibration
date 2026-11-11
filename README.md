@@ -1,5 +1,7 @@
 # Calibration
 
+Tool for voice assisted stereo, imu and autonomous hand eye calibration.
+
 `calib` calibrates a robot's **head stereo cameras** from start to finish:
 - it tells you, by voice, where to put the calibration board;
 - it moves the head over the board;
