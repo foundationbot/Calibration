@@ -1,0 +1,52 @@
+{
+ "robot": "phantom10",
+ "arm": "Left",
+ "source": "phantom14 wave-2 measured poses (L mirrored); MuJoCo clearance >= 3.3 cm incl. sag x1.5 (plan_p10.py, snap-phantom10-1110-2304)",
+ "moves": [
+  {
+   "name": "lift",
+   "deg": [
+    -35.0,
+    10.0,
+    62.13,
+    -14.26,
+    16.8,
+    -9.09,
+    14.65
+   ],
+   "burst": false
+  },
+  {
+   "name": "stage",
+   "deg": [
+    -20,
+    8,
+    -6,
+    -65,
+    16.8,
+    -9.09,
+    14.65
+   ],
+   "burst": false
+  },
+  {
+   "name": "pL07",
+   "deg": [
+    -58.19,
+    21.24,
+    2.6,
+    -42.61,
+    -46.34,
+    -22.83,
+    39.91
+   ],
+   "burst": true,
+   "necks": [
+    [
+     10,
+     0
+    ]
+   ]
+  }
+ ]
+}
