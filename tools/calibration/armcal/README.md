@@ -11,7 +11,7 @@ code here: capture (arm motion, bursts) is H2/H3.
 | `urdf` | the URDF in memory: chains, origin changes, the corrected file's writer | `armfk.py` + phantom14 `urdfx/urdfvar.py` |
 | `frames` | a burst's camera in the Head / Torso / Pelvis, **through the URDF passed in** | `frames.py` (no hard-coded URDF, no `BURST_URDF` patch; box-pick's level frame left out) |
 | `mesh` | OBJ loading, area sampling, z-buffer splat, visibility | `mesh.py`, verbatim |
-| `meshfit` | B0: one capture's forearm + wrist meshes matched in the depth (point-to-plane ICP) | `meshfit.py`: `fit_pose`, `view_gate` (B1/B2/B-neck/RGB term left out) |
+| `meshfit` | B0: one capture's forearm + wrist meshes matched in the depth (point-to-plane ICP); the robust solver (readb2) | `meshfit.py`: `fit_pose`, `view_gate` (B1/B2/B-neck/RGB term left out) |
 | `readb` | burst file -> capture record, either arm; CLI | `hand_check.py` (load_pose, sides, motion/view checks) + phantom14 `urdfx/fitrun.py` (the record) |
 | `urdffit` | stage 2: models, fit, standard errors, condition, leave-one-arm-pose-out CV, the URDF writer; CLI | phantom14 `urdfx/{predict,twoarm}.py` + H-1's `h1.py` |
 | `meshes/` | the CAD meshes of both arms' ElbowPitch, WristYaw and WristRoll links (3.6 MB OBJ) | Moonstone `~/burst-pc/meshes/cycloidal_arm/` (allowed in this public repo, plan 9.1 #2) |
@@ -27,8 +27,13 @@ python3 -m armcal.urdffit --right right.json --left left.json --urdf ROBOT.urdf 
 ```
 
 - `--urdf` is the URDF the robot's consumers read now; the fit corrects it.
-- `readb --frames N` fuses only the first N depth frames (a shorter burst); `--reference` runs the matcher exactly
-  as on phantom14 (about 80 s per capture on one Moonstone core); `--overlay DIR` writes the match pictures.
+- `readb --frames N` fuses only the first N depth frames (a shorter burst); `--overlay DIR` writes the match
+  pictures; `--jobs N` matches N captures at once.
+- `readb --matcher`:
+  - `robust` (the default since readb2): two passes per capture, clean only when they agree within 3 mm;
+  - `fast`: the phantom14 algorithm's numbers, as in the stored records;
+  - `reference` (= `--reference`): that algorithm exactly as it ran on phantom14, about 80 s per capture on one
+    Moonstone core.
 
 ## The C++ module `_burstfusion` is not needed
 
@@ -37,14 +42,37 @@ Read B used only `run(...).depth.depth` (the fused depth) from it: `hand_check.l
 `fuse.py` is that `fuseDepth` in numpy. It equals the stored C++ fusions of phantom14's bursts to float rounding
 (`tests/test_p14_replay.py`), and on the robot it needs numpy only: no aarch64 build and no pybind11.
 
-## Speed
+## Speed and robustness
 
-`meshfit.FitConfig` selects how B0 computes. `REFERENCE` is the algorithm as it ran on phantom14 (78.9 s per capture
-alone on one Moonstone core). `FAST` (the default, `= EXACT`) uses only changes that give the same numbers: on all 48
-stored phantom14 captures, both arms, the offsets agree to 3e-13 mm and every clean decision is unchanged. It takes
-13.0 s per capture alone, or 20.9 s with 8 in parallel. Every approximation tried failed the 0.5 mm / 1° rule:
-thinning the model, every 2nd pixel, fewer or looser steps. The measurements, and the finding that B0 is fragile on
-many captures, are in `results/handeye-h0-2026-11-11/README.md`.
+`meshfit.FitConfig` selects how B0 computes:
+
+| Config | What | Per capture, one Moonstone core |
+|---|---|---|
+| `REFERENCE` | the algorithm as it ran on phantom14 | 78.9 s |
+| `FAST` (= `EXACT`) | the same numbers, to 3e-13 mm on all 48 stored captures | 13.0-13.7 s |
+| `ROBUST` | a changed algorithm, run twice per capture by `readb.match_wave` (default) | 2.9 s, both passes |
+
+How to read it:
+- `REFERENCE` and `FAST` give the same answers; `FAST` is H0's exact speed-up;
+- `ROBUST` gives different answers, judged by stage 2's cross-validation and per-capture stability, not by
+  reproduction.
+
+**FAST is fragile** (H0): thinning the model moved most captures. The coarse stage turns the forearm about its own
+axis; the last stage creeps back along that near-flat direction and stops wherever its steps get small.
+
+**ROBUST** (`results/handeye-readb2-2026-11-11/`):
+- **the model:** the meshes sampled evenly (`mesh.sample_even`: 0.24 M points, not 5.2 M);
+- **the coarse stages:** translation only at the 30 and 15 mm gates;
+- **every step:** scaled by a line search on the stage's cost;
+- **the forearm's roll:** a weak pull keeps it at the encoders' value unless the depth says otherwise;
+- **the pixels:** every 2nd pixel until the last stage;
+- **two passes:** from the encoders, then from the wave's median offset; a capture is clean only when the two land
+  within 3 mm ("settled").
+
+What it gives on phantom14's wave 2, against FAST:
+- M12+head held-out error, median / p90: right 2.8 / 5.8 mm (FAST 3.6 / 7.1), left 4.5 / 6.3 mm (FAST 5.3 / 7.1);
+- model changes move a capture about 0.3 mm (FAST: 0.7 mm, p90 3-4 mm);
+- about a third of the captures fail the settled check and are not used.
 
 ## The HEAD term (open)
 
@@ -58,4 +86,5 @@ not be applied twice.
 `tests/` runs in the normal suite (`run_moonstone.sh <worktree> <name> tools/calibration -q -n 8`). The unit tests
 use synthetic captures made from the real meshes. `test_p14_replay.py` needs `$CALIBTOOL_DATA/p14arm` (Moonstone
 `~/calibtool/data/p14arm`: symlinks to phantom14's bursts and C++ fusions in `/data/kaustabh/p14arm`, plus copies of
-the stored records and the URDFs) and is skipped without it.
+the stored records and the URDFs) and is skipped without it. It holds FAST to the stored records and ROBUST's two
+passes to the readb2 runs.

@@ -1,0 +1,15 @@
+== fast
+  jit    clean in both: n 30 median 0.66 p90 3.14 max 8.80 >3mm 4
+  f2     clean in both: n 27 median 1.40 p90 2.58 max 3.88 >3mm 3
+  f2b    clean in both: n 31 median 1.79 p90 3.97 max 14.19 >3mm 9
+  f3     clean in both: n 27 median 0.96 p90 2.91 max 9.19 >3mm 3
+  start  clean in both: n 33 median 0.08 p90 0.72 max 4.32 >3mm 2
+  worst variant, captures clean in base and in every variant: n 21 median 2.08 p90 5.15 max 8.80 >3mm 7
+== K2
+  jit    clean in both: n 26 median 0.25 p90 0.59 max 1.07 >3mm 0
+  phase  clean in both: n 29 median 0.24 p90 0.69 max 11.40 >3mm 1
+  f2     clean in both: n 28 median 1.66 p90 2.63 max 7.02 >3mm 2
+  f2b    clean in both: n 25 median 1.49 p90 4.54 max 17.44 >3mm 5
+  f3     clean in both: n 26 median 1.08 p90 2.75 max 16.86 >3mm 3
+  start  clean in both: n 26 median 0.30 p90 1.44 max 12.32 >3mm 1
+  worst variant, captures clean in base and in every variant: n 16 median 2.03 p90 5.87 max 16.86 >3mm 3

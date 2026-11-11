@@ -66,3 +66,38 @@ def test_clean_is_ok_rotation_and_coverage():
     assert not readb.is_clean(dict(r, rot=12.1))
     assert not readb.is_clean(dict(r, cov=0.59))
     assert not readb.is_clean(dict(r, ok=False))
+
+
+def test_consensus_start_moves_the_wrist_by_the_offset():
+    q, _, _, T_TC = synth.pose("Left")
+    off = np.array([12.0, -9.0, 15.0])
+    E = readb.consensus_start(T_TC, off)
+    got = 1e3 * meshfit.wrist_offset(synth.arm("Left"), q, T_TC, E)
+    assert np.allclose(got, off, atol=1e-9)
+
+
+def test_wave_median_prefers_the_clean_captures():
+    recs = [dict(off=[1.0, 0, 0], clean=True), dict(off=[2.0, 0, 0], clean=True), dict(off=[3.0, 0, 0], clean=True),
+            dict(off=[90.0, 0, 0], clean=False), dict(off=[95.0, 0, 0], clean=False)]
+    assert np.allclose(readb.wave_median(recs), [2, 0, 0])
+    assert np.allclose(readb.wave_median(recs[2:]), [90, 0, 0])      # under 3 clean: all of them
+
+
+def test_the_robust_wave_runs_two_passes(tmp_path):
+    E = synth.rigid(1.0, (0, 1, 0), (6.0, -4.0, 3.0))
+    paths = [write_burst(tmp_path / f"t-right-0{k}-p0{k}-10-0.npz", "Right", E) for k in (1, 2, 3)]
+    out = readb.match_wave(paths, synth.URDF, "Right", meshfit.ROBUST, log=lambda *_: None)
+    assert len(out) == 3
+    cap = readb.load_capture(paths[0], synth.URDF, "Right")
+    arm = readb.arm_model(synth.URDF, "Right", cfg=meshfit.ROBUST)
+    want = 1e3 * meshfit.wrist_offset(arm, cap.q, cap.T_TC, E)
+    for rec, img in out:
+        assert img is None and rec["clean"] and rec["settled"] and "pass1" in rec and len(rec["start_off"]) == 3
+        assert np.linalg.norm(np.subtract(rec["off"], want)) < 0.7
+    json.dumps([r for r, _ in out])
+
+
+def test_the_fast_wave_is_one_pass(tmp_path):
+    p = write_burst(tmp_path / "t-right-01-p01-10-0.npz", "Right")
+    (rec, _), = readb.match_wave([p], synth.URDF, "Right", meshfit.FAST, arm=synth.arm("Right"))
+    assert "pass1" not in rec and "start_off" not in rec

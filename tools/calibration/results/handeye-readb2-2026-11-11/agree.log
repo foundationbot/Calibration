@@ -1,0 +1,17 @@
+K1 -> K2, agree within 3.0 mm: settled 32/48; not settled: ['1103a-right-03-p02', '1103a-right-05-p04', '1103a-right-08-p07', '1103a-right-09-p08', '1103a-right-14-p13', '1104a-right-11-p10-10-12', '1104a-right-14-p10-26-m12', '1104a-right-17-p04-22-24', '1104a-right-18-p04-26-12', '1104b-left-01-pL07-10-0', '1104b-left-08-pL09-10-0', '1104b-left-10-pL09-26-m12', '1104b-left-11-pL09-26-12', '1104b-left-14-pL10-10-12', '1104b-left-15-pL10-10-24', '1104b-left-16-pL04-10-24']
+  jit    settled in base (32): {'n': 32, 'median': 0.3, 'p90': 1.04, 'max': 9.75, 'over1': 4, 'over3': 3}; settled in both (26): {'n': 26, 'median': 0.25, 'p90': 0.59, 'max': 1.07, 'over1': 1, 'over3': 0}   flips 8
+  phase  settled in base (32): {'n': 32, 'median': 0.27, 'p90': 0.82, 'max': 19.49, 'over1': 3, 'over3': 2}; settled in both (29): {'n': 29, 'median': 0.24, 'p90': 0.69, 'max': 11.4, 'over1': 2, 'over3': 1}   flips 7
+  f2     settled in base (32): {'n': 32, 'median': 1.72, 'p90': 3.79, 'max': 7.02, 'over1': 25, 'over3': 4}; settled in both (28): {'n': 28, 'median': 1.66, 'p90': 2.63, 'max': 7.02, 'over1': 21, 'over3': 2}   flips 10
+  f2b    settled in base (32): {'n': 32, 'median': 2.04, 'p90': 8.49, 'max': 19.0, 'over1': 25, 'over3': 10}; settled in both (25): {'n': 25, 'median': 1.49, 'p90': 4.54, 'max': 17.44, 'over1': 18, 'over3': 5}   flips 12
+  start  settled in base (32): {'n': 32, 'median': 0.33, 'p90': 2.64, 'max': 19.68, 'over1': 8, 'over3': 3}; settled in both (26): {'n': 26, 'median': 0.3, 'p90': 1.44, 'max': 12.32, 'over1': 6, 'over3': 1}   flips 11
+  f3     settled in base (32): {'n': 32, 'median': 1.29, 'p90': 10.28, 'max': 20.27, 'over1': 19, 'over3': 7}; settled in both (26): {'n': 26, 'median': 1.08, 'p90': 2.75, 'max': 16.86, 'over1': 14, 'over3': 3}   flips 11
+  SPREAD (worst variant per capture) over the captures settled in base: {'n': 32, 'median': 2.55, 'p90': 17.38, 'max': 20.27, 'over1': 30, 'over3': 13}
+  CV base  M12+head  right [2.82, 5.77, 6.03] left [4.5, 6.31, 13.75] (n 13/11, dropped ['12-p10-22-12', '13-pL10-22-m12'])
+  CV base  M12       right [4.77, 10.2, 12.89] left [5.69, 11.96, 14.02] (n 13/11, dropped ['12-p10-22-12', '13-pL10-22-m12'])
+     per pose: {'p04': [2, 2.0], 'p07': [3, 4.9], 'p08': [3, 3.1], 'p09': [4, 2.0], 'p10': [1, 1.8], 'pL04': [3, 4.7], 'pL07': [3, 2.6], 'pL08': [3, 4.5], 'pL09': [1, 4.5], 'pL10': [1, 13.7]}
+  CV f2    M12+head  right [2.84, 4.57, 5.07] left [5.34, 11.56, 12.68] (n 11/13, dropped ['12-p10-22-12', '13-pL10-22-m12'])
+  CV f2    M12       right [6.61, 11.62, 11.8] left [6.58, 11.47, 12.99] (n 11/13, dropped ['12-p10-22-12', '13-pL10-22-m12'])
+     per pose: {'p04': [1, 3.5], 'p07': [3, 4.6], 'p08': [3, 2.8], 'p09': [4, 1.8], 'pL04': [4, 6.6], 'pL07': [3, 2.8], 'pL08': [3, 3.6], 'pL09': [2, 8.8], 'pL10': [1, 12.3]}
+  CV f2b   M12+head  right [2.49, 3.64, 4.04] left [3.84, 5.66, 10.5] (n 13/12, dropped [])
+  CV f2b   M12       right [4.51, 9.46, 11.6] left [5.11, 11.81, 15.2] (n 13/12, dropped [])
+     per pose: {'p04': [2, 2.4], 'p07': [3, 2.7], 'p08': [3, 2.5], 'p09': [4, 2.0], 'p10': [1, 2.3], 'pL04': [2, 3.9], 'pL07': [3, 3.8], 'pL08': [3, 3.7], 'pL09': [1, 4.2], 'pL10': [3, 5.8]}

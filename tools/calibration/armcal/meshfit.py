@@ -17,11 +17,19 @@ by robust point-to-plane Gauss-Newton:
 Only the last stage must settle; the reported statistics are at the final E. The result is said at the WRIST POINT
 (the <side>WristRoll joint origin): where the depth puts it minus where the encoders + URDF put it, Torso frame (m).
 
-Speed (FitConfig; measured on all 48 stored phantom14 captures, tools/calibration/results/handeye-h0-2026-11-11/):
-REFERENCE is the algorithm as it ran on phantom14 (about 80 s per capture on one Moonstone core). FAST (the default)
-= EXACT: only changes that compute the same numbers (to 3e-13 mm on all 48), about 13 s. The approximating knobs
-(model_voxel, data_stride, max_steps, looser final steps) stay for experiments: every one tried moved some captures by
-mm to cm -- B0 is fragile on many captures (results README, point 4)."""
+Two matchers (FitConfig; measured on all 48 stored phantom14 captures):
+  - FAST (= EXACT) computes the phantom14 algorithm's numbers (REFERENCE, about 80 s per capture on one Moonstone
+    core) to 3e-13 mm in about 13 s (results/handeye-h0-2026-11-11/). It is fragile: on many captures the answer
+    hangs on details that should not matter (the model's sample points, the start), because the coarse stages turn
+    the forearm about its own axis and the last stage creeps along that near-flat direction until its steps happen
+    to get small.
+  - ROBUST (readb2, results/handeye-readb2-2026-11-11/) changes the algorithm: the CAD meshes sampled evenly
+    (mesh.sample_even, 0.24 M points instead of 5.2 M), the coarse stages (30, 15 mm) fit the translation only, each
+    step is scaled by a line search on the stage's cost (a monotone descent to a minimum), a weak pull keeps the
+    forearm's roll about its own axis at the encoders' unless the depth says otherwise, every 2nd pixel until the
+    last stage, and (readb.match_wave) a second pass that starts every capture at its wave's median offset.
+    About 2 s per capture on one core, both passes.
+The approximating knobs of FAST (model_voxel, data_stride, max_steps, looser final steps) stay for experiments."""
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
@@ -67,12 +75,39 @@ class FitConfig:
     model_voxel: float | None = None   # m: the sampled mesh points thinned to one per voxel of this size, per link
                                        # (approximation; the sampler puts ceil(edge/spacing)^2 points on every long
                                        # thin CAD triangle: 5.2 M points for 0.24 m^2 of surface at 1 mm)
+    # the model (read by readb.arm_model)
+    sampler: str = "grid"          # "grid" (mesh.sample, phantom14) or "even" (mesh.sample_even)
+    spacing: float = 0.001         # m, the sampling
+    # the robust solver (_solve2); robust=False keeps every field below unused
+    robust: bool = False
+    trans_gate: float = 0.0        # stages with a gate >= this fit the translation only (0: none)
+    line_search: bool = False      # each step scaled by 2^k (k = -4..6) to the lowest stage cost, re-paired
+    creep_cos: float = -1.0        # ... longer steps tried only when the step points as the last one did (cos above
+                                   # this, rotation scaled by COND_L; -1: always)
+    ls_adaptive: bool = False      # a step starts at the last one's scale (up to 1) instead of 1
+    fill_holes: bool = False       # visibility against a z-buffer whose pinholes are filled (sparse models)
+    starts: tuple = ()             # extra starts: (deg, mm) rotations about the forearm axis through the wrist point
+                                   # and translations along it; the result is the start with the best score()
+    score_tau: float = 0.005       # m: score() counts 1 - (r/tau)^2 per data point paired within tau
+    strides: tuple = ()            # the data stride (in u and v) of the stages with the gates GATES, in that order
+                                   # (() = all data in every stage)
+    ambiguous_mm: float = 3.0      # PoseFit.margin: against the best start whose wrist point is this far away
+    rot_prior: float = 0.0         # a pull of E's rotation towards the encoders' (0: none): the stage cost gains
+                                   # 0.5 rot_prior n COND_L^2 |P w|^2 (w: E's rotation vector, n: the stage's data
+                                   # points; as if each moved by rot_prior^0.5 COND_L |P w|)
+    prior_axis: str = "forearm"    # P: "forearm" (the roll about the forearm axis only) or "all"
 
 
 REFERENCE = FitConfig()
 EXACT = FitConfig(tree_per_stage=True, shared_render=True, index_coverage=True, fast_render=True, tree_fast=True,
                   tree_leafsize=64)
 FAST = EXACT
+EVEN = replace(EXACT, sampler="even")                    # the old solver on the evenly sampled model (experiments)
+# The robust matcher (readb2, 11 Nov 2026; results/handeye-readb2-2026-11-11/): the evenly sampled model, the
+# translation-only coarse stages, the line search, a pull against the forearm's roll, every 2nd pixel until the last
+# stage. readb.match_wave runs it twice per capture (from the encoders, then from the wave's median offset).
+ROBUST = replace(EXACT, sampler="even", robust=True, line_search=True, creep_cos=0.9, fill_holes=True,
+                 trans_gate=0.015, rot_prior=0.03, strides=(2, 2, 2, 1))
 
 
 def side_of(links) -> str:
@@ -123,9 +158,15 @@ def angle_deg(T) -> float:
 class ArmModel:
     """the fitted links: points P and normals N in their own link frames, link_id per point, and their chains"""
 
-    def __init__(self, urdf, link_meshes: dict, spacing: float = 0.001, voxel: float | None = None):
+    def __init__(self, urdf, link_meshes: dict, spacing: float = 0.001, voxel: float | None = None,
+                 sampler: str = "grid", phase: float = 0.5, jitter: float = 0.0, seed: int = 0):
+        """sampler "grid": mesh.sample (ceil(edge/spacing)^2 points per triangle, as on phantom14); "even":
+        mesh.sample_even (about one point per spacing^2, R2 sequence started at phase). jitter (m): each point moved
+        by a random in-plane offset of this standard deviation (seed): the same surface, other points -- for the
+        stability tests only"""
         self.urdf = Urdf.of(urdf)
         self.voxel = voxel
+        self.sampler, self.spacing = sampler, spacing
         self.links = list(link_meshes)
         self.meshes = {n: (np.asarray(V, float), np.asarray(F, np.int64)) for n, (V, F) in link_meshes.items()}
         self.chains = {n: self.urdf.chain("Torso", n) for n in self.links}
@@ -133,7 +174,15 @@ class ArmModel:
         self.wrist = self.urdf.chain("Torso", f"{self.side}WristRollLink")
         P, N, lid = [], [], []
         for k, n in enumerate(self.links):
-            p, nn, _ = mesh.sample(*link_meshes[n], spacing)
+            if sampler == "even":
+                p, nn, _ = mesh.sample_even(*link_meshes[n], spacing, phase)
+            elif sampler == "grid":
+                p, nn, _ = mesh.sample(*link_meshes[n], spacing)
+            else:
+                raise ValueError(f"sampler must be grid or even, got {sampler!r}")
+            if jitter > 0:
+                d = np.random.default_rng([seed, k]).normal(0.0, jitter, p.shape)
+                p = p + d - np.einsum("ij,ij->i", d, nn)[:, None] * nn
             if voxel:
                 keep = np.sort(np.unique(np.floor(p / voxel).astype(np.int64), axis=0, return_index=True)[1])
                 p, nn = p[keep], nn[keep]
@@ -145,8 +194,8 @@ class ArmModel:
         self._slices = [slice(a, b) for a, b in zip(np.r_[0, ends[:-1]], ends)]   # each link's points, in order
 
     @classmethod
-    def load(cls, urdf, mesh_dir, links, spacing: float = 0.001, voxel: float | None = None):
-        return cls(urdf, {n: mesh.load_obj(Path(mesh_dir) / f"{n}.obj") for n in links}, spacing, voxel)
+    def load(cls, urdf, mesh_dir, links, spacing: float = 0.001, voxel: float | None = None, **kw):
+        return cls(urdf, {n: mesh.load_obj(Path(mesh_dir) / f"{n}.obj") for n in links}, spacing, voxel, **kw)
 
     def with_urdf(self, urdf) -> "ArmModel":
         """the same sampled meshes placed by another URDF's chains (no resampling)"""
@@ -325,10 +374,11 @@ def _pairs_moved(data, P0, N0, iv, gate, tree, E):
 
 
 def _solve(arm: ArmModel, q, T_TC, data_all, K, W, H, cfg: FitConfig, gates=GATES, huber=HUBER,
-           dilate_px=DILATE_PX):
-    """E (camera frame) of one capture; returns (E, converged, steps, last pairs, cond, last gate, stage data)"""
+           dilate_px=DILATE_PX, trace=None, E0=None):
+    """E (camera frame) of one capture; returns (E, converged, steps, last pairs, cond, last gate, stage data);
+    E0: the start (identity by default)"""
     from scipy.spatial import cKDTree
-    E = np.eye(4)
+    E = np.eye(4) if E0 is None else np.asarray(E0, float).copy()
     steps, converged = 0, True
     last, cond = None, np.inf
     T_CT = np.linalg.inv(T_TC)
@@ -380,6 +430,8 @@ def _solve(arm: ArmModel, q, T_TC, data_all, K, W, H, cfg: FitConfig, gates=GATE
             cond = float(np.linalg.cond(S @ Hm @ S))
             E = _about(c, x[:3], x[3:6]) @ E
             steps += 1
+            if trace is not None:
+                trace.append((gate, len(pr.r), float(np.sum(w * pr.r ** 2)), E.copy()))
             if np.linalg.norm(x[3:6]) < step_m and np.degrees(np.linalg.norm(x[:3])) < step_deg:
                 done = True
                 break
@@ -394,6 +446,205 @@ def _solve(arm: ArmModel, q, T_TC, data_all, K, W, H, cfg: FitConfig, gates=GATE
             Pv, Nv, _ = arm.place(q, T_CT, E, vis)
             last = _pairs(data, Pv, Nv, vis, gate)
     return E, converged, steps, last, cond, gate
+
+
+def _huber_cost(r, huber):
+    a = np.abs(r)
+    return np.where(a <= huber, 0.5 * a * a, huber * (a - 0.5 * huber))
+
+
+def _stage_cost(pr, n_data, gate, huber):
+    """the stage's objective: Huber of each paired data point's residual, the Huber at the gate for every unpaired
+    one (a well-defined function of E on the stage's fixed data and model points: the line search compares it)"""
+    return float(_huber_cost(pr.r, huber).sum() + (n_data - len(pr.r)) * _huber_cost(np.array([gate]), huber)[0])
+
+
+def forearm_axis(arm: ArmModel, q, T_CT):
+    """(unit axis, wrist point) in the camera: the ElbowPitch joint origin -> the WristRoll joint origin"""
+    a = (np.asarray(T_CT, float) @ np.r_[arm.chains[arm.links[0]].T(q)[:3, 3], 1.0])[:3]
+    w = (np.asarray(T_CT, float) @ np.r_[arm.wrist_point_T(q), 1.0])[:3]
+    u = w - a
+    return u / np.linalg.norm(u), w
+
+
+def _stage_setup(arm, base, E, data_all, K, W, H, cfg: FitConfig, dilate_px, stride: int = 1):
+    from scipy.spatial import cKDTree
+    R, t = E[:3, :3], E[:3, 3]
+    P, N = base[0] @ R.T + t, base[1] @ R.T
+    zbuf, _, proj = zbuffer(P, K, W, H)
+    vis = np.nonzero(visible_from(N, mesh.fill_holes(zbuf) if cfg.fill_holes else zbuf, proj))[0]
+    keep = _select(data_all, P, K, W, H, dilate_px, depth=zbuf)
+    if stride > 1:
+        u, v, _ = _pixels(data_all, K, W, H)
+        keep &= (u % stride == 0) & (v % stride == 0)
+    data = data_all[keep]
+    tree = cKDTree(base[0][vis], leafsize=cfg.tree_leafsize, balanced_tree=False, compact_nodes=False) \
+        if len(vis) else None
+    return vis, data, tree, P
+
+
+def score(arm: ArmModel, q, T_TC, E, data_all, K, W, H, cfg: FitConfig, dilate_px=DILATE_PX) -> float:
+    """how much of the depth E explains: sum over the data points (inside the model's silhouette grown by dilate_px)
+    paired within tau of a visible model point of 1 - (r/tau)^2 (a soft inlier count), the model rendered at E"""
+    T_CT = np.linalg.inv(np.asarray(T_TC, float))
+    base = arm.place(q, T_CT)
+    vis, data, tree, _ = _stage_setup(arm, base, np.asarray(E, float), data_all, K, W, H, cfg, dilate_px)
+    if tree is None or not len(data):
+        return 0.0
+    pr = _pairs_moved(data, base[0][vis], base[1][vis], vis, cfg.score_tau, tree, np.asarray(E, float))
+    return float(np.sum(np.clip(1.0 - (pr.r / cfg.score_tau) ** 2, 0.0, None)))
+
+
+def rotvec(R) -> np.ndarray:
+    """the rotation vector (rad) of a rotation matrix"""
+    R = np.asarray(R, float)[:3, :3]
+    a = float(np.arccos(np.clip((np.trace(R) - 1) / 2, -1, 1)))
+    v = np.array([R[2, 1] - R[1, 2], R[0, 2] - R[2, 0], R[1, 0] - R[0, 1]])
+    if a < 1e-12:
+        return 0.5 * v
+    if np.pi - a < 1e-6:               # 180 deg: the axis from R + I
+        w, V = np.linalg.eigh((R + np.eye(3)) / 2)
+        return a * V[:, -1]
+    return a / (2 * np.sin(a)) * v
+
+
+def _stride(cfg: FitConfig, gate: float) -> int:
+    for g, k in zip(GATES, cfg.strides):
+        if abs(g - gate) < 1e-12:
+            return int(k)
+    return 1
+
+
+def _solve2(arm: ArmModel, q, T_TC, data_all, K, W, H, cfg: FitConfig, gates=GATES, huber=HUBER,
+            dilate_px=DILATE_PX, trace=None, E0=None, has_final: bool = True):
+    """the robust solver: as _solve (stages, KD-tree per stage, point-to-plane Gauss-Newton with Huber weights), plus
+    a translation-only coarse phase (cfg.trans_gate), steps scaled by a line search on the stage's objective
+    (_stage_cost, re-paired per trial: monotone, so a stage settles at a minimum of a fixed function rather than
+    where the steps happen to get small), and the stopping rule: no scaled step lowers the objective, or the step
+    is below STEP_M and STEP_DEG"""
+    E = np.eye(4) if E0 is None else np.asarray(E0, float).copy()
+    steps, converged = 0, True
+    last, cond = None, np.inf
+    T_CT = np.linalg.inv(T_TC)
+    base = arm.place(q, T_CT)
+    S = np.diag([1 / COND_L] * 3 + [1.0] * 3)
+    Pr = np.zeros((3, 3))
+    if cfg.rot_prior > 0:
+        if cfg.prior_axis == "forearm":
+            u, _ = forearm_axis(arm, q, T_CT)
+            Pr = np.outer(u, u)
+        else:
+            Pr = np.eye(3)
+    for k, gate in enumerate(gates):
+        stride = _stride(cfg, gate)
+        vis, data, tree, _ = _stage_setup(arm, base, E, data_all, K, W, H, cfg, dilate_px, stride)
+        if tree is None:
+            converged = False
+            break
+        P0, N0 = base[0][vis], base[1][vis]
+        final = has_final and gate == gates[-1]
+        trans_only = cfg.trans_gate > 0 and gate >= cfg.trans_gate
+        step_m, step_deg = (cfg.final_step_m, cfg.final_step_deg) if final else (STEP_M, STEP_DEG)
+        lam = cfg.rot_prior * len(data) * COND_L ** 2
+        pairs = lambda E_: _pairs_moved(data, P0, N0, vis, gate, tree, E_)            # noqa: E731
+
+        def cost(pr_, E_):
+            c_ = _stage_cost(pr_, len(data), gate, huber)
+            if lam > 0:
+                w_ = Pr @ rotvec(E_)
+                c_ += 0.5 * lam * float(w_ @ w_)
+            return c_
+        pr = pairs(E)
+        c0 = cost(pr, E)
+        done = False
+        prev, al0 = None, 1.0
+        for _ in range(cfg.max_steps_final if final else cfg.max_steps):
+            last = pr
+            if len(pr.r) < 12:
+                converged = False
+                break
+            c = pr.m.mean(0)
+            A = np.column_stack([np.cross(pr.m - c, pr.n), pr.n])
+            a = np.abs(pr.r)
+            w = np.where(a <= huber, 1.0, huber / np.maximum(a, 1e-12))
+            Hm = A.T @ (A * w[:, None])
+            g = A.T @ (w * pr.r)
+            if lam > 0 and not trans_only:
+                Hm[:3, :3] += lam * Pr
+                g[:3] -= lam * (Pr @ rotvec(E))
+            try:
+                if trans_only:
+                    x = np.r_[np.zeros(3), np.linalg.solve(Hm[3:, 3:], g[3:])]
+                else:
+                    x = np.linalg.solve(Hm, g)
+            except np.linalg.LinAlgError:
+                converged = False
+                break
+            cond = float(np.linalg.cond(S @ Hm @ S))
+            step = lambda al: _about(c, al * x[:3], al * x[3:6]) @ E                   # noqa: E731
+            if cfg.line_search:
+                xs = S @ x                                     # the step in mm-like units (rotation x COND_L)
+                xs = xs / max(np.linalg.norm(xs), 1e-18)
+                creep = cfg.creep_cos < -1 + 1e-9 or (prev is not None and float(xs @ prev) > cfg.creep_cos)
+                prev = xs
+                al = al0
+                En = step(al)
+                prn = pairs(En)
+                cn = cost(prn, En)
+                if cn < c0:
+                    while creep and al < 64:           # the same direction as the last step: try twice as far
+                        Et = step(2 * al)
+                        prt = pairs(Et)
+                        ct = cost(prt, Et)
+                        if ct >= cn:
+                            break
+                        al, En, prn, cn = 2 * al, Et, prt, ct
+                else:
+                    while al > 1 / 16 and cn >= c0:
+                        al /= 2
+                        En = step(al)
+                        prn = pairs(En)
+                        cn = cost(prn, En)
+                    if cn >= c0:               # no scaled step lowers the objective: a minimum
+                        done = True
+                        break
+                al0 = min(al, 1.0) if cfg.ls_adaptive else 1.0
+                E, pr, c0 = En, prn, cn
+            else:
+                al = 1.0
+                E = step(1.0)
+                pr = pairs(E)
+                c0 = cost(pr, E)
+            steps += 1
+            if trace is not None:
+                trace.append((gate, len(pr.r), c0, E.copy()))
+            if al * np.linalg.norm(x[3:6]) < step_m and np.degrees(al * np.linalg.norm(x[:3])) < step_deg:
+                done = True
+                break
+        if not converged:
+            break
+        if not done and final:
+            converged = False
+    if last is not None:               # the statistics on all the data at the final estimate
+        if stride > 1:
+            vis, data, tree, _ = _stage_setup(arm, base, E, data_all, K, W, H, cfg, dilate_px, 1)
+            P0, N0 = base[0][vis], base[1][vis]
+            last = _pairs_moved(data, P0, N0, vis, gate, tree, E) if tree is not None else last
+        else:
+            last = pairs(E)
+    return E, converged, steps, last, cond, gate
+
+
+def _starts(arm: ArmModel, q, T_TC, cfg: FitConfig) -> list:
+    """the starts, relative to the current estimate E (start = E @ S): S = I, then per (deg, mm) of cfg.starts a
+    rotation about the forearm axis through the wrist point by deg and a translation along the axis by mm (camera
+    frame, at the encoders' pose)"""
+    out = [np.eye(4)]
+    if cfg.starts:
+        u, wp = forearm_axis(arm, q, np.linalg.inv(np.asarray(T_TC, float)))
+        for deg, mm in cfg.starts:
+            out.append(_about(wp, np.radians(deg) * u, 1e-3 * mm * u))
+    return out
 
 
 @dataclass
@@ -412,6 +663,10 @@ class PoseFit:
     per_link: dict
     rms_mm: float
     coverage: float            # inliers / data points inside the silhouette eroded by ERODE_PX
+    score: float | None = None         # the robust solver's score() of the result
+    candidates: list | None = None     # the robust solver's starts: [score, wrist offset (m), rotation deg, steps]
+    margin: float | None = None        # (best score - the best score of a start ambiguous_mm away) / best score;
+                                       # None: every start found the same wrist point
 
 
 def _stats(arm, pr, K, W, H, data_all, model_P, gate, cfg: FitConfig):
@@ -453,14 +708,45 @@ def fit_pose(arm: ArmModel, q: dict, T_TC, data, K, W: int, H: int, cfg: FitConf
     """B0: the rigid correction E (camera frame) of one capture's model to its depth points"""
     T_TC = np.asarray(T_TC, float)
     data = np.asarray(data, float)
-    E, converged, steps, last, cond, gate = _solve(arm, q, T_TC, data, K, W, H, cfg, **kw)
+    best, cands, margin = None, None, None
+    if cfg.robust:
+        gates = tuple(kw.pop("gates", GATES))
+        E0 = kw.pop("E0", None)
+        E0 = np.eye(4) if E0 is None else np.asarray(E0, float)
+        coarse = tuple(g for g in gates if cfg.trans_gate > 0 and g >= cfg.trans_gate)
+        fine = gates[len(coarse):]
+        n0 = 0
+        if coarse and fine:            # the translation-only stages once; the starts branch after them
+            sol = _solve2(arm, q, T_TC, data, K, W, H, cfg, gates=coarse, E0=E0, has_final=False, **kw)
+            E0, n0 = sol[0], sol[2]
+        else:
+            fine = gates
+        cands = []
+        starts = _starts(arm, q, T_TC, cfg)
+        for S in starts:
+            sol = _solve2(arm, q, T_TC, data, K, W, H, cfg, gates=fine, E0=E0 @ S, **kw)
+            if len(starts) == 1:       # nothing to choose between: no score
+                sc = 0.0
+            else:
+                sc = score(arm, q, T_TC, sol[0], data, K, W, H, cfg) if sol[1] else -1.0
+            cands.append([sc, wrist_offset(arm, q, T_TC, sol[0]).tolist(), angle_deg(sol[0]), sol[2]])
+            if best is None or sc > best[0]:
+                best = (sc, sol)
+        E, converged, steps, last, cond, gate = best[1]
+        steps = n0 + int(sum(c[3] for c in cands))
+        w0 = wrist_offset(arm, q, T_TC, E)
+        far = [c[0] for c in cands if np.linalg.norm(np.subtract(c[1], w0)) > 1e-3 * cfg.ambiguous_mm]
+        margin = (best[0] - max(far)) / best[0] if far and best[0] > 0 else None
+    else:
+        E, converged, steps, last, cond, gate = _solve(arm, q, T_TC, data, K, W, H, cfg, **kw)
     pr = last if last is not None else _Pairs(*(np.zeros((0, 3)),) * 3, np.zeros(0, np.int64), np.zeros(0))
     P, _, _ = arm.place(q, np.linalg.inv(T_TC), E)
     inl, per, rms, coverage = _stats(arm, pr, K, W, H, data, P, gate, cfg)
     ok = bool(converged and inl.sum() >= MIN_INLIERS and np.isfinite(cond) and cond <= MAX_COND)
     return PoseFit(delta_c=E, wrist_offset_T=wrist_offset(arm, q, T_TC, E), rotation_deg=angle_deg(E),
                    converged=converged, ok=ok, cond=cond, steps=steps, data=pr.d, inlier=inl,
-                   residual_mm=1e3 * pr.r, model_index=pr.mi, per_link=per, rms_mm=rms, coverage=coverage)
+                   residual_mm=1e3 * pr.r, model_index=pr.mi, per_link=per, rms_mm=rms, coverage=coverage,
+                   score=None if best is None or len(cands) == 1 else best[0], candidates=cands, margin=margin)
 
 
 def with_config(cfg: FitConfig, **kw) -> FitConfig:
