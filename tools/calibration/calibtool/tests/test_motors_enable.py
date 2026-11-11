@@ -17,7 +17,8 @@ def master(active=True, motor_state=0, estop=False, error=None):
 
 def good_state(**kw):
     s = {"autonomy": None, "pods": ["dma-video/producer-abc", "kube-system/coredns"], "desired_still": True,
-         "master": master(), "bus_v": 53.1, "head_power": True, "slaves_op": 50, "fault_latches": []}
+         "master": master(), "bus_v": 53.1, "head_power": True, "slaves_op": 50, "fault_latches": [],
+         "drives": {"answering": None, "expected": None}}
     s.update(kw)
     return s
 
@@ -77,7 +78,7 @@ BAD = {
     "master": ({"master": master(active=False, error="dma-ethercat is inactive")}, True),
     "estop": ({"master": master(estop=True)}, True),
     "estop_unknown": ({"master": master(estop=None)}, True),
-    "motors_off": ({"master": master(motor_state=1)}, True),
+    "motors_off": ({"master": master(motor_state=2)}, True),
     "bus_v": ({"bus_v": 3.1}, True),
     "head_power": ({"head_power": False}, True),
     "slaves_op": ({"slaves_op": 46}, True),
@@ -245,3 +246,27 @@ def test_takeover_uses_the_state_the_checks_read_not_a_second_ping():
     en, _ = make(state=good_state(master=master(motor_state=2)), run=run, adopt_on=True)
     res = en.enable("Y", gantry=True)
     assert res.ok and "taken over" in res.detail and (res.n, res.of) == (29, 29)
+
+
+
+def test_drives_not_answering_block_the_enable_and_say_power():
+    """10 Nov, phantom10: wkc 21 of 144 for hours (the drives' power off); the screen said 'someone else enabled them'"""
+    cs = {c.name: c for c in me.pre_enable_checks(good_state(drives={"answering": 21, "expected": 144}), BASE, True)}
+    assert cs["drives"].status == "fail" and "21 of 144" in cs["drives"].detail and "power" in cs["drives"].detail
+
+
+def test_motor_state_1_is_an_enable_that_did_not_complete():
+    st = good_state(master=master(motor_state=1), drives={"answering": 21, "expected": 144})
+    cs = {c.name: c for c in me.pre_enable_checks(st, BASE, True)}
+    assert cs["motors_off"].status == "fail" and "did not complete" in cs["motors_off"].detail
+    assert "someone else" not in cs["motors_off"].detail
+    st = good_state(master=master(motor_state=1))
+    cs = {c.name: c for c in me.pre_enable_checks(st, BASE, True)}
+    assert cs["motors_off"].status == "ok" and "Y enables again" in cs["motors_off"].detail
+
+
+def test_parse_drives_reads_the_newest_degraded_line():
+    j = ("[WKC] degraded: actual=21 expected=144 (short 123 WKC)\n"
+         "[Desired] rejecting stale command\n[WKC] degraded: actual=30 expected=144 (short 114)\n")
+    assert me.parse_drives(j) == {"answering": 30, "expected": 144}
+    assert me.parse_drives("all quiet") == {"answering": None, "expected": None}

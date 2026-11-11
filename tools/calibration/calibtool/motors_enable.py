@@ -78,10 +78,27 @@ def pre_enable_checks(s: dict, baseline: dict, gantry: bool) -> list:
     add("estop", est is False, "e-stop not engaged",
         "e-stop engaged: release it (with it in, the drives latch FF10 and the bus reads ~3 V)" if est else
         f"e-stop state unknown ({est}): not enabling")
+    dr = s.get("drives")
+    degraded = bool(dr) and dr.get("answering") is not None and dr["answering"] < dr["expected"]
+    if dr is None:
+        out.append(preflight.Check("drives", "info", "EtherCAT drive replies: not readable from the master's journal",
+                                   "motion"))
+    else:
+        # 10 Nov, phantom10: wkc 21 of 144 for hours (the drives' power off); the enable could not work and the screen
+        # said "someone else enabled them"
+        add("drives", not degraded, "all motor drives answering on EtherCAT",
+            f"only {dr.get('answering')} of {dr.get('expected')} EtherCAT replies: most motor drives are not "
+            "answering. The motor power is probably off (power switch, breaker, e-stop box): switch it on, wait until "
+            "this line is ok, then Y")
     on = getattr(m, "motors_on", None)
-    add("motors_off", on is False, "motors are off", f"motors are already on (motor_state "
-        f"{getattr(m, 'motor_state', None)}): someone else enabled them; find out who before going on" if on else
-        "motor state unknown (ping gave none)")
+    st = getattr(m, "motor_state", None)
+    if st == 1:
+        # an enable that did not complete (seen right after enable-motors with the drives unpowered)
+        add("motors_off", not degraded, "the last enable did not complete (motor_state 1): Y enables again",
+            "the last enable did not complete (motor_state 1): the drives are not answering (see 'drives')")
+    else:
+        add("motors_off", on is False, "motors are off", f"motors are already on (motor_state {st}): someone else "
+            "enabled them; find out who before going on" if on else "motor state unknown (ping gave none)")
     na = "not available on this master"
     v = s.get("bus_v")
     if v is None:
@@ -247,6 +264,19 @@ class Enabler:
             self.sleep(POLL_S)
 
 
+_WKC_DEGRADED = re.compile(r"\[WKC\] degraded: actual=(\d+) expected=(\d+)")
+
+
+def parse_drives(journal_text):
+    """the master's journal of the last seconds -> {"answering", "expected"}: from its newest "[WKC] degraded:
+    actual=A expected=B" (logged every second while drives do not answer), else {"answering": None} (none degraded)"""
+    for ln in reversed((journal_text or "").splitlines()):
+        m = _WKC_DEGRADED.search(ln)
+        if m:
+            return {"answering": int(m.group(1)), "expected": int(m.group(2))}
+    return {"answering": None, "expected": None}
+
+
 class EnableProbe:
     """the robot's state for pre_enable_checks: autonomy and pods from preflight.RobotProbes' callables, the master
     (motors.master), desired_still (motors.desired_still on /dev/shm/desired). The optional facts (bus voltage, head
@@ -261,7 +291,16 @@ class EnableProbe:
     def __call__(self) -> dict:
         s = {"autonomy": self.autonomy(), "pods": self.pods(),
              "desired_still": motors.desired_still(lambda: motors.ring_head(self.shm / "desired")),
-             "master": motors.master(self.run)}
+             "master": motors.master(self.run), "drives": self._drives()}
         for k, fn in self.opt.items():
             s[k] = None if fn is None else fn()
         return s
+
+    def _drives(self):
+        """EtherCAT replies from the master's journal of the last 5 s (None: not readable)"""
+        try:
+            rc, out = self.run(["journalctl", "-u", motors.SERVICE, "--since", "-5s", "-o", "cat", "--no-pager"],
+                               timeout=10)
+        except Exception:  # noqa: BLE001  (not readable: an info line, never a pass)
+            return None
+        return parse_drives(out) if rc == 0 else None
