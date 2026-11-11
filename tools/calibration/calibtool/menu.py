@@ -29,7 +29,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from calibtool import cli, daemon, profile as prof_mod, robots
+from calibtool import handeyeflow, cli, daemon, profile as prof_mod, robots
 
 ENDED = frozenset(daemon.TERMINAL) | {"DISCARDED"}     # DONE, ABORTED, STOPPED_LOUD, discarded: nothing to continue
 DISCARD_MARK = "calibtool-menu-discard"
@@ -222,7 +222,7 @@ class Option:
     session: object = None
 
 
-def options(lk, kit) -> list:
+def options(lk, kit, handeye=False) -> list:
     if lk.error:
         return [Option("try again", "retry"), Option("quit", "quit")]
     o = []
@@ -241,6 +241,9 @@ def options(lk, kit) -> list:
                  if dl else "")
         o.append(Option(f"start a new calibration{first}", "new"))
         o.append(Option(f"placement trial, nothing moves{first}", "trial"))
+        if handeye:
+            o.append(Option("hand-eye calibration: both arms, the neck and the hands move (the URDF is fitted, not "
+                            "deployed)", "handeye"))
     o.append(Option("status only", "status"))
     for s in lk.live:
         o.append(Option(f"stop the running session {s['id']}", "stop", s))
@@ -397,7 +400,7 @@ class Menu:
             else:
                 for line in describe(p, lk, self.kit):
                     self.out(line)
-            o = self.choose("What now?", options(lk, self.kit))
+            o = self.choose("What now?", options(lk, self.kit, handeye=handeyeflow.available(p)))
             if o is None or o.kind == "quit":
                 return 0
             rc = self.act(p, lk, o)
@@ -422,6 +425,8 @@ class Menu:
             return self.cont(p, o.session)
         if o.kind == "discard":
             return self.discard(p, lk, o.session)
+        if o.kind == "handeye":
+            return handeyeflow.run_session(p, run=self.run, out=self.out, ask=self.ask)
         return self.new(p, lk, trial=o.kind == "trial")
 
     def discard(self, p, lk, s):

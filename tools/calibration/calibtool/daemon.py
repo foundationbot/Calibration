@@ -82,7 +82,7 @@ STALL_TEXT = "The camera stopped. Please wait."
 
 # ---------------------------------------------------------------- the kit this process runs
 
-KIT_DIRS = ("calibtool", "scripts", "config")      # what `calib` copies to the robot (cli.bootstrap)
+KIT_DIRS = ("calibtool", "scripts", "config", "armcal")   # what `calib` copies to the robot (cli.bootstrap)
 KIT_SKIP = ("__pycache__", "tests", "results")     # ... and what it leaves out (with *.npz)
 _KIT = None
 

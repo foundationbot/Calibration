@@ -31,6 +31,7 @@ class Profile:
     stand_steps: bool = False      # True: the stand has fixed positions (place.Stand.steps)
     live_config: object = None     # the live OKVIS config when robot.env names none (P11, 10 Nov 2026)
     neck_kp: object = None         # the neck's kp for grid moves (kp only; None = the motor tool's default)
+    handeye: bool = False          # hand-eye offered in the menu (needs config/handeye/<bot>.json too)
 
     @property
     def host(self) -> str:
@@ -54,7 +55,7 @@ def load(bot, path=PROFILES_YAML, registry=None) -> Profile:
                    float(stand.get("raise_max_m", 0.30)), float(stand.get("lower_max_m", 0.40)),
                    place_limit(e.get("placement_timeout_s", 180.0)), bool(stand.get("auto_skip", True)),
                    bool(stand.get("steps", False)), e.get("live_config"),
-                   None if e.get("neck_kp") is None else float(e["neck_kp"]))
+                   None if e.get("neck_kp") is None else float(e["neck_kp"]), bool(e.get("handeye", False)))
 
 
 def place_limit(v):

@@ -4,6 +4,7 @@ depth burst at each (docs/plans/2026-11-11-handeye-plan.md section 5; first live
 
 usage (on the robot, the calib kit on PYTHONPATH with dma_ipc):
   handeye_wave.py <plan.json> --arm Right --out <dir> [--frames 5] [--kp K] [--dry-run] [--only-burst]
+  handeye_wave.py <plan.json> --arm Right --check            (the preflight as JSON; nothing moves)
 
 plan.json: {"moves": [{"name", "deg": [7 arm joints], "burst": bool, "necks": [[pitch, yaw], ...]}], ...};
 the arm joints in armchain order: ShoulderPitch ShoulderRoll ShoulderYaw ElbowPitch WristYaw WristRoll GripperYaw.
@@ -159,6 +160,63 @@ class Stop(Exception):
     pass
 
 
+CHECK_MAX_DEV_DEG = 3.0          # the plan's clearance was computed from its snapshot: re-plan when the body moved more
+
+
+def check(robot, plan, tool=MOTOR_TOOL, grab_test=None) -> dict:
+    """the preflight, read-only: motion tool with 'targets', motors on, no e-stop, nobody writing /desired, the body
+    as in the plan's snapshot (every joint within CHECK_MAX_DEV_DEG), and depth flowing (a 1-frame grab: also the
+    light check). -> {"ok": bool, "problems": [...], ...}"""
+    out, problems = {}, []
+    try:
+        h = subprocess.run([tool, "--help"], capture_output=True, text=True, timeout=10)
+        out["tool_targets"] = "targets" in h.stdout + h.stderr
+    except (OSError, subprocess.TimeoutExpired) as e:
+        out["tool_targets"] = False
+        out["tool_error"] = str(e)
+    if not out["tool_targets"]:
+        problems.append(f"{tool} has no 'targets' mode (2.1.1's own zeroes unlisted joints)")
+    err = robot.master_ok()
+    out["master"] = err or "motors on, no e-stop"
+    if err:
+        problems.append(err)
+    if not robot.desired_still():
+        problems.append("another program is writing /desired")
+    _, now = robot.names_and_angles()
+    ref = (plan.get("snapshot") or {}).get("q_deg")
+    if ref:
+        dev = {n: round(now[n] - ref[n], 2) for n in ref if n in now and abs(now[n] - ref[n]) > CHECK_MAX_DEV_DEG}
+        out["moved_since_plan"] = dev
+        if dev:
+            problems.append("the body is not as in the plan's snapshot (re-plan the clearance): "
+                            + ", ".join(f"{n} {v:+.1f}" for n, v in dev.items()))
+    else:
+        problems.append("the plan has no snapshot to compare with")
+    if grab_test is not None:
+        rc, tail = grab_test()
+        out["depth"] = tail
+        if rc != 0:
+            problems.append(f"no depth (dark, or OKVIS not publishing): {tail}")
+    out["problems"], out["ok"] = problems, not problems
+    return out
+
+
+def grab_once(tmpdir="/tmp"):
+    path = Path(tmpdir) / "handeye-check.npz"
+    env = dict(os.environ, PYTHONPATH=GRAB_PYDEPS)
+    try:
+        p = subprocess.run(["nice", sys.executable, GRAB, "--once", "1", "--joints", "all", "--out", str(path)],
+                           capture_output=True, text=True, timeout=25, env=env)
+        rc, tail = p.returncode, (p.stdout + p.stderr).strip().splitlines()[-1:] or [""]
+    except subprocess.TimeoutExpired:
+        rc, tail = 1, ["no frame within 25 s"]
+    try:
+        path.unlink()
+    except OSError:
+        pass
+    return rc, tail[0][-200:]
+
+
 class Wave:
     def __init__(self, robot, plan, arm, out: Path, frames=5, kp=None, tool=MOTOR_TOOL, log=print, profiles=(),
                  restore_profile="1280"):
@@ -310,25 +368,35 @@ class Wave:
 
 
 def main(argv=None):
+    global GRAB, GRAB_PYDEPS
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("plan")
     ap.add_argument("--arm", choices=("Right", "Left"), required=True)
-    ap.add_argument("--out", required=True)
+    ap.add_argument("--out", help="the session folder (required unless --check)")
     ap.add_argument("--frames", type=int, default=5)
     ap.add_argument("--kp", type=float, default=None)
     ap.add_argument("--tool", default=MOTOR_TOOL)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--only-burst", action="store_true", help="one burst at the current pose, nothing moves")
     ap.add_argument("--no-hand", action="store_true")
+    ap.add_argument("--check", action="store_true", help="the preflight only (prints JSON), nothing moves")
+    ap.add_argument("--grab", default=GRAB, help="the burst grabber (grab.py)")
+    ap.add_argument("--grab-pydeps", default=GRAB_PYDEPS)
     ap.add_argument("--profiles", default="", help="OKVIS depth profiles, e.g. '768' (switch for the wave) or "
                     "'1280,768' (each pose captured at both; the 2nd+ into <out>/r<name>/); restored at the end")
     ap.add_argument("--restore-profile", default="1280", help="written back when no profile was requested before")
     ap.add_argument("--pins", default="", help="non-arm joints moved first and held there, e.g. "
                     "'RightAnklePitch=-54,RightKneePitch=8' (deg; slow, alone)")
     a = ap.parse_args(argv)
+    GRAB, GRAB_PYDEPS = a.grab, a.grab_pydeps
+    plan = json.load(open(a.plan))
+    if a.check:
+        print(json.dumps(check(Robot(), plan, a.tool, grab_once)))
+        return
+    if not a.out:
+        ap.error("--out is required (except with --check)")
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    plan = json.load(open(a.plan))
     if a.dry_run:
         real = Robot()
         robot = DryRun(*real.names_and_angles())

@@ -26,6 +26,8 @@ profiles:
     stand: {raise_max_m: 0.30, lower_max_m: 0.40, auto_skip: false, steps: true}
     # 10 Nov: "Skipping this one." after 3 minutes came while the operator was still trying; only their C skips
     placement_timeout_s: null
+    # 11 Nov: hand-eye in the menu (config/handeye/P10.json: the arm-wave plans checked for this robot)
+    handeye: true
   P11:
     python: /root/calib-kit/venv/bin/python     # phantom10's kit venv, copied 10 Nov 2026
     pydeps: /root/calib-kit/pydeps               # phantom11's own dma_ipc (from /root/burst-grab/pydeps)

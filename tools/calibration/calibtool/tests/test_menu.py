@@ -21,7 +21,10 @@ LIVE_SID, DEAD_SID = "20261110-140500-P10", "20261110-123252-P10"
 
 
 def profiles():
-    return [profile.load("P10"), profile.load("P11")]
+    """the real profiles, hand-eye off: these tests number the head calibration's menu (hand-eye's own menu entry is
+    tested in test_handeyeflow.py)"""
+    import dataclasses
+    return [dataclasses.replace(profile.load(b), handeye=False) for b in ("P10", "P11")]
 
 
 def sess(sid, phase, live=False, kit=KIT, mode="full", created=NOW - 3600):

@@ -85,6 +85,22 @@ is not used yet.
 
 **Safety.** Nothing in a motion phase resumes by itself: after a link loss, a crash or a reboot it comes back in HOLD and needs G (and Y). Design section 7 has the full list.
 
+## Hand-eye calibration (first version, 11 Nov 2026)
+
+`calib` → robot → **hand-eye calibration**, offered for robots whose profile says `handeye: true` and that have a
+stored setup `config/handeye/<bot>.json` (the arm-wave plans, checked for clearance in MuJoCo against the snapshot in
+the file; P10 only so far). `calibtool/handeyeflow.py`:
+1. copies the kit (now with `armcal`);
+2. runs the preflight per arm, read-only (`scripts/handeye_wave.py --check`): the fixed motion tool, motors on (it
+   never enables them), nobody else commanding, the body within 3° of the plan's snapshot (else: re-plan on Moonstone
+   first), depth flowing;
+3. asks Y, then runs each arm's wave detached on the robot and shows its log; **S + Enter** stops the arm where it is
+   (it holds);
+4. runs read B (`scripts/handeye_match.sh`) and the fit (`armcal.urdffit`) on the robot and prints the table.
+
+The corrected URDF stays in `<root>/handeye/<session>/`: nothing is deployed yet (milestone H4). Depth profiles:
+`profiles` in the setup file (e.g. `"768"`) switches OKVIS's depth profile for the waves and restores it after.
+
 ## Developing
 
 **Tests run only on Moonstone** (the laptop has 14 GB of RAM):

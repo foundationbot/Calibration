@@ -1,0 +1,501 @@
+{
+ "_about": "hand-eye session setup for P10 (phantom10): the arm-wave plans (MuJoCo clearance >= 3.3 cm on every path from this snapshot, also with the measured sag x1.3; results/handeye-p10-2026-11-11) and the snapshot they were checked against. calib refuses the wave when any joint moved > 3 deg from it: re-plan on Moonstone first.",
+ "robot": "phantom10",
+ "bot": "P10",
+ "urdf": "/etc/phantomos/okvis/mk1_1.urdf",
+ "grab": "/root/burst-grab/repo/tools/burst_pointcloud/grab.py",
+ "grab_pydeps": "/root/burst-grab/pydeps",
+ "profiles": "",
+ "frames": 5,
+ "snapshot": {
+  "t": "2026-11-11 08:57",
+  "q_deg": {
+   "LeftShoulderPitch": -6.897194606431046,
+   "LeftShoulderRoll": -2.2143304668886206,
+   "LeftShoulderYaw": 62.12496231290229,
+   "LeftElbowPitch": -14.533566798992856,
+   "LeftWristYaw": 16.809532679508262,
+   "LeftWristRoll": -8.43537412497225,
+   "LeftGripperYaw": 14.670658940918768,
+   "RightShoulderPitch": -9.445349928673805,
+   "RightShoulderRoll": 4.192417923878017,
+   "RightShoulderYaw": 11.11133893517205,
+   "RightElbowPitch": -7.119358462016757,
+   "RightWristYaw": -30.367584540483218,
+   "RightWristRoll": 5.575646063361019,
+   "RightGripperYaw": -112.36574380963006,
+   "NeckPitch": 27.88038993724329,
+   "NeckYaw": 0.27877806631633145,
+   "SpineYaw": 29.998170344128493,
+   "LeftHipRoll": -20.13486662598962,
+   "LeftHipYaw": 59.856765772567776,
+   "LeftHipPitch": -27.431941914455056,
+   "LeftKneePitch": 21.63673301692163,
+   "RightHipRoll": 20.0053389185695,
+   "RightHipYaw": -60.051364692210605,
+   "RightHipPitch": -15.648251963991646,
+   "RightKneePitch": 11.530324083201789,
+   "LeftAnkleRoll": 11.378445435496445,
+   "LeftAnklePitch": -58.77367535512217,
+   "RightAnkleRoll": -9.110616871603465,
+   "RightAnklePitch": -59.51800888030265
+  }
+ },
+ "arms": {
+  "Right": {
+   "moves": [
+    {
+     "name": "stage",
+     "deg": [
+      -20.0,
+      -8.0,
+      6.0,
+      -65.0,
+      -30.37,
+      5.58,
+      -112.37
+     ],
+     "burst": false
+    },
+    {
+     "name": "p08",
+     "deg": [
+      -49.8,
+      -18.9,
+      12.5,
+      -83.3,
+      85.3,
+      21.0,
+      -41.6
+     ],
+     "burst": true,
+     "necks": [
+      [
+       10,
+       -12
+      ],
+      [
+       18,
+       12
+      ],
+      [
+       26,
+       -12
+      ],
+      [
+       22,
+       0
+      ]
+     ]
+    },
+    {
+     "name": "p09",
+     "deg": [
+      -65.9,
+      -19.8,
+      34.4,
+      -66.9,
+      57.3,
+      20.4,
+      -31.4
+     ],
+     "burst": true,
+     "necks": [
+      [
+       10,
+       -12
+      ],
+      [
+       18,
+       12
+      ],
+      [
+       26,
+       -12
+      ],
+      [
+       22,
+       0
+      ]
+     ]
+    },
+    {
+     "name": "q11",
+     "deg": [
+      -65.9,
+      -19.8,
+      34.4,
+      -66.9,
+      57.3,
+      -10.0,
+      -31.4
+     ],
+     "burst": true,
+     "necks": [
+      [
+       10,
+       -12
+      ],
+      [
+       18,
+       12
+      ],
+      [
+       26,
+       -12
+      ],
+      [
+       22,
+       0
+      ]
+     ]
+    },
+    {
+     "name": "p10",
+     "deg": [
+      -66.5,
+      -16.9,
+      52.6,
+      -71.4,
+      85.4,
+      23.1,
+      -58.2
+     ],
+     "burst": true,
+     "necks": [
+      [
+       10,
+       -12
+      ],
+      [
+       18,
+       12
+      ],
+      [
+       26,
+       -12
+      ],
+      [
+       22,
+       0
+      ]
+     ]
+    },
+    {
+     "name": "q12",
+     "deg": [
+      -66.5,
+      -16.9,
+      52.6,
+      -71.4,
+      60.0,
+      0.0,
+      -58.2
+     ],
+     "burst": true,
+     "necks": [
+      [
+       10,
+       -12
+      ],
+      [
+       18,
+       12
+      ],
+      [
+       26,
+       -12
+      ],
+      [
+       22,
+       0
+      ]
+     ]
+    },
+    {
+     "name": "q13",
+     "deg": [
+      -58.0,
+      -18.0,
+      30.0,
+      -80.0,
+      70.0,
+      10.0,
+      -50.0
+     ],
+     "burst": true,
+     "necks": [
+      [
+       10,
+       -12
+      ],
+      [
+       18,
+       12
+      ],
+      [
+       26,
+       -12
+      ],
+      [
+       22,
+       0
+      ]
+     ]
+    },
+    {
+     "name": "stage_back",
+     "deg": [
+      -20.0,
+      -8.0,
+      6.0,
+      -65.0,
+      -30.37,
+      5.58,
+      -112.37
+     ],
+     "burst": false
+    },
+    {
+     "name": "rest",
+     "deg": [
+      -9.45,
+      4.19,
+      11.11,
+      -7.12,
+      -30.37,
+      5.58,
+      -112.37
+     ],
+     "burst": false
+    }
+   ],
+   "source": "plan_p10b.py (wave 2), snap-phantom10-1111-0857"
+  },
+  "Left": {
+   "moves": [
+    {
+     "name": "lift",
+     "deg": [
+      -35.0,
+      10.0,
+      62.13,
+      -14.26,
+      16.8,
+      -9.09,
+      14.65
+     ],
+     "burst": false
+    },
+    {
+     "name": "stage",
+     "deg": [
+      -20,
+      8,
+      -6,
+      -65,
+      16.8,
+      -9.09,
+      14.65
+     ],
+     "burst": false
+    },
+    {
+     "name": "pL07",
+     "deg": [
+      -58.19,
+      21.24,
+      2.6,
+      -42.61,
+      -46.34,
+      -22.83,
+      39.91
+     ],
+     "burst": true,
+     "necks": [
+      [
+       10,
+       0
+      ],
+      [
+       22,
+       -12
+      ],
+      [
+       22,
+       12
+      ],
+      [
+       26,
+       0
+      ]
+     ]
+    },
+    {
+     "name": "pL08",
+     "deg": [
+      -49.77,
+      18.88,
+      -12.54,
+      -83.33,
+      -85.3,
+      -21.05,
+      41.63
+     ],
+     "burst": true,
+     "necks": [
+      [
+       10,
+       0
+      ],
+      [
+       22,
+       -12
+      ],
+      [
+       22,
+       12
+      ],
+      [
+       26,
+       0
+      ]
+     ]
+    },
+    {
+     "name": "pL09",
+     "deg": [
+      -65.86,
+      19.85,
+      -34.37,
+      -66.92,
+      -57.31,
+      -20.45,
+      31.37
+     ],
+     "burst": true,
+     "necks": [
+      [
+       10,
+       0
+      ],
+      [
+       22,
+       -12
+      ],
+      [
+       22,
+       12
+      ],
+      [
+       26,
+       0
+      ]
+     ]
+    },
+    {
+     "name": "pL10",
+     "deg": [
+      -66.52,
+      16.94,
+      -52.58,
+      -71.37,
+      -85.38,
+      -23.09,
+      58.2
+     ],
+     "burst": true,
+     "necks": [
+      [
+       10,
+       0
+      ],
+      [
+       22,
+       -12
+      ],
+      [
+       22,
+       12
+      ],
+      [
+       26,
+       0
+      ]
+     ]
+    },
+    {
+     "name": "pL04",
+     "deg": [
+      -64.22,
+      12.09,
+      -31.76,
+      -58.71,
+      -41.78,
+      -6.23,
+      63.77
+     ],
+     "burst": true,
+     "necks": [
+      [
+       10,
+       0
+      ],
+      [
+       22,
+       -12
+      ],
+      [
+       22,
+       12
+      ],
+      [
+       26,
+       0
+      ]
+     ]
+    },
+    {
+     "name": "stage_back",
+     "deg": [
+      -20,
+      8,
+      -6,
+      -65,
+      16.8,
+      -9.09,
+      14.65
+     ],
+     "burst": false
+    },
+    {
+     "name": "relift",
+     "deg": [
+      -35.0,
+      10.0,
+      62.13,
+      -14.26,
+      16.8,
+      -9.09,
+      14.65
+     ],
+     "burst": false
+    },
+    {
+     "name": "rest",
+     "deg": [
+      -6.9,
+      -2.05,
+      62.13,
+      -14.26,
+      16.8,
+      -9.09,
+      14.65
+     ],
+     "burst": false
+    }
+   ],
+   "source": "phantom14 wave-2 measured poses (L mirrored); MuJoCo clearance >= 3.3 cm incl. sag x1.5 (plan_p10.py, snap-phantom10-1110-2304)"
+  }
+ }
+}

@@ -190,3 +190,35 @@ def test_no_profiles_never_touches_okvis(tmp_path):
     w, r = make(tmp_path)
     w.run(hand_pose=None)
     assert not [a for a in r.sent if a[0] == "profile"]
+
+
+def test_check_reports_every_problem_and_moves_nothing(tmp_path, monkeypatch):
+    class R(hw.DryRun):
+        def master_ok(self):
+            return "motors not on"
+
+        def desired_still(self):
+            return False
+    moved = dict(START, LeftHipYaw=START["LeftHipYaw"] + 40)
+    r = R(NAMES, moved)
+    monkeypatch.setattr(hw.subprocess, "run", lambda *a, **k: type("P", (), {"stdout": "targets", "stderr": "",
+                                                                              "returncode": 0})())
+    res = hw.check(r, dict(plan(), snapshot={"q_deg": START}), tool="t", grab_test=lambda: (1, "timeout"))
+    assert not res["ok"] and r.sent == []
+    txt = " ".join(res["problems"])
+    assert "motors not on" in txt and "/desired" in txt and "LeftHipYaw +40.0" in txt and "no depth" in txt
+
+
+def test_check_ok(monkeypatch):
+    monkeypatch.setattr(hw.subprocess, "run", lambda *a, **k: type("P", (), {"stdout": "x targets y", "stderr": "",
+                                                                              "returncode": 0})())
+    res = hw.check(hw.DryRun(NAMES, START), dict(plan(), snapshot={"q_deg": START}), tool="t",
+                   grab_test=lambda: (0, "1 frame"))
+    assert res["ok"] and res["problems"] == []
+
+
+def test_check_refuses_tool_without_targets(monkeypatch):
+    monkeypatch.setattr(hw.subprocess, "run", lambda *a, **k: type("P", (), {"stdout": "Usage", "stderr": "",
+                                                                              "returncode": 0})())
+    res = hw.check(hw.DryRun(NAMES, START), dict(plan(), snapshot={"q_deg": START}), tool="t")
+    assert not res["ok"] and "targets" in res["problems"][0]
