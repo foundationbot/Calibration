@@ -190,7 +190,7 @@ def test_the_probe_reads_a_fake_root(tmp_path):
 
 
 def test_an_unreachable_robot_offers_try_again(tmp_path):
-    op = Op("1", "1", "5")
+    op = Op("1", "1", "6")                        # continue, new, trial, status, discard, quit
     r = Robot([probe([sess(DEAD_SID, "GRID")])], ssh_fails=1)
     run(op, r, tmp_path)
     t = op.transcript
@@ -220,7 +220,7 @@ def test_a_dead_session_holding_the_lease_restores_the_robot_then_starts_a_new_c
 
 def test_a_failed_restore_starts_nothing_and_goes_back_to_the_menu(tmp_path):
     lk = probe([sess(DEAD_SID, "GRID")], lease={"session": DEAD_SID, "heartbeat": NOW - 7200})
-    op = Op("1", "2", "", "5")
+    op = Op("1", "2", "", "6")                    # back in the menu: ..., discard, quit
     r = Robot([lk], restore_rc=1)
     rc, attached = run(op, r, tmp_path)
     assert "FAILED, the robot is NOT restored" in op.transcript and "nothing was started" in op.transcript
@@ -267,7 +267,7 @@ def test_the_placement_trial_starts_a_trial_session(tmp_path):
 def test_stop_asks_first_then_looks_again(tmp_path):
     lv = probe([sess(LIVE_SID, "HOLD", live=True)])
     after = probe([sess(LIVE_SID, "HOLD")])
-    op = Op("1", "3", "y", "5")
+    op = Op("1", "3", "y", "6")                   # after: continue, new, trial, status, discard, quit
     r = Robot([lv, after])
     run(op, r, tmp_path)
     assert "Stop session 20261110-140500-P10?" in op.transcript
@@ -335,3 +335,32 @@ def test_robot_given_on_the_command_line_skips_the_question(tmp_path):
     op = Op("q")
     run(op, Robot([probe()]), tmp_path, robot="P11")
     assert "Which robot?" not in op.transcript and "Looking at phantom11 (P11)" in op.transcript
+
+
+# ------------------------------------------------------------------ discard (10 Nov: "when i delete old sessions they
+# are not deleted")
+
+
+def test_an_unfinished_session_can_be_discarded_after_the_robot_is_put_back(tmp_path):
+    lk = probe([sess(DEAD_SID, "MOTORS")], lease={"session": DEAD_SID, "heartbeat": NOW - 600})
+    after = probe([])
+    r = Robot([lk, after])
+    op = Op("1", "5", "y")                        # continue, new, trial, status, discard, quit
+    run(op, r, tmp_path)
+    t = op.transcript
+    assert f"discard session {DEAD_SID}" in t
+    k = r.kinds()
+    assert k.index("restore") < next(i for i, (kd, line) in enumerate(r.calls) if menu.DISCARD_MARK in line)
+    assert "discarded session" in t
+
+
+def test_discard_asks_first_and_does_nothing_on_no(tmp_path):
+    r = Robot([probe([sess(DEAD_SID, "MOTORS")])])
+    op = Op("1", "3", "n", "q")
+    run(op, r, tmp_path)
+    assert not any(menu.DISCARD_MARK in line for _, line in r.calls) and "restore" not in r.kinds()
+
+
+def test_a_discarded_session_is_not_offered():
+    lk = menu.Look(sessions=[sess(DEAD_SID, "DISCARDED")], now=NOW)
+    assert lk.unfinished == []

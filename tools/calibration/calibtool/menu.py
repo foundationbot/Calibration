@@ -31,7 +31,21 @@ from pathlib import Path
 
 from calibtool import cli, daemon, profile as prof_mod, robots
 
-ENDED = daemon.TERMINAL             # DONE, ABORTED, STOPPED_LOUD: nothing to continue
+ENDED = frozenset(daemon.TERMINAL) | {"DISCARDED"}     # DONE, ABORTED, STOPPED_LOUD, discarded: nothing to continue
+DISCARD_MARK = "calibtool-menu-discard"
+# 10 Nov: "when i delete old sessions they are not deleted": a session can be discarded from the menu. Its folder is
+# kept (data retention, the report, rollback.sh); its state.json phase becomes DISCARDED, so it is no longer offered
+DISCARD = r'''# calibtool-menu-discard
+import json, os, sys, time
+p = os.path.join(sys.argv[1], "sessions", sys.argv[2], "state.json")
+with open(p) as f:
+    st = json.load(f)
+st["discarded_from"], st["phase"], st["discarded_t"] = st.get("phase"), "DISCARDED", time.time()
+with open(p + ".tmp", "w") as f:
+    json.dump(st, f)
+os.replace(p + ".tmp", p)
+print("discarded " + sys.argv[2])
+'''
 SHOW_UNFINISHED = 3                 # the newest unfinished sessions offered to continue
 # 10 Nov: espeak is not offered ("why is espeak even an option?"); a PC without Piper shows the prompts as text
 VOICES = (("piper", "Piper voice (recommended)"), ("text", "text on screen, no voice"))
@@ -75,7 +89,7 @@ for sj in glob.glob(os.path.join(root, "sessions", "*", "state.json")):
 found.sort(reverse=True)
 out, n = [], 0
 for created, sid, st in found:
-    ended = st.get("phase") in ("DONE", "ABORTED", "STOPPED_LOUD")
+    ended = st.get("phase") in ("DONE", "ABORTED", "STOPPED_LOUD", "DISCARDED")
     if sid not in named:
         if ended or n >= 6:
             continue
@@ -204,7 +218,7 @@ def describe(p, lk, kit) -> list:
 @dataclass
 class Option:
     text: str
-    kind: str                           # continue | new | trial | status | stop | retry | quit
+    kind: str                           # continue | new | trial | status | stop | discard | retry | quit
     session: object = None
 
 
@@ -230,6 +244,10 @@ def options(lk, kit) -> list:
     o.append(Option("status only", "status"))
     for s in lk.live:
         o.append(Option(f"stop the running session {s['id']}", "stop", s))
+    if not lk.live:
+        for s in lk.unfinished:
+            o.append(Option(f"discard session {s['id']} (the robot put back first if it changed it; its data is "
+                            "kept; no longer offered)", "discard", s))
     o.append(Option("quit", "quit"))
     return o
 
@@ -401,7 +419,42 @@ class Menu:
             return None
         if o.kind == "continue":
             return self.cont(p, o.session)
+        if o.kind == "discard":
+            return self.discard(p, lk, o.session)
         return self.new(p, lk, trial=o.kind == "trial")
+
+    def discard(self, p, lk, s):
+        """the robot put back first when this session still holds the producer (its own restore), then the session
+        marked DISCARDED (folder kept); the motors are not touched"""
+        sid = s["id"]
+        if (self.ask(f"Discard session {sid}? It is no longer offered; its folder stays on the robot [y/N]: ")
+                or "").lower() not in ("y", "yes"):
+            return None
+        dl = lk.dead_lease
+        if dl and dl.get("session") == sid and not self._restore(p, sid):
+            return None
+        line = f"python3 - {shlex.quote(p.root)} {shlex.quote(sid)} <<'EOF'\n{DISCARD}EOF"
+        try:
+            r = self.run(cli.ssh_argv(p, line), capture_output=True, text=True, timeout=60)
+            ok, text = r.returncode == 0, (r.stdout or "") + (r.stderr or "")
+        except (OSError, subprocess.TimeoutExpired) as e:
+            ok, text = False, f"{type(e).__name__}: {e}"
+        self.out(f"  discarded session {sid} (its folder stays on the robot; the motors are as they were)" if ok else
+                 f"  could not discard {sid}: {text.strip()[-200:]}")
+        return None
+
+    def _restore(self, p, sid) -> bool:
+        self.out(f"Session {sid} still holds the camera producer: running the robot's own restore for it ...")
+        try:
+            r = self.run(cli.ssh_argv(p, cli.restore_line(p, 0)), capture_output=True, text=True, timeout=600)
+            rc, text = r.returncode, (r.stdout or "") + (r.stderr or "")
+        except (OSError, subprocess.TimeoutExpired) as e:
+            rc, text = 1, f"{type(e).__name__}: {e}"
+        for line in text.strip().splitlines():
+            self.out(f"  | {line}")
+        if rc != 0:
+            self.out("The restore did not finish (its output is above): nothing else was done.")
+        return rc == 0
 
     def status(self, p, lk):
         s = (lk.live or lk.unfinished or [None])[0]

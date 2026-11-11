@@ -46,7 +46,8 @@ _MOVING = f"A = abort (the pose in progress finishes, then nothing more moves) |
 _AFTER = "D = disable the motors (twice: the warning first)"
 FULL_KEYS = {"PREFLIGHT": "A = abort", "BLOCKED": "A = abort",
              "READY": f"M = motors (the enable screen) | {OKVIS_OPT} | A = abort",
-             "MOTORS": "Y = the robot hangs on the gantry and nobody is at its head: enable the motors | A = abort",
+             "MOTORS": "Y = the robot hangs on the gantry and nobody is at its head: enable the motors | "
+                       "R = restart the motor master (motors off) | A = abort",
              "SETUP": f"{OKVIS_OPT} | A = abort", "PLACE": _GUIDE, "IMU_PLACE": _GUIDE, "CHECK_PLACE": _GUIDE,
              "POST_PLACE": _GUIDE, "GRID": _MOVING, "IMU_SWEEP": _MOVING, "CHECK_GRID": _MOVING,
              "HOLD": "G = continue (after a countdown) | A = abort", "FIT": f"{OKVIS_OPT} | A = abort",

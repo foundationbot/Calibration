@@ -946,3 +946,15 @@ def test_a_deploy_at_the_previous_size_restores_the_producer_as_saved(tmp_path):
     rs = s.m.state.get("restore") or {}
     assert any("restored as saved" in x for x in rs.get("done", [])), rs
     assert s.kube.args[s.kube.args.index("--fps") + 1] == "25"
+
+
+def test_r_on_the_motor_screen_restarts_the_motor_master_then_y_enables(tmp_path):
+    keys = dict(FULL_KEYS)
+    keys["MOTORS"] = ["R", "Y"]
+    s = Session(tmp_path, keys=keys)
+    calls = []
+    s.flow.robot.enabler.restart_master = lambda: calls.append(1) or me.EnableResult(
+        False, False, "motor master restarted; all drives answering. Y enables the motors")
+    s.run()
+    assert calls == [1] and s.m.phase == "DONE"
+    assert any(e["kind"] == "motor_master_restart" for e in s.events())

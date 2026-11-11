@@ -270,3 +270,64 @@ def test_parse_drives_reads_the_newest_degraded_line():
          "[Desired] rejecting stale command\n[WKC] degraded: actual=30 expected=144 (short 114)\n")
     assert me.parse_drives(j) == {"answering": 30, "expected": 144}
     assert me.parse_drives("all quiet") == {"answering": None, "expected": None}
+
+
+# ---------------------------------------------------------------- 10 Nov, phantom10: a drive faulting on enable, R
+
+
+FAULT_JOURNAL = ("[CommandDispatcher] ENABLE_MOTORS (request_id=1)\n"
+                 "[LeftShoulderPitch] FAULT latched during operation: error_code=0x0000 status_word=0x0218\n")
+
+
+class FaultRun(Run):
+    """the master answers the enable with motor_state 1 and a drive fault, no 'N of N motors enabled' line"""
+
+    def __call__(self, argv, timeout=5):
+        if argv[0] == "journalctl":
+            return 0, FAULT_JOURNAL if self.motor_state else "boot\n"
+        return super().__call__(argv, timeout)
+
+
+def test_a_drive_faulting_on_enable_is_named_with_what_to_do():
+    en, r = make(run=FaultRun())
+    res = en.enable("Y", gantry=True)
+    assert not res.ok and "LeftShoulderPitch drive faulted" in res.detail and "hardware" in res.detail
+    assert "R restarts the motor master" in res.detail
+
+
+def test_parse_active_errors_reads_the_masters_set_errors():
+    j = ("[WARNING ] [dma_master  ] [ACTIVE] Motor 0 (LeftShoulderPitch): input encoder error (SIL socket 1) SET "
+         "(set for 61 s, duty 100.0% of last 60 s) [roll-call: periodic] slave=24\n")
+    assert me.parse_active_errors(j) == {"LeftShoulderPitch": "input encoder error"}
+    cs = {c.name: c for c in me.pre_enable_checks(good_state(joint_errors=me.parse_active_errors(j)), BASE, True)}
+    assert cs["joint_errors"].status == "warn" and "LeftShoulderPitch" in cs["joint_errors"].detail
+    assert me.passed(list(cs.values()))                   # a warning, never a block (the operator decides)
+
+
+class MasterRun(Run):
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.restarted = False
+
+    def __call__(self, argv, timeout=5):
+        if argv[:2] == ["systemctl", "restart"]:
+            self.calls.append(list(argv))
+            self.restarted = True
+            return 0, ""
+        if argv[:2] == ["systemctl", "is-active"]:
+            self.calls.append(list(argv))
+            return 0, "active"
+        return super().__call__(argv, timeout)
+
+
+def test_r_restarts_the_motor_master_only_with_the_motors_off():
+    r = MasterRun()
+    en, _ = make(run=r)
+    res = en.restart_master()
+    assert r.restarted and ["systemctl", "restart", "dma-ethercat"] in en.commands
+    assert "all drives answering" in res.detail
+    r2 = MasterRun()
+    r2.motor_state = 2
+    en2, _ = make(run=r2)
+    res2 = en2.restart_master()
+    assert res2.refused and not r2.restarted and "drop the head and arms" in res2.detail

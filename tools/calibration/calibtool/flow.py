@@ -789,7 +789,21 @@ class FullFlow:
             checks = [c.as_dict() for c in en.checks(gantry=False)]
             self._upd(motors={"checks": checks, "detail": MOTORS_TEXT if last is None else last.detail,
                               "refused": None if last is None else last.refused})
-            self._wait_keys("Y")
+            k = self._wait_keys("YR")
+            if k == "R":
+                # the operator's R (approved 10 Nov): the motor master restarted, nothing enabled; then back here
+                self._upd(busy={"what": "restarting the motor master (up to 90 s)", "since": self.clock()})
+                self._say("motors", "Restarting the motor master. Up to a minute and a half.")
+                n0 = len(en.commands)
+                res = en.restart_master()
+                for a in en.commands[n0:]:
+                    self.rec.add("motors", a)
+                self._upd(busy=None, motors=res.as_dict())
+                self._event("motor_master_restart", detail=res.detail, refused=res.refused)
+                self._say("motors", "Motor master restarted. Check the screen, then Y." if not res.refused else
+                          "Not restarted. The reason is on the screen.")
+                last = res
+                continue
             self._upd(gantry_confirmed=True)
             n0 = len(en.commands)
             res = en.enable("Y", gantry=True)

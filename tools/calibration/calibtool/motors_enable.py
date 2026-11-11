@@ -33,6 +33,26 @@ ENABLE_ARGV = ["dma_cmd_client", "enable-motors"]
 DISABLE_ARGV = ["dma_cmd_client", "disable-motors"]
 BUS_MIN_V = 44.0                 # the bus reads ~53 V charged, ~3 V with the motor power off (FF10 latched)
 VERIFY_S = 5.0
+RESTART_ARGV = ["systemctl", "restart", "dma-ethercat"]
+RESTART_WAIT_S = 90.0
+# 10 Nov, phantom10: the LeftShoulderPitch drive faulted 19 ms into every enable (a standing encoder error), and the
+# master, enabling all motors at once, left all of them off; the screen said "no 'N of N motors enabled' line"
+_FAULT = re.compile(r"\[(\w+)\] FAULT latched")
+_ENC_ACTIVE = re.compile(r"\[ACTIVE\] Motor \d+ \((\w+)\): ([^()\[]*?error)[^\n]*\bSET\b")
+
+
+def parse_faults(text) -> list:
+    """the joints whose drive latched a fault (journal "[Joint] FAULT latched"), in order, once each"""
+    out = []
+    for j in _FAULT.findall(text or ""):
+        if j not in out:
+            out.append(j)
+    return out
+
+
+def parse_active_errors(text) -> dict:
+    """{joint: error} from the master's "[ACTIVE] Motor N (Joint): <...> error ... SET" lines (still set)"""
+    return {j: e.strip() for j, e in _ENC_ACTIVE.findall(text or "")}
 POLL_S = 0.5
 DISABLE_WARNING = ("Disabling the motors makes the robot limp: the head and arms drop. Only with the operator next to "
                    "the robot, holding the head if it is not on the gantry. Press D again to disable.")
@@ -90,6 +110,11 @@ def pre_enable_checks(s: dict, baseline: dict, gantry: bool) -> list:
             f"only {dr.get('answering')} of {dr.get('expected')} EtherCAT replies: most motor drives are not "
             "answering. The motor power is probably off (power switch, breaker, e-stop box): switch it on, wait until "
             "this line is ok, then Y")
+    errs = s.get("joint_errors") or {}
+    if errs:
+        out.append(preflight.Check("joint_errors", "warn", "; ".join(f"{j}: {e}" for j, e in errs.items()) +
+                                   " (active now: that drive will likely fault on enable, and the master then leaves "
+                                   "all motors off)", "motion"))
     on = getattr(m, "motors_on", None)
     st = getattr(m, "motor_state", None)
     if st == 1:
@@ -206,6 +231,12 @@ class Enabler:
             except Exception:  # noqa: BLE001
                 jrc, jout = 1, ""
             cnt = parse_enabled(jout) if jrc == 0 else None
+            faults = parse_faults(jout) if jrc == 0 else []
+            if faults and not (cnt is not None and cnt[0] == cnt[1]):
+                return EnableResult(False, False, f"{', '.join(faults)} drive faulted during the enable, so the master "
+                                    "left all motors off (it enables them together). A fault that comes back at once "
+                                    "is standing (encoder, cable, power of that joint): it needs hardware attention. "
+                                    "R restarts the motor master; then Y", cs)
             if cnt is not None and cnt[0] != cnt[1]:
                 return EnableResult(False, False, f"only {cnt[0]} of {cnt[1]} motors enabled: STOP. Not disabled "
                                     "automatically (that drops the head and arms); the operator decides", cs, *cnt)
@@ -245,6 +276,37 @@ class Enabler:
                                 "over; the operator decides", cs, *cnt)
         return EnableResult(True, False, f"motors already on ({cnt[0]} of {cnt[1]}, motor_state {state}): taken over "
                             "on the operator's Y, no enable sent", cs, *cnt)
+
+    def restart_master(self) -> EnableResult:
+        """R on the motor screen (approved by the operator on 10 Nov): systemctl restart dma-ethercat, only with no
+        motor enabled (motor_state 2 = on: a restart would drop the head and arms); then wait for the ping and for the
+        drives to answer (no [WKC] degraded line for 5 s)"""
+        m = motors.master(self.run)
+        if getattr(m, "motor_state", None) == 2:
+            return EnableResult(False, True, "the motors are on: restarting the motor master would drop the head and "
+                                "arms; not restarting")
+        self.commands.append(list(RESTART_ARGV))
+        if self.dry_run:
+            return EnableResult(False, False, "dry run: would send " + " ".join(RESTART_ARGV), dry_run=True)
+        rc, out = self.run(list(RESTART_ARGV), timeout=60)
+        if rc != 0:
+            return EnableResult(False, False, f"motor master restart failed (rc {rc}): {(out or '').strip()[:200]}")
+        t0 = self.clock()
+        while self.clock() - t0 < RESTART_WAIT_S:
+            self.sleep(POLL_S)
+            if self._ping_state() is None:
+                continue
+            try:
+                jrc, jout = self.run(["journalctl", "-u", motors.SERVICE, "--since", "-5s", "-o", "cat",
+                                      "--no-pager"], timeout=10)
+            except Exception:  # noqa: BLE001
+                jrc, jout = 1, ""
+            d = parse_drives(jout) if jrc == 0 else None
+            if d is not None and d.get("answering") is None and self.clock() - t0 >= 10.0:
+                return EnableResult(False, False, "motor master restarted; all drives answering. Y enables the "
+                                    "motors")
+        return EnableResult(False, False, f"motor master restarted, but the drives were not all answering within "
+                            f"{RESTART_WAIT_S:g} s: see the drives line")
 
     def disable(self, confirmed) -> DisableResult:
         if confirmed is not True:
@@ -291,10 +353,19 @@ class EnableProbe:
     def __call__(self) -> dict:
         s = {"autonomy": self.autonomy(), "pods": self.pods(),
              "desired_still": motors.desired_still(lambda: motors.ring_head(self.shm / "desired")),
-             "master": motors.master(self.run), "drives": self._drives()}
+             "master": motors.master(self.run), "drives": self._drives(), "joint_errors": self._joint_errors()}
         for k, fn in self.opt.items():
             s[k] = None if fn is None else fn()
         return s
+
+    def _joint_errors(self):
+        """joints with an error the master reports as still SET in the last 2 minutes ({} when none or unreadable)"""
+        try:
+            rc, out = self.run(["journalctl", "-u", motors.SERVICE, "--since", "-2min", "-o", "cat", "--no-pager"],
+                               timeout=10)
+        except Exception:  # noqa: BLE001
+            return {}
+        return parse_active_errors(out) if rc == 0 else {}
 
     def _drives(self):
         """EtherCAT replies from the master's journal of the last 5 s (None: not readable)"""
