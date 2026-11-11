@@ -825,7 +825,27 @@ def postcheck_verdict(old_mm, new_mm, side=None, gate_mm=GATE_MM, alpha=ALPHA, m
     return PostVerdict("NOT_BETTER", False, False, [line, f"new not shown better than old (p >= {alpha:g})"], stats)
 
 
-# ================================================================ CLI (on the robot)
+# ================================================================ CLI
+
+
+def ssh_runner(host, run=None, default_timeout=60):
+    """deploy.Remote's runner over ssh (the deploy run from a laptop / Moonstone with the whole repo, armcal included:
+    the calib kit on the robot carries calibtool, scripts and config only); stdin passes through (Remote.write)"""
+    import shlex
+    import subprocess
+    opts = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=5"]
+
+    def go(argv, input=None, timeout=None):
+        cmd = ["ssh", *opts, host, shlex.join([str(a) for a in argv])]
+        if run is not None:
+            return run(cmd, input=input, timeout=timeout)
+        try:
+            r = subprocess.run(cmd, input=input, capture_output=True, text=True, timeout=timeout or default_timeout)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return 127, f"{type(e).__name__}: {e}"
+        return r.returncode, (r.stdout or "") + (r.stderr or "")
+    return go
+
 
 
 def main(argv=None) -> int:
@@ -836,7 +856,8 @@ def main(argv=None) -> int:
     g.add_argument("--robot", required=True, help="the bot name (robots.yaml), e.g. P10")
     g.add_argument("--session", required=True)
     g.add_argument("--out", required=True)
-    d = sub.add_parser("deploy", help="deploy a fit folder on this robot (run on the robot)")
+    d = sub.add_parser("deploy", help="deploy a fit folder (on the robot, or from here with --host)")
+    d.add_argument("--host", default=None, help="root@phantomNN: run the robot commands over ssh")
     d.add_argument("--fit", required=True, help="the fit folder (fit.json, geometry.json, readb-*.json)")
     d.add_argument("--deploy-dir", required=True, help="on the robot: backups, rollback.sh, the result")
     d.add_argument("--model-only", action="store_true", help="T_BS kept; the URDF only (default model M12)")
@@ -852,7 +873,7 @@ def main(argv=None) -> int:
         print(f"wrote {a.out}: {geo.okvis_config} ({geo.okvis_config_sha256[:12]})")
         return 0
     fit = HandeyeFit.load(a.fit)
-    run = dp.shell_runner()
+    run = ssh_runner(a.host) if a.host else dp.shell_runner()
     remote = dry_run_remote(run) if a.dry_run else dp.Remote(run)
     snap = take_snapshot(remote, fit)
     hd = HandeyeDeployer(remote, fit, snap, a.deploy_dir, "model_only" if a.model_only else "head", a.model,

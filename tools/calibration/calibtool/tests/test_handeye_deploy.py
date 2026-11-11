@@ -612,3 +612,16 @@ def test_live_1111a_deploy_reproduces_the_fit_and_its_urdf(data_root):
     for side in ("Right", "Left"):
         e = he.wrist_errors(fit.selected(side), new, T_new, T_BS)
         assert abs(np.median(e) - fit.report["models"]["M12+head"]["in_sample_median_mm"][side]) < 1e-6
+
+
+def test_ssh_runner_quotes_the_command_and_passes_stdin():
+    seen = []
+    def fake(cmd, input=None, timeout=None):
+        seen.append((cmd, input))
+        return 0, "ok"
+    run = he.ssh_runner("root@phantom10", run=fake)
+    rem = dp.Remote(run)
+    rem.write("/etc/phantomos/okvis/a b.yaml", "text")
+    cmd, inp = seen[-1]
+    assert cmd[:1] == ["ssh"] and "root@phantom10" in cmd and inp == "text"
+    assert "'/etc/phantomos/okvis/a b.yaml'" in cmd[-1] and "calibtool-tmp" in cmd[-1]
