@@ -117,7 +117,10 @@ How to read it:
 
 **Stage 2, both arms jointly.**
 - A robust least squares of the clean wrist offsets over a small parameter set.
-- **Default = phantom14's M12:** NeckYaw origin xyz (shared) plus a ShoulderRoll zero offset per arm (5 parameters).
+- **Default = M12+head** (H-1, 11 Nov: best on unseen arm poses, held-out median 3.6 / 5.3 mm, p90 7.1 mm): NeckYaw
+  origin xyz (shared), a ShoulderRoll zero offset per arm, and the camera's position in the head (8 parameters).
+  phantom14's deployed M12 (5 parameters, without the head term) is the fallback when the neck angles can't separate
+  the head term (correlation, standard errors). Results: `tools/calibration/results/handeye-h1-2026-11-11/`.
 - **The candidate list is fixed before any data are seen.** Proposal:
   - M12;
   - M9 (one shoulder roll);
@@ -246,7 +249,7 @@ How to read it:
 
 | # | Milestone | Where | Done when |
 |---|---|---|---|
-| H-1 | **Offline go/no-go** on stored data with the existing Moonstone scripts: leave-one-arm-pose-out cross-validation on phantom14 wave 2 (both arms); the noise floor from B0 scatter; M12's standard errors and condition number; phantom21 `1102a` as a failure case | Moonstone only | a written verdict: what error the method reaches on unseen arm poses, which parameters are shown (standard errors), the proposed bar. **Stop here if unseen-pose error is not clearly below the live URDF's.** |
+| H-1 | **DONE 11 Nov: GO** (`results/handeye-h1-2026-11-11/`). **Offline go/no-go** on stored data with the existing Moonstone scripts: leave-one-arm-pose-out cross-validation on phantom14 wave 2 (both arms); the noise floor from B0 scatter; M12's standard errors and condition number; phantom21 `1102a` as a failure case | Moonstone only | a written verdict: what error the method reaches on unseen arm poses, which parameters are shown (standard errors), the proposed bar. **Stop here if unseen-pose error is not clearly below the live URDF's.** |
 | H0 | Port read B (meshfit, hand_check, `_burstfusion`, meshes, `BURST_URDF`) and the stage-2 fit into this repo (subject to section 9.2), with mujoco + MJCF in the test venv and CI | Moonstone, CI | replay reproduces phantom14's M12 URDF and its per-capture numbers within tolerance; scored against the (old) phantom12 plate yardstick; B0 time per capture measured on a Thor CPU (needs the user's OK) |
 | H1 | Per-robot planner (arm poses x neck angles, view on the sagged pose, information, MuJoCo, tour) | Moonstone | on phantom14's data it picks a subset that reaches H-1's error; plans for phantom10/11 pass clearance |
 | H2 | `armmotion.py` with fakes; consumer inventory (read-only on robots); a safety review by a separate reviewer | Moonstone; robots read-only | review says safe; a dry run records every command; consumer table filled with owners |
