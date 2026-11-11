@@ -285,7 +285,7 @@ def test_grid_screen_shows_the_countdown_and_the_pose():
                         grid={"placement": "0.75 m", "pose": 4, "of": 49,
                               "last": {"command": [8.0, -11.0], "measured": [8.4, -11.0], "tags_l": 30,
                                        "found": True}}))
-    assert "STARTING IN 3" in r and "pose 4 of 49" in r and "0.75 m" in r
+    assert "STARTING IN 3" in r and "take 0.75 m: pose 4/49" in r and "last pose +8/-11 deg" in r
 
 
 def test_deploy_size_screen_offers_the_options_and_the_facts():
@@ -466,7 +466,7 @@ def test_the_current_prompt_comes_right_after_the_banner_then_progress_then_deta
     L = _lines(r)
     assert "A = abort" in L[0] and "GRID" in L[0]
     assert _at(L, "NOT NORMAL") < _at(L, "Step back from the head.") < _at(L, "STARTING IN 3") \
-        < _at(L, "pose 4 of 49") < _at(L, "preflight") < _at(L, "camera 3 slow")
+        < _at(L, "pose 4/49") < _at(L, "preflight") < _at(L, "camera 3 slow")
     assert L[-1] == tui.keys_for(full("GRID"))
 
 
@@ -577,3 +577,101 @@ def test_every_full_phase_keeps_abort_in_the_header_and_the_key_help_last(phase)
     assert "A = abort" in L[0] and phase in L[0]
     assert L[-1] == tui.keys_for(full(phase))
     assert "NOT NORMAL: DRY RUN" in L
+
+
+# ------------------------------------------------------------------ progress per take and quality per section (10 Nov)
+
+
+def test_the_take_has_a_progress_bar_and_its_time_left():
+    r = tui.render(full("GRID", grid={"placement": "0.75 m", "pose": 23, "of": 49, "eta_s": 74}))
+    line = next(x for x in r.splitlines() if x.startswith("take "))
+    assert line == "take 0.75 m: pose 23/49 [#########-----------] 47 %  about 1 min left"
+    r = tui.render(full("GRID", grid={"placement": "0.75 m", "pose": 45, "of": 49, "eta_s": 12}))
+    assert "pose 45/49 [##################--] 92 %  about 12 s left" in r
+    r = tui.render(full("CHECK_GRID", grid={"placement": "1.2 m", "pose": 49, "of": 49, "eta_s": 0}))
+    assert "pose 49/49 [####################] 100 %" in r and "left" not in r.split("100 %")[1].splitlines()[0]
+
+
+@pytest.mark.parametrize("phase", ["GRID", "CHECK_GRID", "HOLD", "IMU_SWEEP"])
+def test_the_bar_shows_in_the_moving_phases_and_the_imu_sweep(phase):
+    assert "pose 3/10 [######--------------] 30 %" in tui.render(full(phase, grid={"placement": "imu", "pose": 3,
+                                                                                    "of": 10}))
+
+
+def test_no_bar_outside_them():
+    assert "take " not in tui.render(full("FIT", grid={"placement": "0.75 m", "pose": 3, "of": 10}))
+
+
+def quality(stop=False):
+    return {"cams": {"0": {"sections": [[249, 473, 164], [370, 600, 328], [90, 210, 120]],
+                           "pct": [[62, 118, 41], [92, 150, 82], [22, 52, 30]],
+                           "edges": {"left": 1, "right": 2, "top": 3, "bottom": 4}, "bottom_strip_pct": 40},
+                     "1": {"sections": [[284, 528, 182], [1, 2, 3], [4, 5, 6]],
+                           "pct": [[71, 132, 45], [100, 160, 99], [30, 60, 40]], "edges": {}}},
+            "third_min": 400,
+            "heldout": {"sections": [[[0, 2, 8], [0, 5, 10], [0, 1, 6]], [[3, 10, 10], [10, 10, 10], [1, 0, 0]],
+                                     [[0, 0, 0], [2, 3, 4], [9, 9, 9]]],
+                        "bands": ["0.4-0.6", "0.6-0.9", "0.9-1.3"], "want": 10, "judged": 5, "judged_min": 6,
+                        "far": {"1.3-1.7": 51, "1.7-2.3": 12}, "far_min": 21},
+            "blocking": [] if stop else ["more corners in the bottom-left of the left camera",
+                                         "the held-out check needs the top-right section at 0.9-1.3 m"],
+            "stop_met": stop}
+
+
+def _q_lines(r):
+    L = r.splitlines()
+    k = next(i for i, x in enumerate(L) if x.startswith("image sections"))
+    return L[k:k + 7]
+
+
+@pytest.mark.parametrize("phase", ["PLACE", "GRID", "HOLD", "IMU_PLACE", "FIT", "DECIDE"])
+def test_quality_per_section_both_cameras_beside_the_held_out_check(phase):
+    r = tui.render(full(phase, quality=quality()))
+    q = _q_lines(r)
+    assert "held-out check: judged 5 of 6 needed" in q[0]
+    assert "left camera" in q[1] and "right camera" in q[1] and "0.4-0.6/0.6-0.9/0.9-1.3" in q[1]
+    assert q[2].split()[:7] == ["top", "62", "ok", "41", "71", "ok", "45"]
+    assert "TL -/2/8" in q[2] and "T  -/5/ok" in q[2] and "TR -/1/6" in q[2]
+    assert q[3].split()[:7] == ["middle", "92", "ok", "82", "ok", "ok", "99"] and "C  ok/ok/ok" in q[3]
+    assert q[4].startswith("bottom") and "BL -/-/-" in q[4] and "BR 9/9/9" in q[4]
+    assert q[5] == "far bands: 1.3-1.7 m 51/21 ok, 1.7-2.3 m 12/21"
+    assert q[6].startswith("still needed: more corners in the bottom-left of the left camera; the held-out")
+    assert all(len(x) <= 100 for x in q)
+    assert "\033[" not in r                                  # plain text unless on a terminal
+
+
+def test_quality_says_enough_when_the_stop_rule_is_met():
+    r = tui.render(full("GRID", quality=quality(stop=True)))
+    assert "coverage: enough to stop" in r and "still needed" not in r
+
+
+def test_quality_is_coloured_only_on_a_terminal():
+    r = tui.render(full("GRID", quality=quality()), ansi=True)
+    assert f"{tui.GREEN}  ok{tui.PLAIN}" in r and f"{tui.YELLOW}  62{tui.PLAIN}" in r and f"{tui.RED}  41{tui.PLAIN}" in r
+    import re
+    plain = re.sub(r"\033\[[0-9;]*m", "", r)
+    assert all(len(x) <= 100 for x in _q_lines(plain))
+    assert _q_lines(plain)[2].index("TL") == _q_lines(tui.render(full("GRID", quality=quality())))[2].index("TL")
+
+
+def test_quality_shows_in_the_trial_and_not_in_other_phases():
+    assert "image sections" in tui.render(state("TRIAL", quality=quality()))
+    assert "image sections" not in tui.render(full("DEPLOY", quality=quality()))
+    assert "image sections" not in tui.render(full("READY", quality=quality()))
+
+
+def test_quality_with_missing_keys_skips_them_silently():
+    assert "image sections" not in tui.render(full("GRID", quality={}))
+    only_cams = tui.render(full("GRID", quality={"cams": {"0": {"pct": [[10, 20, 30]]}}}))
+    assert "image sections" in only_cams and "held-out" not in only_cams and "far bands" not in only_cams
+    only_held = tui.render(full("GRID", quality={"heldout": {"sections": [[[1, 2, 3]]]}}))
+    assert "held-out check" in only_held and "image sections" not in only_held
+    assert "still needed: x" in tui.render(full("GRID", quality={"blocking": ["x"]}))
+    tui.render(full("GRID", quality={"cams": {"0": {"pct": "junk"}}, "heldout": {"sections": "junk", "far": {}}}))
+
+
+def test_the_quality_block_is_at_most_8_lines():
+    r = tui.render(full("GRID", quality=quality()))
+    L = r.splitlines()
+    k = next(i for i, x in enumerate(L) if x.startswith("image sections"))
+    assert sum(1 for x in L[k:k + 9] if x and not x.startswith(("preflight", "-", "board", "cameras"))) <= 8

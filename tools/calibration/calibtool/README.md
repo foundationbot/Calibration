@@ -11,21 +11,43 @@ Design and milestones: `docs/superpowers/plans/2026-11-09-calibration-terminal-t
 Per-milestone plans: `docs/superpowers/plans/2026-11-09-calibtool-M{1,2,3,4}-*.md` and `2026-11-10-calibtool-M5-session.md`.
 State and open issues: `HANDOFF.md` (this folder).
 
-## Running it (from a laptop, in `tools/calibration/`)
+## Running it (from a laptop)
 
+**Once:** build the single-file executable and put it on the PATH (again after pulling new code):
 ```
-python3 -m calibtool.cli phantom10 --trial            # placement trial: guidance only, nothing moves
-python3 -m calibtool.cli phantom10 --full --dry-run    # the whole session against the robot, recording commands only
-python3 -m calibtool.cli phantom10 --full              # the real session (motors, neck, producer, deploy on Y)
-    [--voice piper|text] [--session ID] [--replace] [--status] [--stop] [--no-speech]
+cd tools/calibration && python3 -m calibtool.cli --install      # -> ~/.local/bin/calib  [--install-dir DIR]
+```
+It is a zipapp holding the whole kit (`calibtool`, `scripts`, `config`, the robot URDF); it unpacks once to
+`~/.cache/calibtool/kit-<hash>` and runs from there. `calib --version` prints the kit hash, the same as from the worktree.
+
+**Then just `calib`** (or `calib phantom10`). It asks, in plain numbered prompts:
+1. which robot (number, host name or bot name; Enter = last time's), or "new robot (setup)";
+2. after one read-only look at the robot (live calibd and its kit, a held producer lease, unfinished sessions), only
+   what makes sense: continue a session, start a new calibration, the placement trial, status, stop the running one;
+   - a calibd running older code, or a dead session, is restarted with this laptop's kit (it comes back in HOLD: G);
+   - a dead session still holding the producer lease is undone first by the robot's own restore (output shown);
+   - never a second session beside a live one: stop it from the menu first;
+3. the voice, once: Piper (recommended), espeak or text on screen; remembered in `~/.config/calibtool/laptop.json`.
+
+The kit is always copied before calibd starts. If the network drops, the screen stays: it says "Connection lost",
+re-attaches by itself (1, 2, 4, 8, then every 10 s) and says "Connection back"; the robot holds meanwhile (press G
+when ready). Keys pressed while it is down are not sent. Q leaves; calibd keeps running.
+
+**The scripted path** (every flag as before; `calib` here = `python3 -m calibtool.cli` in `tools/calibration/`):
+```
+calib phantom10 --trial            # placement trial: guidance only, nothing moves
+calib phantom10 --full --dry-run   # the whole session against the robot, recording commands only
+calib phantom10 --full             # the real session (motors, neck, producer, deploy on Y)
+calib phantom10 --watch            # read-only watch session (a bare robot name did this before the menu)
+    [--voice piper|espeak|text] [--session ID] [--replace] [--status] [--stop] [--no-speech] [--no-sync]
 ```
 
-**The laptop side is standard library only.**
-- It copies the kit to the robot (`/tmp/calibtool-m2/kit` for P10, from `config/profiles.yaml`).
+**The laptop side is standard library only** (plus PyYAML, which reads the profiles).
+- It copies the kit to the robot (`<root>/kit`, root from `config/profiles.yaml`).
 - It starts or attaches `calibd` over ssh, renders the state, and speaks prompts:
-  - `spd-say` by default;
-  - `--voice piper` uses the local neural voice in `~/.local/share/calib-voice` (Piper binary + `en_US-lessac-medium`).
-  - `--voice text` speaks nothing: a PROMPT panel at the top of the screen shows the newest prompt (highlighted) and
+  - `espeak` = `spd-say` (the scripted path's default);
+  - `piper` uses the local neural voice in `~/.local/share/calib-voice` (Piper binary + `en_US-lessac-medium`);
+  - `text` speaks nothing: a PROMPT panel at the top of the screen shows the newest prompt (highlighted) and
     the 3 before it with their age, including the prompt that is current when the TUI attaches.
 
 **On the robot, calibd runs with the kit venv** (`/root/p11-cal/venv` + `pydeps` on P10). The CI-built image `foundationbot/okvis2x:calib-<arch>-<sha>` is the fleet runtime; see `RUNTIME.md`.

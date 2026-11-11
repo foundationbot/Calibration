@@ -1,7 +1,12 @@
-"""`calib <robot>`: the laptop entry point (design plan sections 3, 10.3).
+"""`calib`: the laptop entry point (design plan sections 3, 10.3).
 
-calib phantom10 [--trial | --full [--dry-run]] [--session ID] [--replace] [--headless N] [--voice espeak|piper|text] [--no-speech] [--stop] [--status] [--say TEXT]
-[--no-sync]
+calib                    the menu (calibtool.menu): which robot, then only what makes sense for it (continue a session,
+                         a new calibration, the placement trial, status, stop), the voice asked once and remembered
+calib phantom10          the same menu for that robot
+calib --install [--install-dir DIR]   builds the single-file executable (calibtool.exe) into DIR/calib (~/.local/bin)
+calib --version          the kit hash this laptop runs (the same from the worktree and from the executable)
+calib phantom10 [--trial | --full [--dry-run] | --watch] [--session ID] [--replace] [--headless N]
+    [--voice espeak|piper|text] [--no-speech] [--stop] [--status] [--say TEXT] [--no-sync]   the scripted path:
   - asks calibd's status first (live = its socket answers, with the kit hash it runs): a live session running this
     kit is attached as it is; one running other code, or another session, is refused unless --replace stops it;
   - copies the kit (tools/calibration/{calibtool,scripts,config}, code only) to <root>/kit on the robot (rsync; M2: the
@@ -9,7 +14,9 @@ calib phantom10 [--trial | --full [--dry-run]] [--session ID] [--replace] [--hea
   - starts calibd there (niced, at most 2 BLAS threads, the profile's python + dma_ipc folder) or, with --session ID
     of a live session, re-attaches without starting anything;
   - runs the TUI over `ssh robot python -m calibtool.daemon attach` (state lines in, heartbeat and keys out). Leaving
-    the TUI (Q, or the link dropping) leaves calibd running: it holds after 5 s without a heartbeat and waits for G;
+    the TUI (Q) leaves calibd running: it holds after 5 s without a heartbeat and waits for G. A dropped link does
+    not leave (10 Nov: every network blip exited the screen): the screen says so and re-attaches with backoff (1, 2,
+    4, 8, then every 10 s) until it is back or Q; keys pressed meanwhile are not sent (not queued);
   - --stop asks calibd to stop; --status prints its state; --say TEXT speaks TEXT once on the laptop (a speech test).
 ssh, rsync and the speaker are injected for the tests."""
 import argparse
@@ -31,13 +38,24 @@ def kit_dir(p) -> str:
     return f"{p.root}/kit/tools/calibration"
 
 
+def kit_python(p) -> str:
+    """the shell line's start that runs the robot's kit python (niced, at most 2 BLAS threads)"""
+    py = ":".join(x for x in (kit_dir(p), p.pydeps) if x)
+    return (f"cd {shlex.quote(kit_dir(p))} && PYTHONPATH={py} OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 "
+            f"MKL_NUM_THREADS=2 nice -n 10 {p.python}")
+
+
 def remote(p, cmd, *args) -> str:
     """the shell line that runs calibd's CLI on the robot"""
-    py = ":".join(x for x in (kit_dir(p), p.pydeps) if x)
     tail = " ".join(shlex.quote(a) for a in args)
-    return (f"cd {shlex.quote(kit_dir(p))} && PYTHONPATH={py} OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 "
-            f"MKL_NUM_THREADS=2 nice -n 10 {p.python} -m calibtool.daemon {cmd} --root {p.root} --profile {p.bot}"
+    return (f"{kit_python(p)} -m calibtool.daemon {cmd} --root {p.root} --profile {p.bot}"
             + (f" {tail}" if tail else ""))
+
+
+def restore_line(p, hours=0) -> str:
+    """the robot's own stale-lease self-restore (calibtool.selfrestore) for <root>; hours 0 = whatever the lease's
+    age (only when no calibd is alive: it refuses itself while a calibd holds the lock)"""
+    return f"{kit_python(p)} -m calibtool restore --if-stale-hours {hours:g} --root {p.root}"
 
 
 def ssh_argv(p, line) -> list:
@@ -116,16 +134,21 @@ def stop(p, session=None, run=subprocess.run) -> dict:
 
 
 class Link:
-    """the attach link: ssh running `calibd attach`, state lines on its stdout, our lines on its stdin"""
+    """the attach link: ssh running `calibd attach`, state lines on its stdout, our lines on its stdin. quiet: ssh's
+    own errors not printed (a re-attach attempt: "No route to host" over the screen helps nobody)"""
 
-    def __init__(self, p, session, popen=subprocess.Popen):
+    def __init__(self, p, session, popen=subprocess.Popen, quiet=False):
+        kw = {"stderr": subprocess.DEVNULL} if quiet else {}
         self.proc = popen(ssh_argv(p, remote(p, "attach", "--session", session)), stdin=subprocess.PIPE,
-                          stdout=subprocess.PIPE, text=True, bufsize=1)
+                          stdout=subprocess.PIPE, text=True, bufsize=1, **kw)
         self._lock = threading.Lock()
 
     def lines(self):
-        for line in self.proc.stdout:
-            yield line
+        try:
+            for line in self.proc.stdout:
+                yield line
+        except (OSError, ValueError):         # closed under us (Q while re-attaching)
+            return
 
     def send(self, s):
         with self._lock:
@@ -138,9 +161,12 @@ class Link:
     def close(self):
         try:
             self.proc.stdin.close()
+        except (OSError, AttributeError):
+            pass
+        try:
+            self.proc.terminate()
         except OSError:
             pass
-        self.proc.terminate()
 
 
 def _keys(t: tui.Tui, quit_ev):
@@ -164,41 +190,125 @@ def _keys(t: tui.Tui, quit_ev):
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
-def run_tui(link, speaker, headless=0, out=None, interactive=False) -> int:
+BACKOFF_S = (1, 2, 4, 8, 10)     # re-attach waits (s); the last one repeats until the link is back or Q
+
+
+class _Down:
+    """a link that never came up (ssh could not even start)"""
+
+    def lines(self):
+        return iter(())
+
+    def send(self, s):
+        pass
+
+    def close(self):
+        pass
+
+
+def run_tui(link, speaker, headless=0, out=None, interactive=False, reconnect=None, robot="the robot", wait=None,
+            backoff=BACKOFF_S) -> int:
     """the TUI loop over a link; headless N: take N states then leave, drawing each changed one (no 2-a-second limit).
     A screen is drawn only when its text changed (10 Nov: the whole screen was re-printed for every state line), at
-    most tui.MIN_DRAW_S apart; the last one is drawn when leaving. -> states taken"""
+    most tui.MIN_DRAW_S apart; the last one is drawn when leaving. reconnect() -> a new link: when the link drops the
+    TUI stays (10 Nov: every network blip exited the screen), says so (NOT NORMAL, attempt N) and re-attaches after
+    backoff[0], [1], ... (the last repeated) until state lines come again ("Connection back") or Q; heartbeats and keys
+    are not sent meanwhile (keys are not queued). Without reconnect a dropped link leaves, as before. wait(s) -> True
+    when leaving (tests); default: Q during the wait. -> states taken"""
     term = not headless and out is None and sys.stdout.isatty()
     clear = "" if headless or out is not None else "\033[2J\033[H"
     out = out or (lambda s: (sys.stdout.write(clear + s + "\n"), sys.stdout.flush()))
-    t = tui.Tui(link.send, speaker, out=out, ansi=term, min_draw_s=0.0 if headless else tui.MIN_DRAW_S)
+    cur = {"link": link}
+    t = tui.Tui(lambda s: cur["link"].send(s), speaker, out=out, ansi=term,
+                min_draw_s=0.0 if headless else tui.MIN_DRAW_S)
     quit_ev = threading.Event()
+    wait = wait or quit_ev.wait
 
     def beat():
         while not quit_ev.is_set():
             t.heartbeat()
             quit_ev.wait(0.25)
+
+    def closer():                       # Q while a re-attach hangs in ssh: close it so the loop sees the end
+        quit_ev.wait()
+        try:
+            cur["link"].close()
+        except Exception:  # noqa: BLE001
+            pass
     t.heartbeat()
     threading.Thread(target=beat, daemon=True).start()
     if interactive:
         threading.Thread(target=_keys, args=(t, quit_ev), daemon=True).start()
-    n = 0
+        threading.Thread(target=closer, daemon=True).start()
+    n, attempt = 0, 0
     try:
-        for line in link.lines():
-            t.step(line)
-            n += 1
-            if (headless and n >= headless) or quit_ev.is_set():
+        while True:
+            leave = False
+            for line in cur["link"].lines():
+                if attempt:
+                    attempt = 0
+                    t.link_back()
+                t.step(line)
+                n += 1
+                if (headless and n >= headless) or quit_ev.is_set():
+                    leave = True
+                    break
+            if leave or quit_ev.is_set() or reconnect is None:
                 break
+            attempt += 1
+            t.link_lost(robot, attempt)
+            if wait(backoff[min(attempt, len(backoff)) - 1]) or quit_ev.is_set():
+                break
+            try:
+                cur["link"].close()
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                cur["link"] = reconnect()
+            except OSError:
+                cur["link"] = _Down()
     finally:
         quit_ev.set()
         t.flush()
-        link.close()
+        cur["link"].close()
     return n
+
+
+def make_speaker(voice, no_speech=False):
+    return tui.Silent() if no_speech else tui.make_speaker(voice)
+
+
+def attach_tui(p, sid, speaker, headless=0, popen=subprocess.Popen) -> int:
+    """the TUI on session sid of robot p, re-attaching by itself when the link drops (not headless)"""
+    sp = speaker if isinstance(speaker, (tui.Silent, tui.TextPrompts)) else tui.Background(speaker)
+    n = run_tui(Link(p, sid, popen=popen), sp, headless=headless,
+                interactive=not headless and sys.stdin.isatty(), robot=p.thor,
+                reconnect=None if headless else (lambda: Link(p, sid, popen=popen, quiet=True)))
+    print(f"left the TUI after {n} states; calibd keeps running (session {sid}): `calib` (or calib {p.thor} "
+          f"--session {sid}) re-attaches, calib {p.thor} --stop stops it", file=sys.stderr)
+    time.sleep(0.2)
+    return 0
+
+
+def robot_profile(name):
+    """the profile of a robot named by bot name (P10) or host name (phantom10)"""
+    return prof_mod.load(name.upper()) if name.upper().startswith("P") and name[1:].isdigit() else \
+        prof_mod.for_host(name)
+
+
+SCRIPTED = ("trial", "full", "watch", "session", "headless", "stop", "status", "say", "replace", "dry_run")
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="calib", description=__doc__.split("\n")[0])
-    ap.add_argument("robot", help="host name (phantom10) or bot name (P10)")
+    ap.add_argument("robot", nargs="?", default=None,
+                    help="host name (phantom10) or bot name (P10); none: the menu asks. Alone: the menu for it")
+    ap.add_argument("--install", action="store_true",
+                    help="build the single-file executable `calib` (the kit inside) and install it")
+    ap.add_argument("--install-dir", default="~/.local/bin", help="where --install puts calib")
+    ap.add_argument("--version", action="store_true", help="print the kit hash this laptop runs and where the kit is")
+    ap.add_argument("--watch", action="store_true", help="a read-only watch session (what a bare robot name did "
+                                                         "before the menu)")
     ap.add_argument("--session", default=None, help="re-attach to (or restart) this session")
     ap.add_argument("--trial", action="store_true", help="placement-trial mode (neck at home, nothing moves)")
     ap.add_argument("--full", action="store_true",
@@ -207,9 +317,10 @@ def main(argv=None):
                     help="with --full: every robot change recorded in the session's commands.txt, none sent")
     ap.add_argument("--headless", type=int, default=0, help="render N states and leave (no keys)")
     ap.add_argument("--no-speech", action="store_true")
-    ap.add_argument("--voice", choices=["espeak", "piper", "text"], default="espeak",
+    ap.add_argument("--voice", choices=["espeak", "piper", "text"], default=None,
                     help="piper = local neural voice in ~/.local/share/calib-voice (falls back to espeak if missing); "
-                         "text = no voice: the prompts in a panel at the top of the screen")
+                         "text = no voice: the prompts in a panel at the top of the screen. Default espeak; the "
+                         "menu asks once and remembers")
     ap.add_argument("--no-sync", action="store_true", help="do not copy the kit to the robot")
     ap.add_argument("--replace", action="store_true",
                     help="stop a calibd already running (other code, or another session) and start this one")
@@ -217,19 +328,29 @@ def main(argv=None):
     ap.add_argument("--status", action="store_true")
     ap.add_argument("--say", default=None, help="speak this once on the laptop and leave (speech test)")
     a = ap.parse_args(argv)
-    if a.full and a.trial:
-        ap.error("--full and --trial are different sessions: pick one")
+    if a.version:
+        print(f"calib kit {daemon.kit_hash()} ({paths.CAL})")
+        return 0
+    if a.install:
+        from calibtool import exe
+        return exe.install(a.install_dir)
+    if sum(map(bool, (a.full, a.trial, a.watch))) > 1:
+        ap.error("--full, --trial and --watch are different sessions: pick one")
     if a.dry_run and not a.full:
         ap.error("--dry-run is for a --full session")
-    speaker = tui.Silent() if a.no_speech else tui.make_speaker(a.voice)
+    if not any(getattr(a, k) for k in SCRIPTED):
+        from calibtool import menu
+        return menu.main(robot=a.robot, voice=a.voice)
+    if a.robot is None and not a.say:
+        ap.error("a robot is needed with these options (or run `calib` alone for the menu)")
+    speaker = make_speaker(a.voice or "espeak", a.no_speech)
     if a.say:
         if isinstance(speaker, tui.TextPrompts):
             print(a.say)
         else:
             speaker.say(a.say)
         return 0
-    p = prof_mod.load(a.robot) if a.robot.upper().startswith("P") and a.robot[1:].isdigit() else \
-        prof_mod.for_host(a.robot)
+    p = robot_profile(a.robot)
     if a.stop:
         print(json.dumps(stop(p, a.session)))
         return 0
@@ -242,12 +363,7 @@ def main(argv=None):
     except RuntimeError as e:
         print(f"calib: {e}", file=sys.stderr)
         return 2
-    sp = speaker if isinstance(speaker, (tui.Silent, tui.TextPrompts)) else tui.Background(speaker)
-    n = run_tui(Link(p, sid), sp, headless=a.headless, interactive=not a.headless and sys.stdin.isatty())
-    print(f"left the TUI after {n} states; calibd keeps running (session {sid}): calib {a.robot} --session {sid} "
-          f"re-attaches, --stop stops it", file=sys.stderr)
-    time.sleep(0.2)
-    return 0
+    return attach_tui(p, sid, speaker, headless=a.headless)
 
 
 if __name__ == "__main__":

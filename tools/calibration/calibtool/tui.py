@@ -3,13 +3,16 @@ keys and a heartbeat, speaks each new prompt once. Stdlib only (the laptop needs
 
 render(state) -> text, most important first (10 Nov: the operator glances at it from the robot): a header that is
 always there (robot, session, phase, motor state, "A = abort"), the key acknowledgement and calibd's WORKING line, the
-NOT NORMAL banner (calibd's banner lines), the current prompt, the progress (countdown, placement, grid pose, trial),
+NOT NORMAL banner (calibd's banner lines), the current prompt, the progress (countdown, placement, the take's progress
+bar with its time left, trial), the per-section data status (both cameras' image sections beside the held-out check),
 this phase's details (the whole preflight list only in PREFLIGHT/READY/BLOCKED, else one summary line and its problems;
 the motor checks whole only in MOTORS), the health events once each (newest first, at most 3) and the key help.
 Tui(send, speaker): step(line) handles one state line from calibd (speaks a prompt whose id is new and whose age is
 under SPEAK_MAX_AGE_S, so a re-attach does not replay an old one) and draws the screen only when its text changed, at
 most twice a second; heartbeat() sends {"hb": t} at most once a second, key(k) sends {"key": K} and shows it at once,
-then calibd's answer (state["last_key"]). SpdSay speaks through spd-say (-w: wait until spoken;
+then calibd's answer (state["last_key"]); link_lost(robot, n) / link_back(): the attach link dropped (a NOT NORMAL
+line with the attempt, what calibd does meanwhile; heartbeats and keys not sent and not queued) and came back
+("Connection back" for LINK_BACK_S). SpdSay speaks through spd-say (-w: wait until spoken;
 the caller runs it off the render thread); Silent is the no-voice speaker; TextPrompts (--voice text) speaks nothing and
 keeps the last prompts for a PROMPT panel at the top of the screen (the newest highlighted, the previous ones with
 their age), for rooms where a voice is not wanted."""
@@ -30,6 +33,7 @@ MIN_DRAW_S = 0.5         # at most 2 screens a second (10 Nov: the whole screen 
 KEY_NO_ANSWER_S = 3.0    # a key calibd has not answered this long: said so on screen
 KEY_SHOW_S = 10.0        # calibd's answer to a key stays on screen this long
 KEY_GIVE_UP_S = 30.0     # an unanswered key's line goes after this long
+LINK_BACK_S = 5.0        # "Connection back" stays on screen this long after a re-attach
 KEYS = "A = abort | G = continue after HOLD | T = start the placement trial | C = can't put it there | " \
        "Q = leave (calibd keeps running)"
 MARK = {"ok": "ok  ", "warn": "WARN", "fail": "FAIL", "info": "info"}
@@ -124,6 +128,7 @@ def render(state, width=100, notes=(), prompts=None, ansi=False, ack=()) -> str:
             L.append(f"\033[1m{x}{PLAIN}" if ansi else x)
         L.append(sep)
     L += _progress_lines(s, width)
+    L += _quality_lines(s, width, ansi)
     L += _detail_lines(s, width)
     L += _health_lines(s.get("health"), width)
     L.append(sep)
@@ -184,13 +189,8 @@ def _progress_lines(s, width=100) -> list:
     if full and pl and ph in BOARD_PHASES:
         L.append(f"placement: {pl.get('target')} ({pl.get('kind')})")
     g = s.get("grid")
-    if full and g and g.get("pose") is not None and ph in ("GRID", "CHECK_GRID", "HOLD"):
-        last = g.get("last") or {}
-        cmd, meas = last.get("command") or [], last.get("measured") or []
-        tail = "" if not cmd else (f"; last pose {cmd[0]:+.0f}/{cmd[1]:+.0f} deg, measured {meas[0]:+.1f}/"
-                                   f"{meas[1]:+.1f}, {last.get('tags_l', 0)} tags, "
-                                   f"{'board found' if last.get('found') else 'NO BOARD'}")
-        L.append(f"grid {g.get('placement')}: pose {g.get('pose')} of {g.get('of')}{tail}"[:width])
+    if full and g and g.get("pose") is not None and ph in GRID_PHASES:
+        L += _grid_lines(g, width)
     tr = s.get("trial")
     if tr:
         L.append("placement trial: " + _trial_line(tr))
@@ -205,6 +205,165 @@ def _progress_lines(s, width=100) -> list:
                      f"{round(float(tb['dxy_m']) * 100):.0f} cm along the floor")
         for r in tr.get("records") or ():
             L.append(f"  {r['target']:7s} {r['result']:11s} {r['seconds']:6.1f} s, {r.get('prompts', 0)} prompts")
+    return L
+
+
+GRID_PHASES = ("GRID", "CHECK_GRID", "HOLD", "IMU_SWEEP")       # the take's progress bar
+QUALITY_PHASES = ("PLACE", "GRID", "HOLD", "IMU_PLACE", "FIT", "DECIDE")   # the per-section data status
+BAR_W = 20
+GREEN, YELLOW, RED = "\033[32m", "\033[33m", "\033[31m"
+
+
+def _bar(done, of, w=BAR_W) -> str:
+    f = 0 if not of else max(0, min(w, round(w * float(done) / float(of))))
+    return "[" + "#" * f + "-" * (w - f) + "]"
+
+
+def _eta(eta_s) -> str:
+    e = float(eta_s)
+    return f"about {max(1, round(e)):.0f} s left" if e < 60 else f"about {round(e / 60):.0f} min left"
+
+
+def _grid_lines(g, width=100) -> list:
+    """the take's progress: `take 0.75 m: pose 23/49 [#########-----------] 47 %  about 1 min left`, then the last
+    pose (10 Nov, phantom11: "show progress for each take")"""
+    take = g.get("placement")
+    label = f"{take:g} m" if isinstance(take, (int, float)) else str(take if take is not None else "?")
+    pose, of = g.get("pose"), g.get("of")
+    try:
+        pose, of = int(pose), int(of)
+        line = f"take {label}: pose {pose}/{of} {_bar(pose, of)} {round(100.0 * pose / of) if of else 0:.0f} %"
+    except (TypeError, ValueError):
+        line = f"take {label}: pose {pose} of {of}"
+    if g.get("eta_s") is not None:
+        try:
+            if float(g["eta_s"]) > 0:
+                line += f"  {_eta(g['eta_s'])}"
+        except (TypeError, ValueError):
+            pass
+    L = [line[:width]]
+    last = g.get("last") or {}
+    cmd, meas = last.get("command") or [], last.get("measured") or []
+    if len(cmd) >= 2 and len(meas) >= 2:
+        L.append(f"  last pose {cmd[0]:+.0f}/{cmd[1]:+.0f} deg, measured {meas[0]:+.1f}/{meas[1]:+.1f}, "
+                 f"{last.get('tags_l', 0)} tags, {'board found' if last.get('found') else 'NO BOARD'}"[:width])
+    return L
+
+
+QUALITY_LEFT_W = 44                  # the image-section table; the held-out table to its right
+_ROW_NAMES = ("top", "middle", "bottom")
+_HELD_NAMES = (("TL", "T", "TR"), ("L", "C", "R"), ("BL", "B", "BR"))
+
+
+def _col(text, colour, ansi):
+    """(plain, shown): padding is counted on the plain text"""
+    return text, (f"{colour}{text}{PLAIN}" if ansi and colour else text)
+
+
+def _pct_cell(v, ansi):
+    try:
+        v = int(v)
+    except (TypeError, ValueError):
+        return _col(f"{'?':>4}", None, ansi)
+    if v >= 100:
+        return _col(f"{'ok':>4}", GREEN, ansi)
+    return _col(f"{v:>4}", YELLOW if v >= 50 else RED, ansi)
+
+
+def _join(cells):
+    return "".join(c[0] for c in cells), "".join(c[1] for c in cells)
+
+
+def _quality_left(q, ansi) -> list:
+    cams = q.get("cams") or {}
+    if not isinstance(cams, dict) or not any(isinstance(cams.get(k), dict) for k in ("0", "1")):
+        return []
+    rows = [_col("image sections: % of target (ok = reached)", None, ansi),
+            _col(f"{'':8}{'left camera':<16}{'right camera':<12}", None, ansi)]
+    for i, name in enumerate(_ROW_NAMES):
+        cells = [_col(f"{name:<8}", None, ansi)]
+        for k in ("0", "1"):
+            pct = (cams.get(k) or {}).get("pct") or []
+            row = pct[i] if i < len(pct) and isinstance(pct[i], (list, tuple)) else []
+            cells += [_pct_cell(row[j], ansi) if j < len(row) else _col("    ", None, ansi) for j in range(3)]
+            cells.append(_col("    ", None, ansi))
+        rows.append(_join(cells))
+    return rows
+
+
+def _held_cell(ns, want):
+    vals = []
+    for n in ns or ():
+        try:
+            n = int(n)
+        except (TypeError, ValueError):
+            vals.append("?")
+            continue
+        vals.append("ok" if want and n >= want else "-" if n == 0 else str(n))
+    return "/".join(vals) or "?"
+
+
+def _quality_right(q, ansi) -> list:
+    h = q.get("heldout") or {}
+    sec = h.get("sections")
+    if not isinstance(sec, (list, tuple)) or not sec:
+        return []
+    want = h.get("want")
+    head = "held-out check"
+    if h.get("judged") is not None and h.get("judged_min") is not None:
+        head += f": judged {h['judged']} of {h['judged_min']} needed"
+    bands = "/".join(str(b) for b in h.get("bands") or ())
+    rows = [_col(head, None, ansi), _col(f"holds per band {bands} m" if bands else "holds per distance band", None,
+                                         ansi)]
+    for i, names in enumerate(_HELD_NAMES):
+        row = sec[i] if i < len(sec) and isinstance(sec[i], (list, tuple)) else []
+        cells = []
+        for j, nm in enumerate(names):
+            if j >= len(row):
+                continue
+            v = _held_cell(row[j], want)
+            done = all(x == "ok" for x in v.split("/"))
+            cells.append(_col(f"{nm:<2} ", None, ansi))
+            cells.append(_col(f"{v:<9}", GREEN if done else None, ansi))
+        rows.append(_join(cells))
+    return rows
+
+
+def _quality_lines(s, width=100, ansi=False) -> list:
+    """the per-section data status (state["quality"], quality.snapshot), at most 7 lines within width: the image
+    sections of both cameras (% of the target, ok = reached; on a terminal green ok, yellow 50-99, red under 50)
+    beside the held-out check per section and distance band, then the far bands and what still blocks the stop"""
+    q = s.get("quality")
+    if not isinstance(q, dict):
+        return []
+    if s.get("phase") not in QUALITY_PHASES and not s.get("trial"):
+        return []
+    left, right = _quality_left(q, ansi), _quality_right(q, ansi)
+    L = []
+    for k in range(max(len(left), len(right))):
+        lp, ls = left[k] if k < len(left) else ("", "")
+        rp, rs = right[k] if k < len(right) else ("", "")
+        if left and right:
+            pad = " " * max(1, QUALITY_LEFT_W - len(lp))
+            plain, shown = lp + pad + rp, ls + pad + rs
+        else:
+            plain, shown = lp + rp, ls + rs
+        if plain.strip():
+            L.append(shown if len(plain) <= width else plain[:width])
+    h = q.get("heldout") or {}
+    far = h.get("far")
+    if isinstance(far, dict) and far:
+        fm = h.get("far_min")
+        parts = []
+        for band, n in far.items():
+            ok = fm is not None and n is not None and float(n) >= float(fm)
+            parts.append(f"{band} m {n}" + (f"/{fm}" if fm is not None else "") + (" ok" if ok else ""))
+        L.append(textwrap.shorten("far bands: " + ", ".join(parts), width, placeholder=" ..."))
+    if q.get("stop_met"):
+        L.append("coverage: enough to stop")
+    elif q.get("blocking"):
+        L.append(textwrap.shorten("still needed: " + "; ".join(str(b) for b in q["blocking"]), width,
+                                  placeholder=" ..."))
     return L
 
 
@@ -456,6 +615,9 @@ class Tui:
         self.state = None
         self._step_n = None             # calibd's step counter and when (laptop clock) it last changed
         self._step_seen = None
+        self.connected = True           # the attach link: False between link_lost() and link_back()
+        self._lost = None               # (robot, attempt) while it is down
+        self._back_until = None         # "Connection back" shown until then (laptop clock)
 
     def step(self, line):
         try:
@@ -487,8 +649,11 @@ class Tui:
         with self._lock:
             now = self.clock()
             st = self.state or {}
+            if not self.connected:
+                st = dict(st, attached=False)       # the last state says "link up": it is not
             pf = getattr(self.speaker, "prompts", None)
-            self.screen = render(st, notes=self._notes, ansi=self.ansi, ack=self.ack_lines(now),
+            self.screen = render(st, notes=self.link_notes() + self._notes, ansi=self.ansi,
+                                 ack=self.link_ack(now) + self.ack_lines(now),
                                  prompts=pf(float(st.get("updated") or 0)) if pf else None)
             if self.screen == self._drawn:
                 return False
@@ -507,6 +672,36 @@ class Tui:
             self._drawn, self._drawn_t = self.screen, self.clock()
             return True
 
+    def link_lost(self, robot, attempt):
+        """the attach link dropped; attempt N of re-attaching is next (drawn at once: no state line comes now)"""
+        with self._lock:
+            self.connected, self._lost, self._back_until = False, (str(robot), int(attempt)), None
+            self._draw(force=True)
+
+    def link_back(self):
+        """state lines come again: "Connection back" for LINK_BACK_S; calibd's step counter is watched afresh"""
+        with self._lock:
+            self.connected, self._lost = True, None
+            self._back_until = self.clock() + LINK_BACK_S
+            self._step_n = self._step_seen = None
+            self._hb = None                     # the first heartbeat goes at once
+
+    def link_notes(self) -> list:
+        if self._lost is None:
+            return []
+        robot, n = self._lost
+        return [f"Connection lost to {robot}: reconnecting (attempt {n}). Q = leave",
+                "calibd holds the robot by itself 5 s after it stops hearing this screen: once the connection is "
+                "back, the robot is holding; press G when ready",
+                "keys pressed now are not sent (they are not queued): press them again once the connection is back"]
+
+    def link_ack(self, now) -> list:
+        if self._back_until is None or now >= self._back_until:
+            return []
+        if (self.state or {}).get("phase") == "HOLD":
+            return ["Connection back: the robot is holding; press G when ready"]
+        return ["Connection back"]
+
     def _answer(self, st):
         """calibd's answer to the key pressed here: a last_key for that key that was not there when it was pressed"""
         p, lk = self._pressed, st.get("last_key")
@@ -520,6 +715,11 @@ class Tui:
         if not p:
             return []
         k, a = p["key"], p["answer"]
+        if p.get("unsent"):
+            if now - p["at"] > KEY_SHOW_S:
+                return []
+            return [f"{k} NOT sent: no connection to the robot (keys are not queued); press it again once the "
+                    "connection is back"]
         if a is not None:
             if now - p["answer_at"] > KEY_SHOW_S:
                 return []
@@ -564,6 +764,8 @@ class Tui:
         return out
 
     def heartbeat(self):
+        if not self.connected:
+            return
         t = self.clock()
         if self._hb is None or t - self._hb >= HB_S:
             self._hb = t
@@ -573,6 +775,7 @@ class Tui:
         k = str(k).upper()
         with self._lock:
             self._pressed = {"key": k, "at": self.clock(), "before": (self.state or {}).get("last_key"),
-                             "answer": None, "answer_at": None}
-        self.send_line(json.dumps({"key": k}))
+                             "answer": None, "answer_at": None, "unsent": not self.connected}
+        if self.connected:
+            self.send_line(json.dumps({"key": k}))
         self._draw(force=True)          # the acknowledgement now, not at the next state
