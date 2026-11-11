@@ -1,0 +1,623 @@
+{
+ "poses": {
+  "Right": {
+   "p07": [
+    -58.19,
+    -21.24,
+    -2.6,
+    -42.61,
+    46.34,
+    22.83,
+    -39.91
+   ],
+   "p08": [
+    -49.77,
+    -18.88,
+    12.54,
+    -83.33,
+    85.3,
+    21.05,
+    -41.63
+   ],
+   "p09": [
+    -65.86,
+    -19.85,
+    34.37,
+    -66.92,
+    57.31,
+    20.45,
+    -31.37
+   ],
+   "p10": [
+    -66.52,
+    -16.94,
+    52.58,
+    -71.37,
+    85.38,
+    23.09,
+    -58.2
+   ],
+   "p04": [
+    -64.22,
+    -12.09,
+    31.76,
+    -58.71,
+    41.78,
+    6.23,
+    -63.77
+   ]
+  },
+  "Left": {
+   "p07": [
+    -58.19,
+    21.24,
+    2.6,
+    -42.61,
+    -46.34,
+    -22.83,
+    39.91
+   ],
+   "p08": [
+    -49.77,
+    18.88,
+    -12.54,
+    -83.33,
+    -85.3,
+    -21.05,
+    41.63
+   ],
+   "p09": [
+    -65.86,
+    19.85,
+    -34.37,
+    -66.92,
+    -57.31,
+    -20.45,
+    31.37
+   ],
+   "p10": [
+    -66.52,
+    16.94,
+    -52.58,
+    -71.37,
+    -85.38,
+    -23.09,
+    58.2
+   ],
+   "p04": [
+    -64.22,
+    12.09,
+    -31.76,
+    -58.71,
+    -41.78,
+    -6.23,
+    63.77
+   ]
+  }
+ },
+ "necks": [
+  [
+   10,
+   0
+  ],
+  [
+   22,
+   -12
+  ],
+  [
+   22,
+   12
+  ],
+  [
+   26,
+   0
+  ]
+ ],
+ "checks": [
+  {
+   "arm": "Right",
+   "neck": [
+    10,
+    0
+   ],
+   "res": [
+    {
+     "move": "stage",
+     "min_clear_m": 0.0431,
+     "end_clear_m": 0.0431,
+     "max_travel_deg": 57.9
+    },
+    {
+     "move": "p07",
+     "min_clear_m": 0.0357,
+     "end_clear_m": 0.0357,
+     "max_travel_deg": 76.7
+    },
+    {
+     "move": "p08",
+     "min_clear_m": 0.0357,
+     "end_clear_m": 0.0377,
+     "max_travel_deg": 40.7
+    },
+    {
+     "move": "p09",
+     "min_clear_m": 0.0339,
+     "end_clear_m": 0.0339,
+     "max_travel_deg": 28.0
+    },
+    {
+     "move": "p10",
+     "min_clear_m": 0.0334,
+     "end_clear_m": 0.0334,
+     "max_travel_deg": 28.1
+    },
+    {
+     "move": "p04",
+     "min_clear_m": 0.0334,
+     "end_clear_m": 0.0337,
+     "max_travel_deg": 43.6
+    },
+    {
+     "move": "stage_back",
+     "min_clear_m": 0.0337,
+     "end_clear_m": 0.0431,
+     "max_travel_deg": 72.1
+    },
+    {
+     "move": "rest",
+     "min_clear_m": 0.0431,
+     "end_clear_m": 0.0437,
+     "max_travel_deg": 57.9
+    }
+   ]
+  },
+  {
+   "arm": "Right",
+   "neck": [
+    22,
+    -12
+   ],
+   "res": [
+    {
+     "move": "stage",
+     "min_clear_m": 0.0431,
+     "end_clear_m": 0.0431,
+     "max_travel_deg": 57.9
+    },
+    {
+     "move": "p07",
+     "min_clear_m": 0.0357,
+     "end_clear_m": 0.0357,
+     "max_travel_deg": 76.7
+    },
+    {
+     "move": "p08",
+     "min_clear_m": 0.0357,
+     "end_clear_m": 0.0377,
+     "max_travel_deg": 40.7
+    },
+    {
+     "move": "p09",
+     "min_clear_m": 0.0339,
+     "end_clear_m": 0.0339,
+     "max_travel_deg": 28.0
+    },
+    {
+     "move": "p10",
+     "min_clear_m": 0.0334,
+     "end_clear_m": 0.0334,
+     "max_travel_deg": 28.1
+    },
+    {
+     "move": "p04",
+     "min_clear_m": 0.0334,
+     "end_clear_m": 0.0337,
+     "max_travel_deg": 43.6
+    },
+    {
+     "move": "stage_back",
+     "min_clear_m": 0.0337,
+     "end_clear_m": 0.0431,
+     "max_travel_deg": 72.1
+    },
+    {
+     "move": "rest",
+     "min_clear_m": 0.0431,
+     "end_clear_m": 0.0437,
+     "max_travel_deg": 57.9
+    }
+   ]
+  },
+  {
+   "arm": "Right",
+   "neck": [
+    22,
+    12
+   ],
+   "res": [
+    {
+     "move": "stage",
+     "min_clear_m": 0.0431,
+     "end_clear_m": 0.0431,
+     "max_travel_deg": 57.9
+    },
+    {
+     "move": "p07",
+     "min_clear_m": 0.0357,
+     "end_clear_m": 0.0357,
+     "max_travel_deg": 76.7
+    },
+    {
+     "move": "p08",
+     "min_clear_m": 0.0357,
+     "end_clear_m": 0.0377,
+     "max_travel_deg": 40.7
+    },
+    {
+     "move": "p09",
+     "min_clear_m": 0.0339,
+     "end_clear_m": 0.0339,
+     "max_travel_deg": 28.0
+    },
+    {
+     "move": "p10",
+     "min_clear_m": 0.0334,
+     "end_clear_m": 0.0334,
+     "max_travel_deg": 28.1
+    },
+    {
+     "move": "p04",
+     "min_clear_m": 0.0334,
+     "end_clear_m": 0.0337,
+     "max_travel_deg": 43.6
+    },
+    {
+     "move": "stage_back",
+     "min_clear_m": 0.0337,
+     "end_clear_m": 0.0431,
+     "max_travel_deg": 72.1
+    },
+    {
+     "move": "rest",
+     "min_clear_m": 0.0431,
+     "end_clear_m": 0.0437,
+     "max_travel_deg": 57.9
+    }
+   ]
+  },
+  {
+   "arm": "Right",
+   "neck": [
+    26,
+    0
+   ],
+   "res": [
+    {
+     "move": "stage",
+     "min_clear_m": 0.0431,
+     "end_clear_m": 0.0431,
+     "max_travel_deg": 57.9
+    },
+    {
+     "move": "p07",
+     "min_clear_m": 0.0357,
+     "end_clear_m": 0.0357,
+     "max_travel_deg": 76.7
+    },
+    {
+     "move": "p08",
+     "min_clear_m": 0.0357,
+     "end_clear_m": 0.0377,
+     "max_travel_deg": 40.7
+    },
+    {
+     "move": "p09",
+     "min_clear_m": 0.0339,
+     "end_clear_m": 0.0339,
+     "max_travel_deg": 28.0
+    },
+    {
+     "move": "p10",
+     "min_clear_m": 0.0334,
+     "end_clear_m": 0.0334,
+     "max_travel_deg": 28.1
+    },
+    {
+     "move": "p04",
+     "min_clear_m": 0.0334,
+     "end_clear_m": 0.0337,
+     "max_travel_deg": 43.6
+    },
+    {
+     "move": "stage_back",
+     "min_clear_m": 0.0337,
+     "end_clear_m": 0.0431,
+     "max_travel_deg": 72.1
+    },
+    {
+     "move": "rest",
+     "min_clear_m": 0.0431,
+     "end_clear_m": 0.0437,
+     "max_travel_deg": 57.9
+    }
+   ]
+  },
+  {
+   "arm": "Left",
+   "neck": [
+    10,
+    0
+   ],
+   "res": [
+    {
+     "move": "lift",
+     "min_clear_m": 0.0036,
+     "end_clear_m": 0.0393,
+     "max_travel_deg": 28.1
+    },
+    {
+     "move": "stage",
+     "min_clear_m": 0.0393,
+     "end_clear_m": 0.0431,
+     "max_travel_deg": 68.1
+    },
+    {
+     "move": "p07",
+     "min_clear_m": 0.0358,
+     "end_clear_m": 0.0358,
+     "max_travel_deg": 63.1
+    },
+    {
+     "move": "p08",
+     "min_clear_m": 0.0358,
+     "end_clear_m": 0.0377,
+     "max_travel_deg": 40.7
+    },
+    {
+     "move": "p09",
+     "min_clear_m": 0.0336,
+     "end_clear_m": 0.0336,
+     "max_travel_deg": 28.0
+    },
+    {
+     "move": "p10",
+     "min_clear_m": 0.0334,
+     "end_clear_m": 0.0334,
+     "max_travel_deg": 28.1
+    },
+    {
+     "move": "p04",
+     "min_clear_m": 0.0334,
+     "end_clear_m": 0.0339,
+     "max_travel_deg": 43.6
+    },
+    {
+     "move": "stage_back",
+     "min_clear_m": 0.0339,
+     "end_clear_m": 0.0431,
+     "max_travel_deg": 58.6
+    },
+    {
+     "move": "relift",
+     "min_clear_m": 0.0393,
+     "end_clear_m": 0.0393,
+     "max_travel_deg": 68.1
+    },
+    {
+     "move": "rest",
+     "min_clear_m": 0.0036,
+     "end_clear_m": 0.0036,
+     "max_travel_deg": 28.1
+    }
+   ]
+  },
+  {
+   "arm": "Left",
+   "neck": [
+    22,
+    -12
+   ],
+   "res": [
+    {
+     "move": "lift",
+     "min_clear_m": 0.0036,
+     "end_clear_m": 0.0393,
+     "max_travel_deg": 28.1
+    },
+    {
+     "move": "stage",
+     "min_clear_m": 0.0393,
+     "end_clear_m": 0.0431,
+     "max_travel_deg": 68.1
+    },
+    {
+     "move": "p07",
+     "min_clear_m": 0.0358,
+     "end_clear_m": 0.0358,
+     "max_travel_deg": 63.1
+    },
+    {
+     "move": "p08",
+     "min_clear_m": 0.0358,
+     "end_clear_m": 0.0377,
+     "max_travel_deg": 40.7
+    },
+    {
+     "move": "p09",
+     "min_clear_m": 0.0336,
+     "end_clear_m": 0.0336,
+     "max_travel_deg": 28.0
+    },
+    {
+     "move": "p10",
+     "min_clear_m": 0.0334,
+     "end_clear_m": 0.0334,
+     "max_travel_deg": 28.1
+    },
+    {
+     "move": "p04",
+     "min_clear_m": 0.0334,
+     "end_clear_m": 0.0339,
+     "max_travel_deg": 43.6
+    },
+    {
+     "move": "stage_back",
+     "min_clear_m": 0.0339,
+     "end_clear_m": 0.0431,
+     "max_travel_deg": 58.6
+    },
+    {
+     "move": "relift",
+     "min_clear_m": 0.0393,
+     "end_clear_m": 0.0393,
+     "max_travel_deg": 68.1
+    },
+    {
+     "move": "rest",
+     "min_clear_m": 0.0036,
+     "end_clear_m": 0.0036,
+     "max_travel_deg": 28.1
+    }
+   ]
+  },
+  {
+   "arm": "Left",
+   "neck": [
+    22,
+    12
+   ],
+   "res": [
+    {
+     "move": "lift",
+     "min_clear_m": 0.0036,
+     "end_clear_m": 0.0393,
+     "max_travel_deg": 28.1
+    },
+    {
+     "move": "stage",
+     "min_clear_m": 0.0393,
+     "end_clear_m": 0.0431,
+     "max_travel_deg": 68.1
+    },
+    {
+     "move": "p07",
+     "min_clear_m": 0.0358,
+     "end_clear_m": 0.0358,
+     "max_travel_deg": 63.1
+    },
+    {
+     "move": "p08",
+     "min_clear_m": 0.0358,
+     "end_clear_m": 0.0377,
+     "max_travel_deg": 40.7
+    },
+    {
+     "move": "p09",
+     "min_clear_m": 0.0336,
+     "end_clear_m": 0.0336,
+     "max_travel_deg": 28.0
+    },
+    {
+     "move": "p10",
+     "min_clear_m": 0.0334,
+     "end_clear_m": 0.0334,
+     "max_travel_deg": 28.1
+    },
+    {
+     "move": "p04",
+     "min_clear_m": 0.0334,
+     "end_clear_m": 0.0339,
+     "max_travel_deg": 43.6
+    },
+    {
+     "move": "stage_back",
+     "min_clear_m": 0.0339,
+     "end_clear_m": 0.0431,
+     "max_travel_deg": 58.6
+    },
+    {
+     "move": "relift",
+     "min_clear_m": 0.0393,
+     "end_clear_m": 0.0393,
+     "max_travel_deg": 68.1
+    },
+    {
+     "move": "rest",
+     "min_clear_m": 0.0036,
+     "end_clear_m": 0.0036,
+     "max_travel_deg": 28.1
+    }
+   ]
+  },
+  {
+   "arm": "Left",
+   "neck": [
+    26,
+    0
+   ],
+   "res": [
+    {
+     "move": "lift",
+     "min_clear_m": 0.0036,
+     "end_clear_m": 0.0393,
+     "max_travel_deg": 28.1
+    },
+    {
+     "move": "stage",
+     "min_clear_m": 0.0393,
+     "end_clear_m": 0.0431,
+     "max_travel_deg": 68.1
+    },
+    {
+     "move": "p07",
+     "min_clear_m": 0.0358,
+     "end_clear_m": 0.0358,
+     "max_travel_deg": 63.1
+    },
+    {
+     "move": "p08",
+     "min_clear_m": 0.0358,
+     "end_clear_m": 0.0377,
+     "max_travel_deg": 40.7
+    },
+    {
+     "move": "p09",
+     "min_clear_m": 0.0336,
+     "end_clear_m": 0.0336,
+     "max_travel_deg": 28.0
+    },
+    {
+     "move": "p10",
+     "min_clear_m": 0.0334,
+     "end_clear_m": 0.0334,
+     "max_travel_deg": 28.1
+    },
+    {
+     "move": "p04",
+     "min_clear_m": 0.0334,
+     "end_clear_m": 0.0339,
+     "max_travel_deg": 43.6
+    },
+    {
+     "move": "stage_back",
+     "min_clear_m": 0.0339,
+     "end_clear_m": 0.0431,
+     "max_travel_deg": 58.6
+    },
+    {
+     "move": "relift",
+     "min_clear_m": 0.0393,
+     "end_clear_m": 0.0393,
+     "max_travel_deg": 68.1
+    },
+    {
+     "move": "rest",
+     "min_clear_m": 0.0036,
+     "end_clear_m": 0.0036,
+     "max_travel_deg": 28.1
+    }
+   ]
+  }
+ ],
+ "all_ok": false
+}

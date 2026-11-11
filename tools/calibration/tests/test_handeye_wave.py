@@ -1,0 +1,142 @@
+"""handeye_wave.py: the safety rules of the hand-eye arm wave (its docstring's list), on a fake robot."""
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+import handeye_wave as hw  # noqa: E402
+
+NAMES = ["LeftShoulderPitch", "LeftShoulderRoll", "LeftShoulderYaw", "LeftElbowPitch", "LeftWristYaw", "LeftWristRoll",
+         "LeftGripperYaw", "RightShoulderPitch", "RightShoulderRoll", "RightShoulderYaw", "RightElbowPitch",
+         "RightWristYaw", "RightWristRoll", "RightGripperYaw", "NeckPitch", "NeckYaw", "SpineYaw", "LeftHipYaw"]
+START = {n: float(i) for i, n in enumerate(NAMES)}
+START["NeckPitch"], START["NeckYaw"] = 27.9, 0.3
+
+
+def plan():
+    return {"moves": [{"name": "stage", "deg": [-20, -8, 6, -65, 0, 0, 0], "burst": False},
+                      {"name": "p07", "deg": [-58, -21, -3, -43, 46, 23, -40], "burst": True,
+                       "necks": [[10, 0], [30, -40]]}]}
+
+
+def make(tmp_path, robot=None, **kw):
+    r = robot or hw.DryRun(NAMES, START)
+    return hw.Wave(r, plan(), "Right", tmp_path, log=lambda s: None, **kw), r
+
+
+def parse(text):
+    return dict((kv.split("=")[0], float(kv.split("=")[1])) for kv in text.split(","))
+
+
+def test_every_joint_listed_others_pinned_at_start(tmp_path):
+    w, r = make(tmp_path)
+    w.run(hand_pose=None)
+    motions = [a for a in r.sent if a[0] == hw.MOTOR_TOOL]
+    assert motions
+    for argv in motions:
+        d = parse(argv[1])
+        assert set(d) == set(NAMES)
+        for n in NAMES:
+            if not n.startswith("Right") and not n.startswith("Neck"):
+                assert d[n] == pytest.approx(START[n])
+
+
+def test_left_arm_moves_left_joints_only(tmp_path):
+    r = hw.DryRun(NAMES, START)
+    w = hw.Wave(r, plan(), "Left", tmp_path, log=lambda s: None)
+    w.run(hand_pose=None)
+    d = parse([a for a in r.sent if a[0] == hw.MOTOR_TOOL][0][1])
+    assert d["LeftShoulderPitch"] == -20 and d["RightShoulderPitch"] == START["RightShoulderPitch"]
+
+
+def test_neck_clamped_and_arm_held_during_neck_moves(tmp_path):
+    w, r = make(tmp_path)
+    w.run(hand_pose=None)
+    motions = [parse(a[1]) for a in r.sent if a[0] == hw.MOTOR_TOOL]
+    for d in motions:
+        assert abs(d["NeckPitch"]) <= 26 and abs(d["NeckYaw"]) <= 34
+    assert motions[-1]["RightShoulderPitch"] == -58          # the neck move keeps the arm at p07's target
+    assert motions[-1]["NeckPitch"] == 26 and motions[-1]["NeckYaw"] == -34
+
+
+def test_ramps_scale_with_travel_and_have_a_floor():
+    assert hw.arm_ramp([0] * 7, [10] + [0] * 6) == hw.RAMP_MIN_S
+    assert hw.arm_ramp([0] * 7, [80] + [0] * 6) == pytest.approx(80 / hw.MAX_RATE_DEG_S)
+    assert hw.neck_ramp((0, 0), (5, 0)) == hw.NECK_RAMP_MIN_S
+
+
+def test_kp_only_and_default_is_the_tools_gains():
+    a = hw.motion_argv("t", "x=1", 6, 2)
+    assert "--kp" not in a and not any("kd" in s.lower() for s in a)
+    b = hw.motion_argv("t", "x=1", 6, 2, kp=60)
+    assert b[b.index("--kp") + 1] == "60"
+    with pytest.raises(ValueError):
+        hw.motion_argv("t", "x=1", 6, 2, kp=0)
+    assert "--no-return" in a and a[a.index("--tolerance") + 1] == "30"
+
+
+def test_missing_pin_refuses():
+    with pytest.raises(ValueError):
+        hw.spec(NAMES + ["Mystery"], {}, "Right", [0] * 7, (0, 0))
+
+
+class Failing(hw.DryRun):
+    def __init__(self, *a, fail_after=1, why="motors not on", still=True):
+        super().__init__(*a)
+        self.n, self.fail_after, self.why, self.still = 0, fail_after, why, still
+
+    def master_ok(self):
+        self.n += 1
+        return self.why if self.n > self.fail_after else None
+
+    def desired_still(self):
+        return self.still
+
+
+def test_motors_off_stops_before_the_next_command(tmp_path):
+    r = Failing(NAMES, START, fail_after=1)
+    w, _ = make(tmp_path, robot=r)
+    with pytest.raises(hw.Stop):
+        w.run(hand_pose=None)
+    assert len([a for a in r.sent if a[0] == hw.MOTOR_TOOL]) == 1
+
+
+def test_foreign_writer_stops_everything(tmp_path):
+    r = Failing(NAMES, START, fail_after=99, still=False)
+    w, _ = make(tmp_path, robot=r)
+    with pytest.raises(hw.Stop):
+        w.run(hand_pose=None)
+    assert r.sent == []
+
+
+def test_stop_file(tmp_path):
+    (tmp_path / "STOP").write_text("")
+    w, r = make(tmp_path)
+    with pytest.raises(hw.Stop):
+        w.run(hand_pose=None)
+    assert r.sent == []
+
+
+def test_tool_failure_stops(tmp_path):
+    class Rc(hw.DryRun):
+        def run(self, argv, timeout):
+            self.sent.append(argv)
+            return 1, "RESULT RightShoulderPitch ss_err 35.0 FAIL"
+    r = Rc(NAMES, START)
+    w, _ = make(tmp_path, robot=r)
+    with pytest.raises(hw.Stop):
+        w.run(hand_pose=None)
+    assert len(r.sent) == 1
+
+
+def test_bursts_named_and_logged(tmp_path):
+    w, r = make(tmp_path)
+    w.run(hand_pose="open")
+    grabs = [a for a in r.sent if hw.GRAB in a]
+    assert [Path(a[a.index("--out") + 1]).name for a in grabs] == ["01-p07-10-0.npz", "02-p07-26-m34.npz"]
+    hands = [a for a in r.sent if a[0] == "inspire_hand_poses"]
+    assert [a[a.index("--pose") + 1] for a in hands] == ["open", "relax"] and hands[0][2] == "1"
+    kinds = [json.loads(l)["kind"] for l in (tmp_path / "log.jsonl").read_text().splitlines()]
+    assert kinds[0] == "start" and kinds[-1] == "done"
