@@ -599,6 +599,14 @@ class FullFlow:
         self._sweep = None
         self._say("grid", GRID_DONE_TEXT)
 
+    def _quality(self):
+        """the per-section data status for the operator's screen (state["quality"]); never stops the session"""
+        try:
+            from calibtool import quality
+            self._upd(quality=quality.snapshot(self.collection))
+        except Exception as e:  # noqa: BLE001
+            self._event("quality_error", error=f"{type(e).__name__}: {e}")
+
     def _grid_event(self, kind, **kw):
         self._event(kind, **kw)
         if kind == "pose":
@@ -608,7 +616,10 @@ class FullFlow:
             if cur is not None and self._grid_kind == "collect":
                 cur["poses"] = [list(p) for p in self._grid_poses[self._pose_done:]]
             self._upd(grid={"placement": kw.get("placement"), "pose": self._pose_done, "of": len(self._grid_poses),
-                            "last": kw.get("record")})
+                            "last": kw.get("record"),
+                            "eta_s": round(max(0, len(self._grid_poses) - self._pose_done) * POSE_S)})
+            if self._grid_kind == "collect":
+                self._quality()
 
     def _grid(self, target, poses, col, phase, kind):
         """one placement's grid with its countdown; a foreign command / missed pose HOLDs, and after G the poses left
