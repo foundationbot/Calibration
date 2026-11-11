@@ -902,3 +902,17 @@ def test_a_height_change_is_asked_within_the_stands_range_first():
         m = re.search(r"(Raise|Lower) the board\. At least (\d+)", x)
         if m:
             assert int(m.group(2)) <= (30 if m.group(1) == "Raise" else 40), texts
+
+
+def test_a_cut_board_whose_corners_flicker_still_comes_to_rest():
+    """10 Nov, phantom10: at 58 cm, cut at the right and bottom, the tags at the edge flickered and the corner centroid
+    jumped by tens of px: no rest, only "Still waiting". Its 3-D centre stays put: it rests and gets an answer"""
+    g = gguide("0.5 m", 40.5, stand=place.Stand(auto_skip=False), **QUIET)
+    base = view(-0.25, 0.45, 40.5)
+    seq = []
+    for i in range(10):
+        o = detect.BoardObs(base.centroid + np.array([25.0 * (-1) ** i, 18.0 * (-1) ** i]), base.z, 31, 124, True,
+                            ("right", "bottom"), base.lo, base.hi, base.p + 0.003 * (-1) ** i)
+        seq.append(o)
+    s = feed(g, seq)
+    assert s and s[0].kind in ("correction", "good"), [x.text for x in s]

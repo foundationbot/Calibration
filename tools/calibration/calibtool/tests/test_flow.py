@@ -959,3 +959,29 @@ def test_r_on_the_motor_screen_restarts_the_motor_master_then_y_enables(tmp_path
     s.run()
     assert calls == [1] and s.m.phase == "DONE"
     assert any(e["kind"] == "motor_master_restart" for e in s.events())
+
+
+def test_u_uses_the_board_where_it_is(tmp_path):
+    """10 Nov, phantom10: the 0.5 m board could get no nearer than 58-65 cm; the operator decides to use it there"""
+    keys = dict(FULL_KEYS)
+    keys["PLACE"] = ["U"]
+    s = Session(tmp_path, keys=keys)
+    s.robot_side.make_guide = lambda *a, **k: SimpleNamespace(
+        update=lambda t, obs, miss=None: None, done=False, result=None, interrupted=lambda: None,
+        last_obs=SimpleNamespace(z=0.58, p=None))
+    s.run()
+    texts = [x.text for x in s.says]
+    assert "Using the board where it is. 58 centimetres. Step back." in texts
+    ev = next(e for e in s.events() if e["kind"] == "placement_used_as_is")
+    assert ev["z_m"] == 0.58
+    assert any(e["kind"] == "grid_end" for e in s.events())
+
+
+def test_u_without_a_board_in_view_says_so(tmp_path):
+    keys = dict(FULL_KEYS)
+    keys["PLACE"] = ["U", "C", "C", "C", "C", "C", "C", "C", "C"]
+    s = Session(tmp_path, keys=keys)
+    s.robot_side.make_guide = lambda *a, **k: SimpleNamespace(
+        update=lambda t, obs, miss=None: None, done=False, result=None, interrupted=lambda: None, last_obs=None)
+    s.run()
+    assert fl.USE_NOT_SEEN_TEXT in [x.text for x in s.says]

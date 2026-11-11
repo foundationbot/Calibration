@@ -46,13 +46,14 @@ TERMINAL = frozenset({"DONE", "ABORTED", "STOPPED_LOUD"})
 # the keys a phase hands to the flow (anything else is dropped and logged): Y enables the motors only in MOTORS (and
 # retries a deploy the operator was asked about), 1/2/? choose the deploy size, C = "can't put it there", R = roll back
 # on purpose, D = disable the motors (twice: the warning first), K = keep them on
-PHASE_KEYS = {"MOTORS": "YR", "PLACE": "C", "IMU_PLACE": "C", "CHECK_PLACE": "C", "POST_PLACE": "C",
+PHASE_KEYS = {"MOTORS": "YR", "PLACE": "CU", "IMU_PLACE": "C", "CHECK_PLACE": "C", "POST_PLACE": "C",
               "DEPLOY_SIZE": "12?", "DEPLOY": "YR", "POSTCHECK": "R", "REPORT": "R", "FINISH": "DKREX", "DONE": "D",
               "ABORTED": "D", "STOPPED_LOUD": "D"}
 # what an accepted key does, said back to the operator (state["last_key"]; 10 Nov: "i press Y and nothing is shown")
 KEY_MEANING = {("MOTORS", "Y"): "enabling the motors (or taking them over when already on)",
                ("MOTORS", "R"): "restarting the motor master (only with the motors off; up to 90 s)",
-               ("PLACE", "C"): "skipping this placement", ("IMU_PLACE", "C"): "skipping the IMU sweep",
+               ("PLACE", "C"): "skipping this placement",
+               ("PLACE", "U"): "using the board where it is (it must be seen now)", ("IMU_PLACE", "C"): "skipping the IMU sweep",
                ("CHECK_PLACE", "C"): "skipping the check grid", ("POST_PLACE", "C"): "skipping the depth check",
                ("DEPLOY_SIZE", "1"): "deploy size 1 chosen", ("DEPLOY_SIZE", "2"): "deploy size 2 chosen",
                ("DEPLOY_SIZE", "?"): "this robot's facts on the screen", ("DEPLOY", "Y"): "deploying",

@@ -79,6 +79,7 @@ SETTLED_S = 2.0          # no such change for this long: the board settled (or s
 STATUS_S = 15.0          # nothing said for this long while a placement runs -> "Still waiting. ..."
 MOVE_Z_FRAC = 0.03       # a distance change above this counts as the board moving
 MOVE_H_M = 0.05          # so does a height change above this (a board raised or lowered on its stand)
+STILL_M = 0.02           # the board's 3-D centre moving more than this counts as moving (when PnP gives it)
 SHRINK_M = 0.03          # the same correction counts as smaller when its amount fell by more than this
 REPEAT_S = 30.0          # the same instruction is repeated at most once, after this long unchanged
 GAP_S = 3.0              # after a prompt has been spoken, the operator gets this long to act before the next one
@@ -395,12 +396,20 @@ class PlacementGuide:
         self.geom = None if sp is None else (sp[0], sp[1])
         c = obs.centroid
         tol = self.still_px if obs.n_tags >= FEW_TAGS else max(self.still_px, FEW_TAGS_STILL_PX)
-        moved = self._start is None or math.hypot(c[0] - self._start[1][0], c[1] - self._start[1][1]) > tol or \
-            abs(float(obs.z) - self._start[2]) > MOVE_Z_FRAC * self._start[2] or \
-            (sp is not None and self._start[3] is not None and abs(sp[0] - self._start[3]) > MOVE_H_M)
+        p = getattr(obs, "p", None)
+        if p is not None and self._start is not None and len(self._start) > 4 and self._start[4] is not None:
+            # 10 Nov, phantom10: a board cut by the image edge at 58 cm never came to rest: the tags at the edge
+            # flicker in and out, the corner centroid jumps by tens of px, and only "Still waiting" was said. The
+            # board's 3-D centre (PnP over the corners seen) hardly moves then: it decides when it has one
+            moved = float(np.linalg.norm(np.asarray(p, float) - self._start[4])) > STILL_M
+        else:
+            moved = self._start is None or math.hypot(c[0] - self._start[1][0], c[1] - self._start[1][1]) > tol or \
+                abs(float(obs.z) - self._start[2]) > MOVE_Z_FRAC * self._start[2] or \
+                (sp is not None and self._start[3] is not None and abs(sp[0] - self._start[3]) > MOVE_H_M)
         if moved:
             # a board moved straight toward or away from the camera keeps its centroid: distance and height count too
-            self._start = (t, (float(c[0]), float(c[1])), float(obs.z), None if sp is None else sp[0])
+            self._start = (t, (float(c[0]), float(c[1])), float(obs.z), None if sp is None else sp[0],
+                           None if p is None else np.asarray(p, float))
             self._spoken_at = None
             return self._unsettled(t) or self._status(t, obs, None)
         if t - self._start[0] < self.still_s:

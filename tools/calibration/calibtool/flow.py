@@ -120,6 +120,7 @@ HOME_TEXT = "The head is turned. Moving it to the middle."
 NEW_SPOT_M = 0.15
 NEW_SPOT_GONE_S = 1.0
 NEXT_SPOT_TEXT = "Move the board to the next spot first."
+USE_NOT_SEEN_TEXT = "I cannot see the board, so I cannot use it. Show it to the head, then press U."
 EXTRAS_PER_E = 2            # E: this many more extra placements, then the fit and the decision again
 OVERRIDE_MIN_JUDGED = 5     # X: never accepts fewer judged regions than this (the rule is decide.Gates.min_judged)
 _JUDGED = re.compile(r"(\d+) judged entries.*?(\d+) needed")
@@ -704,6 +705,23 @@ class FullFlow:
                 if k == "C":
                     self._event("placement_cant", placement=target.name)
                     return "unreachable"
+                if k == "U" and phase == "PLACE":
+                    # 10 Nov, phantom10: the board at 58-65 cm could not get nearer the 0.5 m target; the operator
+                    # decides it is good enough. The board must be seen now, and moved from the last placed spot
+                    ob = getattr(g, "last_obs", None)
+                    if ob is None:
+                        self._say("lost", USE_NOT_SEEN_TEXT)
+                        continue
+                    if not moved:
+                        self._say("correction", NEXT_SPOT_TEXT)
+                        continue
+                    self.near_z = float(ob.z)
+                    if getattr(ob, "p", None) is not None:
+                        self._last_spot = np.asarray(ob.p, float)
+                    self._event("placement_used_as_is", placement=target.name, z_m=round(float(ob.z), 3))
+                    self._say("good", f"Using the board where it is. {int(round(float(ob.z) * 100))} centimetres. "
+                                      "Step back.")
+                    return "placed_near"
             fresh, obs = self.robot.board_obs()
             if fresh is not False and not moved:
                 p = None if obs is None else getattr(obs, "p", None)
