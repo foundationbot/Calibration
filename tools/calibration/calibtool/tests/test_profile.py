@@ -13,7 +13,7 @@ def test_p10_profile():
     assert p.host == "root@phantom10"
     assert p.python == "/root/p11-cal/venv/bin/python"
     assert p.pydeps == "/root/p11-cal/pydeps"
-    assert p.root == "/tmp/calibtool-m2"
+    assert p.root == "/data/calib"
     assert (p.left, p.right) == (3, 0)
     assert (p.producer_ns, p.producer_deploy) == ("dma-video", "producer")
     assert p.motor_tool == "/root/p11-cal/dma_motor_motion"

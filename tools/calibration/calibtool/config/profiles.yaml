@@ -15,7 +15,7 @@ profiles:
   P10:
     python: /root/p11-cal/venv/bin/python
     pydeps: /root/p11-cal/pydeps
-    root: /tmp/calibtool-m2
+    root: /data/calib          # 10 Nov 2026: was /tmp/calibtool-m2 (a reboot wiped the kit, the lease and the sessions)
     left: 3
     right: 0
     producer: {namespace: dma-video, deployment: producer}

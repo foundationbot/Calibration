@@ -18,10 +18,10 @@ def P():
 def test_remote_command_line():
     cmd = cli.remote(P(), "start", "--trial")
     w = shlex.split(cmd)
-    assert w[:2] == ["cd", "/tmp/calibtool-m2/kit/tools/calibration"]
+    assert w[:2] == ["cd", "/data/calib/kit/tools/calibration"]
     assert "OMP_NUM_THREADS=2" in cmd and "OPENBLAS_NUM_THREADS=2" in cmd
-    assert "PYTHONPATH=/tmp/calibtool-m2/kit/tools/calibration:/root/p11-cal/pydeps" in cmd
-    assert ("nice -n 10 /root/p11-cal/venv/bin/python -m calibtool.daemon start --root /tmp/calibtool-m2 "
+    assert "PYTHONPATH=/data/calib/kit/tools/calibration:/root/p11-cal/pydeps" in cmd
+    assert ("nice -n 10 /root/p11-cal/venv/bin/python -m calibtool.daemon start --root /data/calib "
             "--profile P10 --trial") in cmd
 
 
@@ -34,18 +34,18 @@ def test_ssh_argv_keeps_the_link_alive_check_short():
 def test_bootstrap_rsyncs_code_only():
     calls = []
     cli.bootstrap(P(), run=lambda argv, **kw: calls.append(argv) or type("R", (), {"returncode": 0})())
-    assert calls[0][:3] == ["ssh", "-o", "BatchMode=yes"] and "mkdir -p /tmp/calibtool-m2/kit/tools/calibration" in \
+    assert calls[0][:3] == ["ssh", "-o", "BatchMode=yes"] and "mkdir -p /data/calib/kit/tools/calibration" in \
         calls[0][-1]
     r = calls[1]
-    assert r[0] == "rsync" and r[-1] == "root@phantom10:/tmp/calibtool-m2/kit/tools/calibration/"
+    assert r[0] == "rsync" and r[-1] == "root@phantom10:/data/calib/kit/tools/calibration/"
     for d in ("calibtool", "scripts", "config"):
         assert any(x.endswith(f"tools/calibration/{d}") for x in r), d
     assert "--exclude=__pycache__" in r and "--exclude=tests" in r
     # 10 Nov: the planner's neck chain reads the robot URDF; the kit lacked it and calibd died at start
     u = calls[2]
     assert u[0] == "rsync" and u[-2].endswith("config/foundation_rig/20250206_phantom_mk1.urdf")
-    assert u[-1] == "root@phantom10:/tmp/calibtool-m2/kit/config/foundation_rig/"
-    assert "/tmp/calibtool-m2/kit/config/foundation_rig" in calls[0][-1] and "mkdir -p" in calls[0][-1]
+    assert u[-1] == "root@phantom10:/data/calib/kit/config/foundation_rig/"
+    assert "/data/calib/kit/config/foundation_rig" in calls[0][-1] and "mkdir -p" in calls[0][-1]
 
 
 class FakeRun:
