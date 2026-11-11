@@ -1,0 +1,21 @@
+stage 2 M12+head per frame count (CV = held-out wrist error, mm: median / p90 / max)
+
+== 5 frame(s): vs 5 frames, all 48: median 0.00 max 0.00 mm; clean-at-5 (34): median 0.00 max 0.00 mm; clean flips 0 []
+   fuse s mean 0.34, fit s mean 21.3
+   stage 2: {"n_right": 14, "n_left": 14, "dropped": ["01-pL07-10-0"], "x": [2.67, 4.6, 6.97, -1.67, 0.3, -3.66, 11.09, -23.27], "se": [2.0, 2.39, 4.47, 0.13, 0.14, 2.51, 2.19, 4.22], "cond": 71, "cv_right": [3.6, 7.1, 10.4], "cv_left": [5.3, 7.1, 12.0]}
+
+== 1 frame(s): vs 5 frames, all 48: median 2.88 max 78.32 mm; clean-at-5 (34): median 2.24 max 26.89 mm; clean flips 14 ['1103a-right-05-p04', '1103a-right-10-p09', '1103a-right-11-p10', '1104a-right-04-p08-10-m12', '1104a-right-09-p09-26-0', '1104a-right-10-p09-26-12', '1104a-right-12-p10-22-12', '1104a-right-17-p04-22-24', '1104b-left-01-pL07-10-0', '1104b-left-06-pL08-22-0', '1104b-left-09-pL09-22-m12', '1104b-left-13-pL10-22-m12', '1104b-left-14-pL10-10-12', '1104b-left-16-pL04-10-24']
+   fuse s mean 0.08, fit s mean 21.7
+   stage 2: {"n_right": 10, "n_left": 13, "dropped": ["01-p07-10-m12"], "x": [3.71, 1.01, -8.68, -1.72, 0.52, -10.23, 14.72, -8.25], "se": [2.19, 2.46, 5.72, 0.14, 0.14, 3.01, 2.34, 5.36], "cond": 91, "cv_right": [3.1, 7.6, 12.5], "cv_left": [4.2, 7.0, 7.7]}
+
+== 2 frame(s): vs 5 frames, all 48: median 1.83 max 75.29 mm; clean-at-5 (34): median 1.50 max 15.05 mm; clean flips 7 ['1103a-right-09-p08', '1103a-right-11-p10', '1104a-right-09-p09-26-0', '1104a-right-11-p10-10-12', '1104a-right-17-p04-22-24', '1104b-left-09-pL09-22-m12', '1104b-left-16-pL04-10-24']
+   fuse s mean 0.17, fit s mean 22.1
+   stage 2: {"n_right": 13, "n_left": 14, "dropped": ["01-pL07-10-0"], "x": [3.37, -1.3, -1.56, -1.74, 0.4, -7.42, 16.74, -15.35], "se": [1.65, 1.95, 3.6, 0.11, 0.11, 2.06, 1.83, 3.41], "cond": 72, "cv_right": [4.0, 5.9, 6.5], "cv_left": [3.1, 6.4, 6.8]}
+
+== 3 frame(s): vs 5 frames, all 48: median 1.99 max 74.75 mm; clean-at-5 (34): median 1.16 max 37.38 mm; clean flips 10 ['1103a-right-09-p08', '1103a-right-10-p09', '1104a-right-06-p08-22-0', '1104a-right-10-p09-26-12', '1104a-right-11-p10-10-12', '1104a-right-13-p10-22-24', '1104a-right-17-p04-22-24', '1104b-left-01-pL07-10-0', '1104b-left-08-pL09-10-0', '1104b-left-14-pL10-10-12']
+   fuse s mean 0.21, fit s mean 22.4
+   stage 2: {"n_right": 12, "n_left": 12, "dropped": ["13-p10-22-24"], "x": [2.4, -1.14, 7.4, -1.81, 0.21, -3.29, 16.06, -23.33], "se": [1.93, 2.31, 4.32, 0.13, 0.13, 2.46, 2.08, 4.09], "cond": 73, "cv_right": [3.5, 6.7, 7.4], "cv_left": [3.6, 6.3, 8.1]}
+
+== 4 frame(s): vs 5 frames, all 48: median 0.95 max 39.59 mm; clean-at-5 (34): median 0.70 max 32.49 mm; clean flips 5 ['1103a-right-11-p10', '1104a-right-06-p08-22-0', '1104a-right-10-p09-26-12', '1104a-right-11-p10-10-12', '1104b-left-01-pL07-10-0']
+   fuse s mean 0.29, fit s mean 21.7
+   stage 2: {"n_right": 13, "n_left": 14, "dropped": [], "x": [1.79, 1.26, -0.16, -1.72, 0.36, -5.79, 14.27, -15.97], "se": [1.64, 1.96, 3.61, 0.11, 0.11, 2.03, 1.81, 3.42], "cond": 70, "cv_right": [3.9, 5.1, 6.6], "cv_left": [3.9, 6.5, 8.1]}

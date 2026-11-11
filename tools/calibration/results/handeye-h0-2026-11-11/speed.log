@@ -1,0 +1,27 @@
+== reference 23:14:38
+{'max_off_mm': 0.0, 'median_off_mm': 0.0, 'max_rot_deg': 0.0, 'max_cov': 0.0, 'clean_flips': [], 'fit_s_mean': 135.08420833333332, 'fit_s_max': 287.194, 'steps_median': 138.5, 'wall_s': 866.4}
+== exact 23:29:05
+{'max_off_mm': 2.9970988231238917e-13, 'median_off_mm': 1.2545134908510543e-13, 'max_rot_deg': 1.8320900352364333e-12, 'max_cov': 0.0, 'clean_flips': [], 'fit_s_mean': 73.03677083333334, 'fit_s_max': 149.28, 'steps_median': 138.5, 'wall_s': 469.5}
+== model_voxel=0.0005 23:36:55
+{'max_off_mm': 30.37224874731076, 'median_off_mm': 1.4278878170286697, 'max_rot_deg': 19.860718317913772, 'max_cov': 0.26042308877928483, 'clean_flips': ['p14-armwave-1103a-right-08-p07.npz', 'p14-armwave-1103a-right-09-p08.npz', 'p14-armwave-1104a-right-04-p08-10-m12.npz', 'p14-armwave-1104a-right-06-p08-22-0.npz', 'p14-armwave-1104a-right-10-p09-26-12.npz', 'p14-armwave-1104a-right-14-p10-26-m12.npz', 'p14-armwave-1104a-right-17-p04-22-24.npz', 'p14-armwave-1104b-left-09-pL09-22-m12.npz', 'p14-armwave-1104b-left-10-pL09-26-m12.npz', 'p14-armwave-1104b-left-15-pL10-10-24.npz', 'p14-armwave-1104b-left-16-pL04-10-24.npz'], 'fit_s_mean': 18.976, 'fit_s_max': 48.502, 'steps_median': 148.5, 'wall_s': 126.1}
+== model_voxel=0.001 23:39:01
+{'max_off_mm': 47.577321494858005, 'median_off_mm': 2.6728153589906607, 'max_rot_deg': 43.126516400839044, 'max_cov': 0.264022331127882, 'clean_flips': ['p14-armwave-1103a-right-02-p01.npz', 'p14-armwave-1103a-right-08-p07.npz', 'p14-armwave-1103a-right-09-p08.npz', 'p14-armwave-1104a-right-04-p08-10-m12.npz', 'p14-armwave-1104a-right-06-p08-22-0.npz', 'p14-armwave-1104a-right-10-p09-26-12.npz', 'p14-armwave-1104b-left-09-pL09-22-m12.npz', 'p14-armwave-1104b-left-15-pL10-10-24.npz', 'p14-armwave-1104b-left-16-pL04-10-24.npz'], 'fit_s_mean': 10.393729166666667, 'fit_s_max': 23.669, 'steps_median': 169.0, 'wall_s': 77.5}
+queue done 23:40:18
+== exact 23:44:17
+{'max_off_mm': 2.9970988231238917e-13, 'median_off_mm': 1.2545134908510543e-13, 'max_rot_deg': 1.8320900352364333e-12, 'max_cov': 0.0, 'clean_flips': [], 'fit_s_mean': 68.40174999999999, 'fit_s_max': 145.507, 'steps_median': 138.5, 'wall_s': 443.8}
+== tree_fast=1 23:51:41
+{'max_off_mm': 2.9970988231238917e-13, 'median_off_mm': 1.2819290419616455e-13, 'max_rot_deg': 1.8320900352364333e-12, 'max_cov': 0.0, 'clean_flips': [], 'fit_s_mean': 27.154458333333327, 'fit_s_max': 48.055, 'steps_median': 138.5, 'wall_s': 172.2}
+== tree_fast=1,tree_leafsize=64 23:54:33
+{'max_off_mm': 2.9970988231238917e-13, 'median_off_mm': 1.136329959651425e-13, 'max_rot_deg': 1.8320900352364333e-12, 'max_cov': 0.0, 'clean_flips': [], 'fit_s_mean': 22.92427083333334, 'fit_s_max': 39.245, 'steps_median': 138.5, 'wall_s': 145.8}
+queue done 23:56:59
+== exact 23:58:33
+{'max_off_mm': 2.9970988231238917e-13, 'median_off_mm': 1.136329959651425e-13, 'max_rot_deg': 1.8320900352364333e-12, 'max_cov': 0.0, 'clean_flips': [], 'fit_s_mean': 20.949520833333334, 'fit_s_max': 37.102, 'steps_median': 138.5, 'wall_s': 135.1}
+== final_step_m=1e-4,final_step_deg=1e-2 00:00:48
+{'max_off_mm': 11.230830788091072, 'median_off_mm': 0.060673877841666224, 'max_rot_deg': 2.6000934687466852, 'max_cov': 0.052794215375783105, 'clean_flips': ['p14-armwave-1104b-left-14-pL10-10-12.npz'], 'fit_s_mean': 19.192395833333332, 'fit_s_max': 36.57, 'steps_median': 118.0, 'wall_s': 121.8}
+== final_step_m=3e-5,final_step_deg=3e-3 00:02:50
+{'max_off_mm': 0.4538977512468858, 'median_off_mm': 0.008053094515823256, 'max_rot_deg': 0.21760712271128568, 'max_cov': 0.0032111174281674315, 'clean_flips': [], 'fit_s_mean': 20.3163125, 'fit_s_max': 37.087, 'steps_median': 133.0, 'wall_s': 129.9}
+== max_steps=15 00:05:00
+{'max_off_mm': 109.36385607506337, 'median_off_mm': 0.13336847622594222, 'max_rot_deg': 126.8988274022407, 'max_cov': 0.47566249373075636, 'clean_flips': ['p14-armwave-1104b-left-14-pL10-10-12.npz'], 'fit_s_mean': 18.06758333333333, 'fit_s_max': 70.41, 'steps_median': 97.5, 'wall_s': 114.9}
+== data_stride=2 00:06:55
+{'max_off_mm': 14.081639814636214, 'median_off_mm': 0.13619819306278697, 'max_rot_deg': 108.3618375353964, 'max_cov': 0.4186134233477787, 'clean_flips': ['p14-armwave-1104a-right-04-p08-10-m12.npz', 'p14-armwave-1104b-left-08-pL09-10-0.npz', 'p14-armwave-1104b-left-12-pL10-26-0.npz', 'p14-armwave-1104b-left-14-pL10-10-12.npz', 'p14-armwave-1104b-left-19-pL04-26-12.npz'], 'fit_s_mean': 12.858895833333333, 'fit_s_max': 35.307, 'steps_median': 140.0, 'wall_s': 93.4}
+queue done 00:08:29

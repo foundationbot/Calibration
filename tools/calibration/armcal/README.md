@@ -39,10 +39,12 @@ Read B used only `run(...).depth.depth` (the fused depth) from it: `hand_check.l
 
 ## Speed
 
-`meshfit.FitConfig` selects how B0 computes. `REFERENCE` is the algorithm as it ran on phantom14. `FAST` (the default)
-was accepted only after it matched on all 48 stored phantom14 captures, both arms: the wrist offset within 0.5 mm
-and the rotation within 1° of the stored records, with every clean / not-clean decision unchanged. The measurements
-are in `results/handeye-h0-2026-11-11/`.
+`meshfit.FitConfig` selects how B0 computes. `REFERENCE` is the algorithm as it ran on phantom14 (78.9 s per capture
+alone on one Moonstone core). `FAST` (the default, `= EXACT`) uses only changes that give the same numbers: on all 48
+stored phantom14 captures, both arms, the offsets agree to 3e-13 mm and every clean decision is unchanged. It takes
+13.0 s per capture alone, or 20.9 s with 8 in parallel. Every approximation tried failed the 0.5 mm / 1° rule:
+thinning the model, every 2nd pixel, fewer or looser steps. The measurements, and the finding that B0 is fragile on
+many captures, are in `results/handeye-h0-2026-11-11/README.md`.
 
 ## The HEAD term (open)
 

@@ -1,0 +1,730 @@
+{
+ "b_data_stride-2": {
+  "n": 48,
+  "max_off_mm": 14.081639814636214,
+  "median_off_mm": 0.13619819306278697,
+  "max_rot_deg": 108.3618375353964,
+  "max_cov": 0.4186134233477787,
+  "clean_flips": [
+   "1104a-right-04-p08-10-m12",
+   "1104b-left-08-pL09-10-0",
+   "1104b-left-12-pL10-26-0",
+   "1104b-left-14-pL10-10-12",
+   "1104b-left-19-pL04-26-12"
+  ],
+  "fit_s_mean": 12.858895833333333,
+  "fit_s_median": 11.5795,
+  "fit_s_max": 35.307,
+  "fuse_s_mean": 0.0,
+  "steps_median": 140.0,
+  "worst": [
+   [
+    14.082,
+    "1103a-right-02-p01"
+   ],
+   [
+    11.283,
+    "1104a-right-11-p10-10-12"
+   ],
+   [
+    11.048,
+    "1104b-left-14-pL10-10-12"
+   ],
+   [
+    3.382,
+    "1104b-left-12-pL10-26-0"
+   ],
+   [
+    1.525,
+    "1103a-right-03-p02"
+   ]
+  ],
+  "config": "data_stride=2",
+  "depth": "cpp",
+  "frames": 0,
+  "wall_s": 93.4,
+  "cfg": "FitConfig(tree_per_stage=True, shared_render=True, index_coverage=True, tree_fast=True, tree_leafsize=64, fast_render=True, roi_px=None, data_stride=2, final_step_m=1e-05, final_step_deg=0.001, max_steps_final=1000, max_steps=30, model_voxel=None)",
+  "against": "stored base_w1/base_w2/base_L"
+ },
+ "b_exact": {
+  "n": 48,
+  "max_off_mm": 2.9970988231238917e-13,
+  "median_off_mm": 1.136329959651425e-13,
+  "max_rot_deg": 1.8320900352364333e-12,
+  "max_cov": 0.0,
+  "clean_flips": [],
+  "fit_s_mean": 20.949520833333334,
+  "fit_s_median": 19.967,
+  "fit_s_max": 37.102,
+  "fuse_s_mean": 0.0,
+  "steps_median": 138.5,
+  "worst": [
+   [
+    0.0,
+    "1104b-left-04-pL07-26-12"
+   ],
+   [
+    0.0,
+    "1103a-right-09-p08"
+   ],
+   [
+    0.0,
+    "1103a-right-14-p13"
+   ],
+   [
+    0.0,
+    "1104b-left-12-pL10-26-0"
+   ],
+   [
+    0.0,
+    "1104a-right-02-p07-22-m24"
+   ]
+  ],
+  "config": "exact",
+  "depth": "cpp",
+  "frames": 0,
+  "wall_s": 135.1,
+  "cfg": "FitConfig(tree_per_stage=True, shared_render=True, index_coverage=True, tree_fast=True, tree_leafsize=64, fast_render=True, roi_px=None, data_stride=1, final_step_m=1e-05, final_step_deg=0.001, max_steps_final=1000, max_steps=30, model_voxel=None)",
+  "against": "stored base_w1/base_w2/base_L"
+ },
+ "b_final_step_m-1e-4_final_step_deg-1e-2": {
+  "n": 48,
+  "max_off_mm": 11.230830788091072,
+  "median_off_mm": 0.060673877841666224,
+  "max_rot_deg": 2.6000934687466852,
+  "max_cov": 0.052794215375783105,
+  "clean_flips": [
+   "1104b-left-14-pL10-10-12"
+  ],
+  "fit_s_mean": 19.192395833333332,
+  "fit_s_median": 18.549500000000002,
+  "fit_s_max": 36.57,
+  "fuse_s_mean": 0.0,
+  "steps_median": 118.0,
+  "worst": [
+   [
+    11.231,
+    "1104b-left-14-pL10-10-12"
+   ],
+   [
+    2.087,
+    "1104b-left-01-pL07-10-0"
+   ],
+   [
+    1.287,
+    "1104b-left-13-pL10-22-m12"
+   ],
+   [
+    0.735,
+    "1103a-right-12-p11"
+   ],
+   [
+    0.626,
+    "1103a-right-13-p12"
+   ]
+  ],
+  "config": "final_step_m=1e-4,final_step_deg=1e-2",
+  "depth": "cpp",
+  "frames": 0,
+  "wall_s": 121.8,
+  "cfg": "FitConfig(tree_per_stage=True, shared_render=True, index_coverage=True, tree_fast=True, tree_leafsize=64, fast_render=True, roi_px=None, data_stride=1, final_step_m=0.0001, final_step_deg=0.01, max_steps_final=1000, max_steps=30, model_voxel=None)",
+  "against": "stored base_w1/base_w2/base_L"
+ },
+ "b_final_step_m-3e-5_final_step_deg-3e-3": {
+  "n": 48,
+  "max_off_mm": 0.4538977512468858,
+  "median_off_mm": 0.008053094515823256,
+  "max_rot_deg": 0.21760712271128568,
+  "max_cov": 0.0032111174281674315,
+  "clean_flips": [],
+  "fit_s_mean": 20.3163125,
+  "fit_s_median": 19.563000000000002,
+  "fit_s_max": 37.087,
+  "fuse_s_mean": 0.0,
+  "steps_median": 133.0,
+  "worst": [
+   [
+    0.454,
+    "1104b-left-01-pL07-10-0"
+   ],
+   [
+    0.391,
+    "1104a-right-11-p10-10-12"
+   ],
+   [
+    0.353,
+    "1104b-left-13-pL10-22-m12"
+   ],
+   [
+    0.272,
+    "1104a-right-12-p10-22-12"
+   ],
+   [
+    0.228,
+    "1103a-right-14-p13"
+   ]
+  ],
+  "config": "final_step_m=3e-5,final_step_deg=3e-3",
+  "depth": "cpp",
+  "frames": 0,
+  "wall_s": 129.9,
+  "cfg": "FitConfig(tree_per_stage=True, shared_render=True, index_coverage=True, tree_fast=True, tree_leafsize=64, fast_render=True, roi_px=None, data_stride=1, final_step_m=3e-05, final_step_deg=0.003, max_steps_final=1000, max_steps=30, model_voxel=None)",
+  "against": "stored base_w1/base_w2/base_L"
+ },
+ "b_max_steps-15": {
+  "n": 48,
+  "max_off_mm": 109.36385607506337,
+  "median_off_mm": 0.13336847622594222,
+  "max_rot_deg": 126.8988274022407,
+  "max_cov": 0.47566249373075636,
+  "clean_flips": [
+   "1104b-left-14-pL10-10-12"
+  ],
+  "fit_s_mean": 18.06758333333333,
+  "fit_s_median": 15.0665,
+  "fit_s_max": 70.41,
+  "fuse_s_mean": 0.0,
+  "steps_median": 97.5,
+  "worst": [
+   [
+    109.364,
+    "1104a-right-11-p10-10-12"
+   ],
+   [
+    31.334,
+    "1103a-right-14-p13"
+   ],
+   [
+    22.142,
+    "1104b-left-13-pL10-22-m12"
+   ],
+   [
+    19.388,
+    "1103a-right-04-p03"
+   ],
+   [
+    14.207,
+    "1103a-right-02-p01"
+   ]
+  ],
+  "config": "max_steps=15",
+  "depth": "cpp",
+  "frames": 0,
+  "wall_s": 114.9,
+  "cfg": "FitConfig(tree_per_stage=True, shared_render=True, index_coverage=True, tree_fast=True, tree_leafsize=64, fast_render=True, roi_px=None, data_stride=1, final_step_m=1e-05, final_step_deg=0.001, max_steps_final=1000, max_steps=15, model_voxel=None)",
+  "against": "stored base_w1/base_w2/base_L"
+ },
+ "b_model_voxel-0.0005": {
+  "n": 48,
+  "max_off_mm": 30.37224874731076,
+  "median_off_mm": 1.4278878170286697,
+  "max_rot_deg": 19.860718317913772,
+  "max_cov": 0.26042308877928483,
+  "clean_flips": [
+   "1103a-right-08-p07",
+   "1103a-right-09-p08",
+   "1104a-right-04-p08-10-m12",
+   "1104a-right-06-p08-22-0",
+   "1104a-right-10-p09-26-12",
+   "1104a-right-14-p10-26-m12",
+   "1104a-right-17-p04-22-24",
+   "1104b-left-09-pL09-22-m12",
+   "1104b-left-10-pL09-26-m12",
+   "1104b-left-15-pL10-10-24",
+   "1104b-left-16-pL04-10-24"
+  ],
+  "fit_s_mean": 18.976,
+  "fit_s_median": 17.378999999999998,
+  "fit_s_max": 48.502,
+  "fuse_s_mean": 0.0,
+  "steps_median": 148.5,
+  "worst": [
+   [
+    30.372,
+    "1104a-right-14-p10-26-m12"
+   ],
+   [
+    24.227,
+    "1103a-right-14-p13"
+   ],
+   [
+    20.51,
+    "1103a-right-02-p01"
+   ],
+   [
+    19.517,
+    "1104b-left-14-pL10-10-12"
+   ],
+   [
+    17.312,
+    "1103a-right-08-p07"
+   ]
+  ],
+  "config": "model_voxel=0.0005",
+  "depth": "cpp",
+  "frames": 0,
+  "wall_s": 126.1,
+  "cfg": "FitConfig(tree_per_stage=True, shared_render=True, index_coverage=True, roi_px=None, data_stride=1, final_step_m=1e-05, final_step_deg=0.001, max_steps_final=1000, max_steps=30, model_voxel=0.0005)",
+  "against": "stored base_w1/base_w2/base_L"
+ },
+ "b_model_voxel-0.001": {
+  "n": 48,
+  "max_off_mm": 47.577321494858005,
+  "median_off_mm": 2.6728153589906607,
+  "max_rot_deg": 43.126516400839044,
+  "max_cov": 0.264022331127882,
+  "clean_flips": [
+   "1103a-right-02-p01",
+   "1103a-right-08-p07",
+   "1103a-right-09-p08",
+   "1104a-right-04-p08-10-m12",
+   "1104a-right-06-p08-22-0",
+   "1104a-right-10-p09-26-12",
+   "1104b-left-09-pL09-22-m12",
+   "1104b-left-15-pL10-10-24",
+   "1104b-left-16-pL04-10-24"
+  ],
+  "fit_s_mean": 10.393729166666667,
+  "fit_s_median": 9.9835,
+  "fit_s_max": 23.669,
+  "fuse_s_mean": 0.0,
+  "steps_median": 169.0,
+  "worst": [
+   [
+    47.577,
+    "1103a-right-02-p01"
+   ],
+   [
+    47.003,
+    "1103a-right-03-p02"
+   ],
+   [
+    28.96,
+    "1103a-right-12-p11"
+   ],
+   [
+    27.446,
+    "1103a-right-14-p13"
+   ],
+   [
+    26.365,
+    "1103a-right-11-p10"
+   ]
+  ],
+  "config": "model_voxel=0.001",
+  "depth": "cpp",
+  "frames": 0,
+  "wall_s": 77.5,
+  "cfg": "FitConfig(tree_per_stage=True, shared_render=True, index_coverage=True, roi_px=None, data_stride=1, final_step_m=1e-05, final_step_deg=0.001, max_steps_final=1000, max_steps=30, model_voxel=0.001)",
+  "against": "stored base_w1/base_w2/base_L"
+ },
+ "b_reference": {
+  "n": 48,
+  "max_off_mm": 0.0,
+  "median_off_mm": 0.0,
+  "max_rot_deg": 0.0,
+  "max_cov": 0.0,
+  "clean_flips": [],
+  "fit_s_mean": 135.08420833333332,
+  "fit_s_median": 131.1255,
+  "fit_s_max": 287.194,
+  "fuse_s_mean": 0.0,
+  "steps_median": 138.5,
+  "worst": [
+   [
+    0.0,
+    "1104b-left-19-pL04-26-12"
+   ],
+   [
+    0.0,
+    "1104b-left-18-pL04-26-m12"
+   ],
+   [
+    0.0,
+    "1104b-left-17-pL04-22-0"
+   ],
+   [
+    0.0,
+    "1104b-left-16-pL04-10-24"
+   ],
+   [
+    0.0,
+    "1104b-left-15-pL10-10-24"
+   ]
+  ],
+  "config": "reference",
+  "depth": "cpp",
+  "frames": 0,
+  "wall_s": 866.4,
+  "cfg": "FitConfig(tree_per_stage=False, shared_render=False, index_coverage=False, roi_px=None, data_stride=1, final_step_m=1e-05, final_step_deg=0.001, max_steps_final=1000, max_steps=30, model_voxel=None)",
+  "against": "stored base_w1/base_w2/base_L"
+ },
+ "b_tree_fast-1": {
+  "n": 48,
+  "max_off_mm": 2.9970988231238917e-13,
+  "median_off_mm": 1.2819290419616455e-13,
+  "max_rot_deg": 1.8320900352364333e-12,
+  "max_cov": 0.0,
+  "clean_flips": [],
+  "fit_s_mean": 27.154458333333327,
+  "fit_s_median": 26.2885,
+  "fit_s_max": 48.055,
+  "fuse_s_mean": 0.0,
+  "steps_median": 138.5,
+  "worst": [
+   [
+    0.0,
+    "1104b-left-04-pL07-26-12"
+   ],
+   [
+    0.0,
+    "1103a-right-14-p13"
+   ],
+   [
+    0.0,
+    "1104a-right-02-p07-22-m24"
+   ],
+   [
+    0.0,
+    "1104b-left-09-pL09-22-m12"
+   ],
+   [
+    0.0,
+    "1104a-right-04-p08-10-m12"
+   ]
+  ],
+  "config": "tree_fast=1",
+  "depth": "cpp",
+  "frames": 0,
+  "wall_s": 172.2,
+  "cfg": "FitConfig(tree_per_stage=True, shared_render=True, index_coverage=True, tree_fast=True, tree_leafsize=16, fast_render=True, roi_px=None, data_stride=1, final_step_m=1e-05, final_step_deg=0.001, max_steps_final=1000, max_steps=30, model_voxel=None)",
+  "against": "stored base_w1/base_w2/base_L"
+ },
+ "b_tree_fast-1_tree_leafsize-64": {
+  "n": 48,
+  "max_off_mm": 2.9970988231238917e-13,
+  "median_off_mm": 1.136329959651425e-13,
+  "max_rot_deg": 1.8320900352364333e-12,
+  "max_cov": 0.0,
+  "clean_flips": [],
+  "fit_s_mean": 22.92427083333334,
+  "fit_s_median": 21.7605,
+  "fit_s_max": 39.245,
+  "fuse_s_mean": 0.0,
+  "steps_median": 138.5,
+  "worst": [
+   [
+    0.0,
+    "1104b-left-04-pL07-26-12"
+   ],
+   [
+    0.0,
+    "1103a-right-09-p08"
+   ],
+   [
+    0.0,
+    "1103a-right-14-p13"
+   ],
+   [
+    0.0,
+    "1104b-left-12-pL10-26-0"
+   ],
+   [
+    0.0,
+    "1104a-right-02-p07-22-m24"
+   ]
+  ],
+  "config": "tree_fast=1,tree_leafsize=64",
+  "depth": "cpp",
+  "frames": 0,
+  "wall_s": 145.8,
+  "cfg": "FitConfig(tree_per_stage=True, shared_render=True, index_coverage=True, tree_fast=True, tree_leafsize=64, fast_render=True, roi_px=None, data_stride=1, final_step_m=1e-05, final_step_deg=0.001, max_steps_final=1000, max_steps=30, model_voxel=None)",
+  "against": "stored base_w1/base_w2/base_L"
+ },
+ "f_0": {
+  "n": 48,
+  "max_off_mm": 2.9970988231238917e-13,
+  "median_off_mm": 1.136329959651425e-13,
+  "max_rot_deg": 1.8320900352364333e-12,
+  "max_cov": 0.0,
+  "clean_flips": [],
+  "fit_s_mean": 21.290604166666668,
+  "fit_s_median": 20.4755,
+  "fit_s_max": 37.785,
+  "fuse_s_mean": 0.33789583333333334,
+  "steps_median": 138.5,
+  "worst": [
+   [
+    0.0,
+    "1104b-left-04-pL07-26-12"
+   ],
+   [
+    0.0,
+    "1103a-right-09-p08"
+   ],
+   [
+    0.0,
+    "1103a-right-14-p13"
+   ],
+   [
+    0.0,
+    "1104b-left-12-pL10-26-0"
+   ],
+   [
+    0.0,
+    "1104a-right-02-p07-22-m24"
+   ]
+  ],
+  "config": "fast",
+  "depth": "numpy",
+  "frames": 0,
+  "wall_s": 138.6,
+  "cfg": "FitConfig(tree_per_stage=True, shared_render=True, index_coverage=True, tree_fast=True, tree_leafsize=64, fast_render=True, roi_px=None, data_stride=1, final_step_m=1e-05, final_step_deg=0.001, max_steps_final=1000, max_steps=30, model_voxel=None)",
+  "against": "stored base_w1/base_w2/base_L"
+ },
+ "f_1": {
+  "n": 48,
+  "max_off_mm": 78.32468367052573,
+  "median_off_mm": 2.8772432945314943,
+  "max_rot_deg": 55.234314490562575,
+  "max_cov": 0.14386938898123924,
+  "clean_flips": [
+   "1103a-right-05-p04",
+   "1103a-right-10-p09",
+   "1103a-right-11-p10",
+   "1104a-right-04-p08-10-m12",
+   "1104a-right-09-p09-26-0",
+   "1104a-right-10-p09-26-12",
+   "1104a-right-12-p10-22-12",
+   "1104a-right-17-p04-22-24",
+   "1104b-left-01-pL07-10-0",
+   "1104b-left-06-pL08-22-0",
+   "1104b-left-09-pL09-22-m12",
+   "1104b-left-13-pL10-22-m12",
+   "1104b-left-14-pL10-10-12",
+   "1104b-left-16-pL04-10-24"
+  ],
+  "fit_s_mean": 21.682666666666666,
+  "fit_s_median": 20.012999999999998,
+  "fit_s_max": 40.329,
+  "fuse_s_mean": 0.08420833333333333,
+  "steps_median": 151.0,
+  "worst": [
+   [
+    78.325,
+    "1103a-right-02-p01"
+   ],
+   [
+    36.658,
+    "1103a-right-14-p13"
+   ],
+   [
+    35.688,
+    "1104b-left-13-pL10-22-m12"
+   ],
+   [
+    26.889,
+    "1104b-left-01-pL07-10-0"
+   ],
+   [
+    16.693,
+    "1104b-left-14-pL10-10-12"
+   ]
+  ],
+  "config": "fast",
+  "depth": "numpy",
+  "frames": 1,
+  "wall_s": 141.6,
+  "cfg": "FitConfig(tree_per_stage=True, shared_render=True, index_coverage=True, tree_fast=True, tree_leafsize=64, fast_render=True, roi_px=None, data_stride=1, final_step_m=1e-05, final_step_deg=0.001, max_steps_final=1000, max_steps=30, model_voxel=None)",
+  "against": "stored base_w1/base_w2/base_L"
+ },
+ "f_2": {
+  "n": 48,
+  "max_off_mm": 75.28756457686168,
+  "median_off_mm": 1.8262776119092887,
+  "max_rot_deg": 50.208120685817946,
+  "max_cov": 0.11278923934878837,
+  "clean_flips": [
+   "1103a-right-09-p08",
+   "1103a-right-11-p10",
+   "1104a-right-09-p09-26-0",
+   "1104a-right-11-p10-10-12",
+   "1104a-right-17-p04-22-24",
+   "1104b-left-09-pL09-22-m12",
+   "1104b-left-16-pL04-10-24"
+  ],
+  "fit_s_mean": 22.051208333333335,
+  "fit_s_median": 20.6215,
+  "fit_s_max": 54.953,
+  "fuse_s_mean": 0.17295833333333333,
+  "steps_median": 143.0,
+  "worst": [
+   [
+    75.288,
+    "1103a-right-02-p01"
+   ],
+   [
+    57.788,
+    "1103a-right-14-p13"
+   ],
+   [
+    20.884,
+    "1103a-right-03-p02"
+   ],
+   [
+    15.053,
+    "1104b-left-14-pL10-10-12"
+   ],
+   [
+    12.7,
+    "1103a-right-04-p03"
+   ]
+  ],
+  "config": "fast",
+  "depth": "numpy",
+  "frames": 2,
+  "wall_s": 139.2,
+  "cfg": "FitConfig(tree_per_stage=True, shared_render=True, index_coverage=True, tree_fast=True, tree_leafsize=64, fast_render=True, roi_px=None, data_stride=1, final_step_m=1e-05, final_step_deg=0.001, max_steps_final=1000, max_steps=30, model_voxel=None)",
+  "against": "stored base_w1/base_w2/base_L"
+ },
+ "f_3": {
+  "n": 48,
+  "max_off_mm": 74.75297343828596,
+  "median_off_mm": 1.9935392174459934,
+  "max_rot_deg": 49.82101120135328,
+  "max_cov": 0.14775824091950907,
+  "clean_flips": [
+   "1103a-right-09-p08",
+   "1103a-right-10-p09",
+   "1104a-right-06-p08-22-0",
+   "1104a-right-10-p09-26-12",
+   "1104a-right-11-p10-10-12",
+   "1104a-right-13-p10-22-24",
+   "1104a-right-17-p04-22-24",
+   "1104b-left-01-pL07-10-0",
+   "1104b-left-08-pL09-10-0",
+   "1104b-left-14-pL10-10-12"
+  ],
+  "fit_s_mean": 22.398500000000002,
+  "fit_s_median": 20.567999999999998,
+  "fit_s_max": 68.762,
+  "fuse_s_mean": 0.21302083333333335,
+  "steps_median": 142.5,
+  "worst": [
+   [
+    74.753,
+    "1103a-right-02-p01"
+   ],
+   [
+    37.376,
+    "1104b-left-01-pL07-10-0"
+   ],
+   [
+    25.369,
+    "1104b-left-14-pL10-10-12"
+   ],
+   [
+    13.412,
+    "1104b-left-15-pL10-10-24"
+   ],
+   [
+    7.182,
+    "1104b-left-08-pL09-10-0"
+   ]
+  ],
+  "config": "fast",
+  "depth": "numpy",
+  "frames": 3,
+  "wall_s": 145.7,
+  "cfg": "FitConfig(tree_per_stage=True, shared_render=True, index_coverage=True, tree_fast=True, tree_leafsize=64, fast_render=True, roi_px=None, data_stride=1, final_step_m=1e-05, final_step_deg=0.001, max_steps_final=1000, max_steps=30, model_voxel=None)",
+  "against": "stored base_w1/base_w2/base_L"
+ },
+ "f_4": {
+  "n": 48,
+  "max_off_mm": 39.591534353978766,
+  "median_off_mm": 0.9535271746867369,
+  "max_rot_deg": 28.404848309934145,
+  "max_cov": 0.10773576927108819,
+  "clean_flips": [
+   "1103a-right-11-p10",
+   "1104a-right-06-p08-22-0",
+   "1104a-right-10-p09-26-12",
+   "1104a-right-11-p10-10-12",
+   "1104b-left-01-pL07-10-0"
+  ],
+  "fit_s_mean": 21.676770833333336,
+  "fit_s_median": 20.642000000000003,
+  "fit_s_max": 47.113,
+  "fuse_s_mean": 0.2893541666666667,
+  "steps_median": 142.5,
+  "worst": [
+   [
+    39.592,
+    "1103a-right-14-p13"
+   ],
+   [
+    32.492,
+    "1104b-left-01-pL07-10-0"
+   ],
+   [
+    27.574,
+    "1103a-right-02-p01"
+   ],
+   [
+    19.97,
+    "1103a-right-04-p03"
+   ],
+   [
+    15.263,
+    "1104b-left-14-pL10-10-12"
+   ]
+  ],
+  "config": "fast",
+  "depth": "numpy",
+  "frames": 4,
+  "wall_s": 139.3,
+  "cfg": "FitConfig(tree_per_stage=True, shared_render=True, index_coverage=True, tree_fast=True, tree_leafsize=64, fast_render=True, roi_px=None, data_stride=1, final_step_m=1e-05, final_step_deg=0.001, max_steps_final=1000, max_steps=30, model_voxel=None)",
+  "against": "stored base_w1/base_w2/base_L"
+ },
+ "single_fast": {
+  "n": 8,
+  "max_off_mm": 2.9970988231238917e-13,
+  "median_off_mm": 1.2545134908510543e-13,
+  "max_rot_deg": 1.8320900352364333e-12,
+  "max_cov": 0.0,
+  "clean_flips": [],
+  "fit_s_mean": 13.006875,
+  "fit_s_median": 12.6735,
+  "fit_s_max": 19.91,
+  "fuse_s_mean": 0.15812500000000002,
+  "steps_median": 133.5,
+  "worst": [
+   [
+    0.0,
+    "1104b-left-04-pL07-26-12"
+   ],
+   [
+    0.0,
+    "1104a-right-02-p07-22-m24"
+   ],
+   [
+    0.0,
+    "1104a-right-04-p08-10-m12"
+   ],
+   [
+    0.0,
+    "1104b-left-03-pL07-22-24"
+   ],
+   [
+    0.0,
+    "1104a-right-01-p07-10-m12"
+   ]
+  ],
+  "config": "fast",
+  "depth": "numpy",
+  "frames": 0,
+  "wall_s": 105.9,
+  "cfg": "FitConfig(tree_per_stage=True, shared_render=True, index_coverage=True, tree_fast=True, tree_leafsize=64, fast_render=True, roi_px=None, data_stride=1, final_step_m=1e-05, final_step_deg=0.001, max_steps_final=1000, max_steps=30, model_voxel=None)",
+  "against": "stored base_w1/base_w2/base_L"
+ }
+}

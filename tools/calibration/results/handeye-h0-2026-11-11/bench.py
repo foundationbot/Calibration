@@ -41,7 +41,7 @@ def config(name):
     kw = dict(kv.split("=") for kv in name.split(",")) if "=" in name else {}
     base = meshfit.EXACT
     conv = {"data_stride": int, "max_steps_final": int, "final_step_m": float, "final_step_deg": float,
-            "roi_px": int, "max_steps": int, "model_voxel": float, "tree_leafsize": int,
+            "max_steps": int, "model_voxel": float, "tree_leafsize": int,
             "tree_fast": lambda v: v == "1", "fast_render": lambda v: v == "1"}
     return meshfit.with_config(base, **{k: conv[k](v) for k, v in kw.items()})
 

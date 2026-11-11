@@ -17,9 +17,11 @@ by robust point-to-plane Gauss-Newton:
 Only the last stage must settle; the reported statistics are at the final E. The result is said at the WRIST POINT
 (the <side>WristRoll joint origin): where the depth puts it minus where the encoders + URDF put it, Torso frame (m).
 
-Speed (FitConfig, measured on all 48 stored phantom14 captures: tools/calibration/results/handeye-h0-2026-11-11/):
-REFERENCE is the algorithm as it ran on phantom14; FAST (the default) changes only how the same quantities are
-computed, plus the measured-safe approximations named in FitConfig."""
+Speed (FitConfig; measured on all 48 stored phantom14 captures, tools/calibration/results/handeye-h0-2026-11-11/):
+REFERENCE is the algorithm as it ran on phantom14 (about 80 s per capture on one Moonstone core). FAST (the default)
+= EXACT: only changes that compute the same numbers (to 3e-13 mm on all 48), about 13 s. The approximating knobs
+(model_voxel, data_stride, max_steps, looser final steps) stay for experiments: every one tried moved some captures by
+mm to cm -- B0 is fragile on many captures (results README, point 4)."""
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
@@ -57,8 +59,6 @@ class FitConfig:
     tree_leafsize: int = 16
     fast_render: bool = False      # the z-buffer by ufunc minimum.at instead of a lexsort, one projection shared with
                                    # the visibility test (exact: the same depth and the same winning point per pixel)
-    roi_px: int | None = None      # unproject only the depth inside the encoders' silhouette grown by this (exact
-                                   # when it covers every stage's dilated silhouette)
     data_stride: int = 1           # use every k-th depth pixel in u and v (approximation)
     final_step_m: float = STEP_M   # the last stage's settle thresholds (approximation when looser)
     final_step_deg: float = STEP_DEG
