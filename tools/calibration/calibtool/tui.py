@@ -52,7 +52,8 @@ FULL_KEYS = {"PREFLIGHT": "A = abort",
              "MOTORS": "Y = the robot hangs on the gantry and nobody is at its head: enable the motors | "
                        "R = restart the motor master (motors off) | A = abort",
              "SETUP": f"{OKVIS_OPT} | A = abort",
-             "PLACE": f"C = can't put it there | U = use the board where it is | {OKVIS_OPT} | A = abort", "IMU_PLACE": _GUIDE, "CHECK_PLACE": _GUIDE,
+             "PLACE": f"C = can't put it there | U = use the board where it is | F = finish collecting (extras) | "
+                      f"{OKVIS_OPT} | A = abort", "IMU_PLACE": _GUIDE, "CHECK_PLACE": _GUIDE,
              "POST_PLACE": _GUIDE, "GRID": _MOVING, "IMU_SWEEP": _MOVING, "CHECK_GRID": _MOVING,
              "HOLD": "G = continue (after a countdown) | A = abort", "FIT": f"{OKVIS_OPT} | A = abort",
              "DECIDE": "A = abort", "DEPLOY_SIZE": "1 / 2 = deploy size | ? = this robot's facts | A = abort",

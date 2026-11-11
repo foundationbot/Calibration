@@ -929,7 +929,8 @@ def test_coverage_notes_are_on_screen_not_spoken_and_an_extra_says_what_it_is_fo
     texts = [x.text for x in s.says]
     assert not any(t.startswith("gap after") for t in texts)
     assert any(e["kind"] == "gaps" for e in s.events())
-    assert any(t.startswith("Extra placement.") and t.endswith("It is for the held-out check, far band 1.7-2.3 m.")
+    assert any(t.startswith("Extra placement, 1 of at most") and t.endswith("It is for the held-out check, far band "
+                                                                             "1.7-2.3 m.")
                for t in texts), [t for t in texts if "Extra" in t]
 
 
@@ -1006,3 +1007,26 @@ def test_a_robot_already_at_1280_keeps_its_frame_rate_and_the_producer_is_not_re
     s.run()
     setup = [x for x in s.lines("producer") if '"--fps"' in x or "--fps" in x]
     assert not any('"15"' in x for x in s.lines()), [x[:120] for x in setup]
+
+
+def test_f_during_an_extra_finishes_the_collection(tmp_path):
+    """10 Nov: 'when I do not want any more extra placements and press C it pitches so many more'"""
+    n = {"i": 0}
+
+    def plan_next(col):
+        n["i"] += 1
+        return place.Target(f"extra {n['i']}", 1.1, (0.95, 1.25))
+    s = Session(tmp_path, keys=FULL_KEYS, plan_next=plan_next)
+    pressed = []
+
+    def hook():
+        texts = [x.text for x in s.says]
+        if not pressed and any(t.startswith("Extra placement, 1 of at most 6.") for t in texts) and s.m.phase == "PLACE":
+            pressed.append(1)
+            s.m.key("F")
+    s.op.hooks.append(hook)
+    s.run()
+    texts = [x.text for x in s.says]
+    assert pressed and "Collection finished. Next the IMU sweep, then the fit." in texts
+    assert not any(t.startswith("Extra placement, 2") for t in texts)
+    assert "collect_finished_by_operator" in s.kinds() and "sweep_done" in s.kinds() and s.fit_calls == 1

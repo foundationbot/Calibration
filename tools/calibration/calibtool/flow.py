@@ -701,8 +701,9 @@ class FullFlow:
             i = names.index(target.name) + 1 if target.name in names else 1
             return place.intro(target, i, len(self.targets))
         where = place.intro(target, 1, 1).split(". ", 1)[1]
-        lead = {"extra": "Extra placement.", "redo": "Again.", "check": "Check grid.",
-                "post": "Post-check."}.get(kind, "")
+        xo = getattr(self, "_extra_of", None)
+        lead = {"extra": f"Extra placement, {xo[0]} of at most {xo[1]}." if xo else "Extra placement.",
+                "redo": "Again.", "check": "Check grid.", "post": "Post-check."}.get(kind, "")
         why = (getattr(self.robot.plan_next, "why", None) or {}).get(target.name) if kind == "extra" else None
         return f"{lead} {where}".strip() + (f" It is for the {why}." if why else "")
 
@@ -747,6 +748,12 @@ class FullFlow:
                 if k == "C":
                     self._event("placement_cant", placement=target.name)
                     return "unreachable"
+                if k == "F" and phase == "PLACE" and kind in ("extra", "redo"):
+                    # 10 Nov: "when I do not want any more extra placements and press C it pitches so many more"
+                    self.fl["collect_stop"] = True
+                    self._event("collect_finished_by_operator", placement=target.name)
+                    self._say("good", "Collection finished. Next the IMU sweep, then the fit.")
+                    return "finish"
                 if k == "U" and phase == "PLACE":
                     # 10 Nov, phantom10: the board at 58-65 cm could not get nearer the 0.5 m target; the operator
                     # decides it is good enough. The board must be seen now, and moved from the last placed spot
@@ -927,6 +934,10 @@ class FullFlow:
         fl["current"] = {"target": _tdict(target), "kind": kind, "poses": [list(p) for p in poses]}
         self._save()
         r = self._guide(target, "PLACE", kind)
+        if r == "finish":                       # F: the operator ended the collection; this placement is not one
+            fl["current"] = None
+            self._save()
+            return
         if r not in place.PLACED:
             fl.setdefault("unreachable", []).append(target.name)
             self._event("placement_skipped", placement=target.name, result=r)
@@ -964,12 +975,17 @@ class FullFlow:
             if t.name not in fl.get("done", []):
                 self._placement(t, "default")
         cap = min(int(fl.get("extras_cap") or self.max_extras), self.max_extras)
-        while self.robot.plan_next is not None and not self._met() and int(fl.get("extras") or 0) < cap:
+        while (self.robot.plan_next is not None and not self._met() and int(fl.get("extras") or 0) < cap
+               and not fl.get("collect_stop")):
             t = self.robot.plan_next(self.collection)
             if t is None:
                 break
             fl["extras"] = int(fl.get("extras") or 0) + 1
+            self._extra_of = (int(fl["extras"]), cap)
             self._placement(t, "extra")
+        self._extra_of = None
+        if fl.get("collect_stop"):
+            fl["redo_done"] = True                  # F: no redo round either
         if not fl.get("redo_done"):
             items, fl["redo"], fl["redo_done"] = list(fl.get("redo") or []), [], True
             for it in items:
@@ -1397,7 +1413,8 @@ class FullFlow:
         while True:
             k = self._wait_keys("DKR" + "".join(opts))
             if k == "E":
-                self._reopen("E", "collect", extras_cap=int(self.fl.get("extras") or 0) + EXTRAS_PER_E)
+                self._reopen("E", "collect", extras_cap=int(self.fl.get("extras") or 0) + EXTRAS_PER_E,
+                             collect_stop=False)
                 return "collect"
             if k == "X":
                 self._reopen("X", "decide", gates_override={"min_judged": opts["X"][1]})
