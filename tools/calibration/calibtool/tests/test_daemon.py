@@ -1097,3 +1097,16 @@ def test_every_key_gets_an_answer_in_the_state(tmp_path):
     assert not m.state["last_key"]["accepted"] and "HOLD" in m.state["last_key"]["why"]
     m.key("A")
     assert m.state["last_key"]["accepted"] and "abort" in m.state["last_key"]["why"]
+
+
+def test_a_session_error_is_said_on_the_screen_not_a_silent_stop(tmp_path):
+    """10 Nov, phantom10: calibd died building the session (a file missing from the kit); the screen only said
+    'calibd not stepping'"""
+    m = full(tmp_path)
+
+    class Boom:
+        def run(self):
+            raise FileNotFoundError("no such file: 20250206_phantom_mk1.urdf")
+    dm.run_flow(m, Boom())
+    assert any("FileNotFoundError" in b and "urdf" in b for b in m.state["flow_banner"])
+    assert kinds(m.store)[-1] == "flow_error"

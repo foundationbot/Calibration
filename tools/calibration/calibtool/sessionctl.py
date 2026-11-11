@@ -208,6 +208,14 @@ class OkvisCtl:
             self.label_value = out.strip() if rc == 0 and out.strip() else "true"
             self._call(self._label_argv("false"), "stop (node label)")
         else:
+            # 10 Nov, phantom10: OKVIS was not running; the stop ran anyway and the restore later STARTED it. Only a
+            # running OKVIS is stopped (and so started again at the end); unknown (no answer) = stop as before
+            try:
+                pods = dp.okvis_pods(self.remote)
+            except Exception:  # noqa: BLE001
+                pods = None
+            if pods is not None and not any(p.get("phase") == "Running" for p in pods):
+                return
             self._call(["env", f"OKVIS_LAUNCH_ORIGIN={self.origin}", "bash", dp.OKVIS_SH, "stop"], "stop")
         self.stopped = True
 

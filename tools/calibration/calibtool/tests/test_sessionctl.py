@@ -94,12 +94,15 @@ def test_dry_kubectl_can_fail_a_verb():
 # ---------------------------------------------------------------- OKVIS stopped for the collection
 
 class FakeRemoteRobot:
-    def __init__(self, node="phantom10", label="true"):
-        self.calls, self.node, self.label = [], node, label
+    def __init__(self, node="phantom10", label="true", okvis_running=True):
+        self.calls, self.node, self.label, self.okvis_running = [], node, label, okvis_running
 
     def __call__(self, argv, input=None, timeout=None):
         self.calls.append(list(argv))
         a = list(argv)
+        if "pods" in a and "-l" in a and not any("jsonpath" in x for x in a):
+            items = [{"metadata": {"name": "okvis2x", "namespace": "okvis"}, "status": {"phase": "Running"}}]
+            return 0, json.dumps({"items": items if self.okvis_running else []})
         if "jsonpath={.items[0].spec.nodeName}" in a:
             return 0, self.node
         if "get" in a and "node" in a:
@@ -136,6 +139,16 @@ def test_okvis_sh_robots_stop_and_start_through_the_script():
     assert robot.calls[-1][-2:] == [dp.OKVIS_SH, "stop"]
     ok.start()
     assert robot.calls[-1][-2:] == [dp.OKVIS_SH, "start"]
+
+
+def test_an_okvis_that_is_not_running_is_neither_stopped_nor_started_afterwards():
+    """10 Nov, phantom10: OKVIS was not running before the session; okvis.sh stop ran anyway and the self-restore then
+    started OKVIS"""
+    robot = FakeRemoteRobot(okvis_running=False)
+    ok = sc.OkvisCtl(dp.Remote(robot), SH)
+    ok.stop()
+    ok.start()
+    assert not any(dp.OKVIS_SH in " ".join(a) for a in robot.calls) and not ok.stopped
 
 
 def test_no_okvis_on_the_robot_is_left_alone():

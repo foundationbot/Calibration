@@ -1039,10 +1039,15 @@ def cmd_run(a):
                obs_box=ObsBox() if full else None, to_miss=to_miss)
     d.preflight_done(res)
     if full:
-        d.flow = _full_flow(prof, m, d, dirs, cap, pools, rig, (W, H), res, probes, dry_run, a.session)
+        # 10 Nov, phantom10: building the session raised (a file missing from the kit) and calibd died at start with
+        # the motors on; the operator saw only "calibd not stepping". Now calibd stays up and says why
+        try:
+            d.flow = _full_flow(prof, m, d, dirs, cap, pools, rig, (W, H), res, probes, dry_run, a.session)
+        except Exception as e:  # noqa: BLE001
+            flow_failed(m, "could not set up the session", e)
     d.start_loop()
-    if full:
-        threading.Thread(target=d.flow.run, name="calibd-flow", daemon=True).start()
+    if full and d.flow is not None:
+        threading.Thread(target=run_flow, args=(m, d.flow), name="calibd-flow", daemon=True).start()
     try:
         while not stop.is_set():
             stop.wait(0.5)
@@ -1106,6 +1111,30 @@ def _full_flow(prof, m, d, dirs, cap, pools, rig, size, res, probes, dry_run, se
         sweep_detect=lambda g: imusweep.board_normal(board.detect(g), board, live.model, live.intr[0]),
         R_live=R_live, check_scores=check_scores, post_scores=post_scores, plan_next=plan_next)
     return flow.FullFlow(m, robot, dirs, emit=d.say, ids=d.ids, place_timeout_s=prof.placement_timeout_s)
+
+
+def flow_failed(m, what, e):
+    """an error the session cannot go on from: on the operator's screen (NOT NORMAL), in the events with the
+    traceback, the robot holding (nothing moves: no flow sends anything any more)"""
+    import traceback
+    msg = f"calibd {what}: {type(e).__name__}: {e}"
+    m.store.event("flow_error", t=time.time(), what=what, error=f"{type(e).__name__}: {e}",
+                  traceback=traceback.format_exc()[-4000:])
+    print(msg, flush=True)
+    traceback.print_exc()
+    m.state["flow_banner"] = list(m.state.get("flow_banner") or []) + [
+        msg + ". Nothing moves. Start calib again and choose to continue this session (it restarts calibd), or tell "
+        "the agent (calibd.log has the details)."]
+    m.state["busy"] = None
+    m.save()
+
+
+def run_flow(m, flow_):
+    """the session's thread: an unexpected error is said on the screen, never a silent stop (10 Nov)"""
+    try:
+        flow_.run()
+    except Exception as e:  # noqa: BLE001
+        flow_failed(m, "stopped the session on an error", e)
 
 
 def _connect(sock, timeout=2.0):
