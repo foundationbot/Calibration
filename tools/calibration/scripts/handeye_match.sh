@@ -7,7 +7,8 @@
 # Low priority (nice 15, one BLAS thread per process) so OKVIS and the depth engine keep their CPU.
 # Env: CODE (default /data/calib/handeye/code, holding armcal/ and scripts/), PY (default /root/p11-cal/venv/bin/python).
 set -u
-WAVE=${1:?wave dir}; SIDE=${2:?right|left}; URDF=${3:?urdf}; JOBS=${4:-4}; FRAMES=${5:-0}
+WAVE=$(realpath "${1:?wave dir}"); SIDE=${2:?right|left}; URDF=$(realpath "${3:?urdf}"); JOBS=${4:-4}; FRAMES=${5:-0}
+[ -f "$URDF" ] || { echo "no URDF $URDF"; exit 2; }   # absolute: readb runs from $CODE
 CODE=${CODE:-/data/calib/handeye/code}; PY=${PY:-/root/p11-cal/venv/bin/python}
 SUF=$([ "$FRAMES" -gt 0 ] && echo "-f$FRAMES" || echo "")
 OUT="$WAVE/readb-$SIDE$SUF.json"
