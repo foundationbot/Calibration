@@ -254,7 +254,7 @@ How to read it:
 | H1 | Per-robot planner (arm poses x neck angles, view on the sagged pose, information, MuJoCo, tour) | Moonstone | on phantom14's data it picks a subset that reaches H-1's error; plans for phantom10/11 pass clearance |
 | H2 | `armmotion.py` with fakes; consumer inventory (read-only on robots); a safety review by a separate reviewer | Moonstone; robots read-only | review says safe; a dry run records every command; consumer table filled with owners |
 | H3 | Live capture on one arm of one robot (phantom10 proposed), operator present | robot | captures land with quality on screen; time per pose measured; ramp speed decided from it |
-| H4 | URDF deploy: transaction, post-check, the head tool's "stale" flag | robot | deploy and rollback verified on the robot for each agreed consumer |
+| H4 | **Built offline 11 Nov** (`calibtool/handeye_deploy.py`, consumers in `calibtool/config/handeye_consumers.yaml`; live check on the robot still to do). URDF deploy: transaction, post-check, the head tool's "stale" flag | robot | deploy and rollback verified on the robot for each agreed consumer |
 | H5 | Both arms, speed tuning, offered after a head calibration | robot | full run within the measured budget; the gate held |
 
 How to read it: in order; each row's right column must be true before the next row starts. H-1 is the only one that
