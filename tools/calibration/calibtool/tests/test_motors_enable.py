@@ -42,7 +42,8 @@ class Run:
             self.motor_state = 0
             return 0, "ok"
         if argv[:2] == ["dma_cmd_client", "ping"]:
-            return 0, f"PONG  uptime=6070.0s  motor_state={self.motor_state}"
+            self.uptime = getattr(self, "uptime", 6070.0) + 0.5         # fresh replies (motors.ping asks twice)
+            return 0, f"PONG  uptime={self.uptime:.1f}s  motor_state={self.motor_state}"
         if argv[0] == "journalctl":
             return 0, ("boot\n" + self.enabled_line + "\n") if self.motor_state else "boot\n"
         return 1, "unknown"

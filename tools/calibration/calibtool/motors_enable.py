@@ -212,11 +212,11 @@ class Enabler:
         return pre_enable_checks(s, self.baseline, gantry)
 
     def _ping_state(self):
+        """motor_state from a fresh ping (motors.ping: a single ping returns the previous request's reply)"""
         try:
-            rc, out = self.run(["dma_cmd_client", "ping"], timeout=5)
+            p = motors.ping(self.run, self.sleep)
         except Exception:  # noqa: BLE001
             return None
-        p = motors.parse_ping(out) if rc == 0 else None
         return None if p is None else p["motor_state"]
 
     def enable(self, key, gantry) -> EnableResult:
@@ -309,7 +309,7 @@ class Enabler:
         """R on the motor screen (approved by the operator on 10 Nov): systemctl restart dma-ethercat, only with no
         motor enabled (motor_state 2 = on: a restart would drop the head and arms); then wait for the ping and for the
         drives to answer (no [WKC] degraded line for 5 s)"""
-        m = motors.master(self.run)
+        m = motors.master(self.run, self.sleep)
         if getattr(m, "motor_state", None) == 2:
             return EnableResult(False, True, "the motors are on: restarting the motor master would drop the head and "
                                 "arms; not restarting")

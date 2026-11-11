@@ -60,7 +60,43 @@ def _try(run, argv):
         return None, f"{type(e).__name__}"
 
 
-def master(run=run_cmd) -> MasterStatus:
+PING_GAP_S = 0.25
+PING_TRIES = 4
+
+
+def ping(run=run_cmd, sleep=time.sleep, tries=PING_TRIES, gap_s=PING_GAP_S):
+    """the master's ping, fresh. 10 Nov, phantom10 (dma_cmd_client 2.1.1): each `dma_cmd_client ping` prints the
+    reply to the PREVIOUS request -- a blank one (uptime 0.0, motor_state 0) when none came since the master started,
+    else an old one (uptime 450.9 s repeated while the master ran on). A single ping is no reading: this pings until a
+    reply with uptime > 0 follows another whose uptime it exceeds (the reply to a request made gap_s earlier) and
+    returns it; None when no two such replies came in `tries`"""
+    prev = None
+    for i in range(tries):
+        if i:
+            sleep(gap_s)
+        rc, out = _try(run, ["dma_cmd_client", "ping"])
+        p = parse_ping(out) if rc == 0 else None
+        if p is None or p["uptime_s"] <= 0:
+            continue
+        if prev is not None and p["uptime_s"] > prev["uptime_s"]:
+            return p
+        prev = p
+    return None
+
+
+def estop(run=run_cmd, sleep=time.sleep, gap_s=PING_GAP_S):
+    """estop-status read twice (the reply is the previous request's, like ping), the second answer"""
+    val = None
+    for i in range(2):
+        if i:
+            sleep(gap_s)
+        rc, out = _try(run, ["dma_cmd_client", "estop-status"])
+        m = re.search(r"(true|false)", out or "", re.I) if rc == 0 else None
+        val = None if m is None else m.group(1).lower() == "true"
+    return val
+
+
+def master(run=run_cmd, sleep=time.sleep) -> MasterStatus:
     errs = []
     rc, out = _try(run, ["systemctl", "is-active", SERVICE])
     active = rc == 0 and (out or "").strip() == "active"
@@ -68,17 +104,11 @@ def master(run=run_cmd) -> MasterStatus:
         errs.append(f"{SERVICE} is {(out or '').strip() or 'not answering'}")
     rc, out = _try(run, ["dma_cmd_client", "-V"])
     version = parse_version(out) if rc == 0 else None
-    rc, out = _try(run, ["dma_cmd_client", "ping"])
-    ping = parse_ping(out) if rc == 0 else None
-    if ping is None:
-        errs.append(f"dma_cmd_client ping failed ({(out or '').strip()[:80]})")
-    rc, out = _try(run, ["dma_cmd_client", "estop-status"])
-    estop = None
-    if rc == 0:
-        m = re.search(r"(true|false)", out or "", re.I)
-        estop = None if m is None else m.group(1).lower() == "true"
-    return MasterStatus(active, version, ping and ping["uptime_s"], ping and ping["motor_state"], estop,
-                        "; ".join(errs) or None)
+    p = ping(run, sleep) if active else None
+    if p is None:
+        errs.append("dma_cmd_client ping gave no fresh reply")
+    e = estop(run, sleep) if active else None
+    return MasterStatus(active, version, p and p["uptime_s"], p and p["motor_state"], e, "; ".join(errs) or None)
 
 
 def ring_head(path) -> int:

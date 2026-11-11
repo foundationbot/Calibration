@@ -16,8 +16,22 @@ PING = "  PONG  uptime=6065.3s  motor_state=0\n"
 VERSION = "dma_cmd_client 2.1.1 (build V-2-1-1-20261023-025557)\n"
 
 
+class OneBehindPing:
+    """dma_cmd_client ping as the 2.1.1 master answers (10 Nov, phantom10): each call prints the reply to the
+    PREVIOUS request; the first one blank (uptime 0.0, motor_state 0)"""
+
+    def __init__(self, motor_state=0, t0=6065.3):
+        self.motor_state, self.t, self.prev = motor_state, t0, None
+
+    def __call__(self):
+        out = self.prev or "  PONG  uptime=0.0s  motor_state=0\n"
+        self.t += 0.5
+        self.prev = f"  PONG  uptime={self.t:.1f}s  motor_state={self.motor_state}\n"
+        return 0, out
+
+
 class Run:
-    """a subprocess stand-in: argv[0..1] -> (rc, out)"""
+    """a subprocess stand-in: argv[0..1] -> (rc, out) (or a callable giving it)"""
 
     def __init__(self, table):
         self.table, self.calls = table, []
@@ -28,13 +42,13 @@ class Run:
             if tuple(argv[:len(k)]) == k:
                 if isinstance(v, Exception):
                     raise v
-                return v
+                return v() if callable(v) else v
         return 127, "not found"
 
 
 def good_run():
     return Run({("systemctl", "is-active"): (0, "active\n"), ("dma_cmd_client", "-V"): (0, VERSION),
-                ("dma_cmd_client", "ping"): (0, PING),
+                ("dma_cmd_client", "ping"): OneBehindPing(),
                 ("dma_cmd_client", "estop-status"): (0, "Emergency stop: false\n")})
 
 
@@ -50,7 +64,8 @@ def test_parse_version():
 
 def test_master_status_ok():
     s = mo.master(good_run())
-    assert (s.active, s.version, s.uptime_s, s.motor_state, s.estop, s.error) == (True, "2.1.1", 6065.3, 0, False, None)
+    assert (s.active, s.version, s.motor_state, s.estop, s.error) == (True, "2.1.1", 0, False, None)
+    assert s.uptime_s > 6065.3
     assert s.motors_on is False
 
 
@@ -115,3 +130,19 @@ def test_no_enable_or_disable_anywhere_in_m2():
     code = "\n".join(ln.split("#")[0] for ln in src.splitlines())
     assert not re.search(r"enable-motors|disable-motors|estop-clear", code)
     assert not re.search(r'"dma_cmd_client",\s*"estop"\s*\]', code)
+
+
+
+def test_ping_reads_past_the_blank_and_the_stale_reply():
+    """10 Nov, phantom10: one ping printed 'uptime=0.0s motor_state=0' with the motors on, the next ones repeated an
+    old uptime; motors.ping asks until a reply follows a fresher one"""
+    p = OneBehindPing(motor_state=2)
+    run = Run({("dma_cmd_client", "ping"): p})
+    got = mo.ping(run, sleep=lambda s: None)
+    assert got["motor_state"] == 2 and got["uptime_s"] > 6065.3
+    assert len(run.calls) == 3                           # blank, first real reply, a fresher one
+
+
+def test_ping_gives_none_when_the_replies_never_freshen():
+    run = Run({("dma_cmd_client", "ping"): (0, "  PONG  uptime=450.9s  motor_state=2\n")})
+    assert mo.ping(run, sleep=lambda s: None) is None

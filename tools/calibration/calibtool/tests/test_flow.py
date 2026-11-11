@@ -136,7 +136,8 @@ class Motors:
             self.on = False
             return 0, "ok"
         if argv[-1] == "ping":
-            return 0, f"PONG uptime=10.0s motor_state={1 if self.on else 0}"
+            self.uptime = getattr(self, "uptime", 10.0) + 0.5
+            return 0, f"PONG uptime={self.uptime:.1f}s motor_state={2 if self.on else 0}"
         if argv[0] == "journalctl":
             return 0, "50 of 50 motors enabled" if self.on else ""
         return 1, "?"
