@@ -7,13 +7,17 @@ One command takes a robot's head stereo pair through a full calibration:
 4. the fit (KB4T lens + stereo pose);
 5. a decision against the robot's live calibration, deploy with a rollback, and a post-check.
 
-Design and milestones: `docs/superpowers/plans/2026-11-09-calibration-terminal-tool.md` (decisions D1-D12, sections 4-13).
-Per-milestone plans: `docs/superpowers/plans/2026-11-09-calibtool-M{1,2,3,4}-*.md` and `2026-11-10-calibtool-M5-session.md`.
-State and open issues: `HANDOFF.md` (this folder).
+The user guide (install, run, troubleshooting) is the repository's `README.md`; this file is for developers.
+
+Design and milestones: `docs/plans/2026-11-09-calibration-terminal-tool.md` (decisions D1-D12, sections 4-13).
+Per-milestone plans: `docs/plans/2026-11-09-calibtool-M{1,2,3,4}-*.md` and `2026-11-10-calibtool-M5-session.md`.
+Next project (for review): `docs/plans/2026-11-11-handeye-plan.md`. State and open issues: `HANDOFF.md` (this folder).
 
 ## Running it (from a laptop)
 
-**Once:** build the single-file executable and put it on the PATH (again after pulling new code):
+**Users** install the released file (repository README: `gh release download …` or `curl …`; `calib --update`
+later; `calib --install-voice` for the Piper voice). **Developers** build it from the tree and put it on the PATH
+(again after pulling new code):
 ```
 cd tools/calibration && python3 -m calibtool.cli --install      # -> ~/.local/bin/calib  [--install-dir DIR]
 ```
@@ -27,7 +31,11 @@ It is a zipapp holding the whole kit (`calibtool`, `scripts`, `config`, the robo
    - a calibd running older code, or a dead session, is restarted with this laptop's kit (it comes back in HOLD: G);
    - a dead session still holding the producer lease is undone first by the robot's own restore (output shown);
    - never a second session beside a live one: stop it from the menu first;
-3. the voice, once: Piper (recommended), espeak or text on screen; remembered in `~/.config/calibtool/laptop.json`.
+3. the voice, once: the Piper voice (recommended) or text on screen (text without asking when Piper is not
+   installed); remembered in `~/.config/calibtool/laptop.json`.
+
+The menu also offers **discard session X** for an unfinished session (the robot's own restore first when it still
+holds the producer; its folder is kept; phase DISCARDED, no longer offered).
 
 The kit is always copied before calibd starts. If the network drops, the screen stays: it says "Connection lost",
 re-attaches by itself (1, 2, 4, 8, then every 10 s) and says "Connection back"; the robot holds meanwhile (press G
@@ -42,7 +50,7 @@ calib phantom10 --watch            # read-only watch session (a bare robot name 
     [--voice piper|espeak|text] [--session ID] [--replace] [--status] [--stop] [--no-speech] [--no-sync]
 ```
 
-**The laptop side is standard library only** (plus PyYAML, which reads the profiles).
+**The laptop side is standard library only;** the built `calib` file carries the pure-Python PyYAML it needs.
 - It copies the kit to the robot (`<root>/kit`, root from `config/profiles.yaml`).
 - It starts or attaches `calibd` over ssh, renders the state, and speaks prompts:
   - `espeak` = `spd-say` (the scripted path's default);
@@ -50,21 +58,27 @@ calib phantom10 --watch            # read-only watch session (a bare robot name 
   - `text` speaks nothing: a PROMPT panel at the top of the screen shows the newest prompt (highlighted) and
     the 3 before it with their age, including the prompt that is current when the TUI attaches.
 
-**On the robot, calibd runs with the kit venv** (`/root/p11-cal/venv` + `pydeps` on P10). The CI-built image `foundationbot/okvis2x:calib-<arch>-<sha>` is the fleet runtime; see `RUNTIME.md`.
+**On the robot, calibd runs with the kit venv** named by the robot's profile (P10: `/root/p11-cal/venv` + `pydeps`;
+P11: `/root/calib-kit`; new robots get it from `onboard.py`). The robot image (`docker/calib.Dockerfile`, `RUNTIME.md`)
+is not used yet.
 
-**Keys (each works only in its phase):**
+**Keys (each works only in its phase; every key is answered on screen at once and cuts the speech):**
 - T: start the trial
 - M: motor screen
 - Y: enable or take over the motors / deploy
+- R on the motor screen: restart the motor master (motors off only); elsewhere: roll back
+- S in BLOCKED: start the motor master (the preflight re-checks every 10 s and calibd restarts itself once green)
 - G: continue after HOLD
 - C: can't put it there, skip
+- U: use the board where it is (placements)
+- F: finish collecting (extra placements)
 - 1 / 2 / ?: deploy size
 - D: disable the motors
 - K: keep the motors on
 - E: after "not enough data", more placements (the planner asks), then fit and decide again
 - X: after "not enough data" from too few judged regions (5 or more of 6), decide again accepting them (a one-off
   exception, recorded in the report; every other rule still applies)
-- R: roll back
+- R (after a deploy): roll back
 - O: skip the OKVIS check
 - A: abort
 - Q: leave the TUI (calibd keeps running)
@@ -96,4 +110,5 @@ bash tools/calibration/calibtool/tests/run_moonstone.sh <worktree> <name> [pytes
 | IMU | `imu`, `imusweep`, `gravity` |
 | live robot | `capture`, `detect`, `health`, `preflight`, `motors` (read-only), `motors_enable`, `neck`, `producer`, `storage`, `profile` + `config/{profiles,robots}.yaml` |
 | session | `daemon` (calibd: state machine, persistence, deadman), `place` (spoken guidance), `grids`, `flow` + `flowrobot` + `sessionctl` (the full session), `deploy`, `postcheck`, `selfrestore` |
-| laptop | `cli`, `tui` (render, keys, speech) |
+| laptop | `cli`, `menu` (the robot menu, continue / new / discard), `tui` (render, keys, speech, progress, quality), `exe` (the single-file build, `--update`), `voice` (`--install-voice`) |
+| robots | `onboard` (a new robot: identity, kit, rig, profile), `quality` (per-section data status on screen) |

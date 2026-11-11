@@ -196,4 +196,8 @@ If it's something else, press **Q** (the robot holds), run `calib` again, and ch
   it to a GitHub release; `calib --update` and new installs take the newest.
 - **A local build:** `cd tools/calibration && python3 -m calibtool.cli --install` (writes `~/.local/bin/calib`).
 
+Design notes and plans are in `docs/plans/` (the head calibration's decisions D1-D12; the next project, hand-eye
+calibration, is `docs/plans/2026-11-11-handeye-plan.md`, a proposal under review). The state of the work and the
+handoff between sessions: `tools/calibration/calibtool/HANDOFF.md`.
+
 History: this repository was split out of OKVIS2-X (`tools/calibration`, with its history) on 10 Nov 2026.
