@@ -5,6 +5,14 @@ Written by the calibration agent session `okvis2-x-65 [988d7f]` for the next one
 then the design plan `docs/superpowers/plans/2026-11-09-calibration-terminal-tool.md` (D1-D12 = the user's decisions,
 section 13.0 = status).
 
+## Running it (since 10 Nov evening)
+
+`calib` (installed with `python3 -m calibtool.cli --install` in `tools/calibration`; re-run after pulling) asks which
+robot and offers what fits: continue an unfinished session, start new (the robot's own restore first if a dead
+session holds the producer), trial, status, stop, or "new robot (setup)" (`calibtool.onboard`). The long flag forms
+below still work for scripts. phantom10's tool folder is `/data/calib` now. phantom11 (P11) is onboarded and got the
+first calibtool deploy (session 20261110-145300-P11).
+
 ## In one paragraph
 
 The tool exists and runs on a real robot.
