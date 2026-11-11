@@ -22,8 +22,8 @@ The models (the hand-eye plan, section 4, and H-1's result), parameters in mm an
 Selection of the captures (before fitting): clean, and within OUTLIER_MM of the arm's median offset.
 
 The HEAD term is not a URDF origin: the camera sits in the Head link through T_BS, which the head calibration owns.
-write_urdf() therefore writes the URDF terms only and states the HEAD term in the header; where it goes on a robot
-(T_BS, or a fixed camera joint in the URDF) is an open decision (see README.md)."""
+write_urdf() therefore writes the URDF terms only and states the HEAD term in the header; the deploy
+(calibtool/handeye_deploy.py) puts it into T_BS's translation, once (see README.md)."""
 from __future__ import annotations
 
 import argparse

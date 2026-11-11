@@ -1,0 +1,30 @@
+# The programs that use the robot's geometry (URDF + T_BS), for the hand-eye deploy (calibtool/handeye_deploy.py,
+# hand-eye plan section 6 and 9.1 #6). One entry per consumer; a new consumer of an existing kind needs no code.
+#   kind okvis         switched on the robot in the deploy transaction: a new config (T_BS + `urdf:`) and URDF, robot.env
+#                      pointed at the config, OKVIS restarted by the path detected at the snapshot, the load checked in
+#                      its log. Exactly one.
+#   kind offline_file  cannot be switched by a file on the robot: the deploy publishes the per-robot URDF to the publish
+#                      folder and the report says what the consumer's owner must change (owner_action)
+#   kind not_updated   listed in the deploy report as NOT updated, with why
+# Fields shown in the report: reads (what it reads now), t_bs (where its T_BS comes from), owner_action, why.
+consumers:
+  - name: OKVIS
+    kind: okvis
+    reads: "dma:urdf of the config robot.env's OKVIS_CALIBRATION names (OKVIS_URDF would override it); T_BS from the
+      same config"
+  - name: burst point cloud
+    kind: offline_file
+    # 11 Nov 2026, from its owner: the pipeline runs on Moonstone, not on the robot
+    reads: "Moonstone, OKVIS2-X tools/burst_pointcloud/frames.py: URDF = config/foundation_rig/20250206_phantom_mk1.urdf
+      (the #816 file, md5 40879599...), hard-coded; not phantom10's mk1_1.urdf"
+    t_bs: "grab.py reads T_BS live at every capture from the config robot.env names (stored in the burst with its
+      path and sha256): new bursts follow the OKVIS deploy with no other change"
+    owner_action: "frames.py must select the per-robot URDF published here (meshfit / multiview already take a urdf
+      argument); until then its T_BS is the new one and its URDF the old one"
+  - name: cuRobo (Mk2-locomotion feat/planner, ghost-wbc-manip)
+    kind: not_updated
+    why: "its own arm model, without the shoulder-roll terms: needs its own generator, its owner's agreement and a rule
+      for restarting it (hand-eye plan 6)"
+  - name: box-pick (Mk2-locomotion)
+    kind: not_updated
+    why: "its own robot model: out of scope for v1 (plan 9.1 #6)"
