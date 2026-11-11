@@ -246,7 +246,7 @@ How to read it:
 
 | # | Milestone | Where | Done when |
 |---|---|---|---|
-| H-1 | **Offline go/no-go** on stored data with the existing Moonstone scripts: leave-one-arm-pose-out cross-validation on phantom14 wave 2 (both arms); a fixed-neck subset (pitch 22 only); the noise floor from B0 scatter; M12's standard errors and condition number; phantom21 `1102a` as a failure case | Moonstone only | a written verdict: what error the method reaches on unseen arm poses, whether neck variety is needed, the proposed bar. **Stop here if unseen-pose error is not clearly below the live URDF's.** |
+| H-1 | **Offline go/no-go** on stored data with the existing Moonstone scripts: leave-one-arm-pose-out cross-validation on phantom14 wave 2 (both arms); the noise floor from B0 scatter; M12's standard errors and condition number; phantom21 `1102a` as a failure case | Moonstone only | a written verdict: what error the method reaches on unseen arm poses, which parameters are shown (standard errors), the proposed bar. **Stop here if unseen-pose error is not clearly below the live URDF's.** |
 | H0 | Port read B (meshfit, hand_check, `_burstfusion`, meshes, `BURST_URDF`) and the stage-2 fit into this repo (subject to section 9.2), with mujoco + MJCF in the test venv and CI | Moonstone, CI | replay reproduces phantom14's M12 URDF and its per-capture numbers within tolerance; scored against the (old) phantom12 plate yardstick; B0 time per capture measured on a Thor CPU (needs the user's OK) |
 | H1 | Per-robot planner (arm poses x neck angles, view on the sagged pose, information, MuJoCo, tour) | Moonstone | on phantom14's data it picks a subset that reaches H-1's error; plans for phantom10/11 pass clearance |
 | H2 | `armmotion.py` with fakes; consumer inventory (read-only on robots); a safety review by a separate reviewer | Moonstone; robots read-only | review says safe; a dry run records every command; consumer table filled with owners |
@@ -296,3 +296,4 @@ can end the project early, and it needs no robot.
 | 8 | Yes; the arms are clear now | as proposed |
 | 9 | Probably fine | the (old) phantom12 plate data stays an offline yardstick |
 | 10 | Explain H-1 first; **do not start yet** | H-1 waits for an explicit go |
+| — | **The head may move during the wave** (11 Nov, later) | decided: 3-4 neck angles per arm pose; H-1 drops the fixed-neck subset check |
