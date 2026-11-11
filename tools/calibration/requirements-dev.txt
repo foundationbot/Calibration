@@ -1,0 +1,11 @@
+# The calibration package's test dependencies, pinned to the versions the pipeline was validated on (the
+# Moonstone / Thor calibration venv). The laptop side of `calib` needs none of these: only python3.
+numpy==2.5.4
+scipy==1.18.1
+opencv-python-headless==5.0.0.93
+PyYAML==6.0.3
+pillow==13.0.0
+mcap==1.6.0
+mcap-protobuf-support==0.6.0
+pytest==9.2.0
+pytest-xdist==3.8.0

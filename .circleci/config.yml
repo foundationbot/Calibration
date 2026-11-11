@@ -1,0 +1,49 @@
+# Calibration CI: on every push, the tests, and the single-file `calib` built from this commit (an artifact of the
+# calib-file job). Releases for other PCs are made with tools/calibration/release.sh (see README.md).
+version: 2.1
+
+jobs:
+  tests:
+    docker:
+      - image: cimg/python:3.12
+    resource_class: medium
+    environment:
+      OMP_NUM_THREADS: "1"            # one BLAS thread per test worker
+      OPENBLAS_NUM_THREADS: "1"
+    steps:
+      - checkout
+      - run:
+          name: Install the test dependencies (pinned)
+          command: pip install --quiet -r tools/calibration/requirements-dev.txt
+      - run:
+          name: Check them (a missing cv2.aruco would make tests skip, not fail)
+          command: python3 -c "import numpy, scipy, cv2, yaml, mcap.writer, mcap_protobuf.writer; cv2.aruco.ArucoDetector; print('numpy', numpy.__version__, 'scipy', scipy.__version__, 'opencv', cv2.__version__)"
+      - run:
+          name: Run the tests
+          command: python3 -m pytest tools/calibration -q -rfs -n 2 --durations=15 --junitxml=/tmp/pytest-results/junit.xml
+      - store_test_results:
+          path: /tmp/pytest-results
+
+  calib-file:
+    docker:
+      - image: cimg/python:3.12
+    resource_class: small
+    steps:
+      - checkout
+      - run:
+          name: Build the single-file calib
+          command: |
+            pip install --quiet PyYAML==6.0.3
+            cd tools/calibration && python3 -m calibtool.cli --install --install-dir /tmp/dist
+      - run:
+          name: It runs on its own
+          command: /tmp/dist/calib --version
+      - store_artifacts:
+          path: /tmp/dist/calib
+          destination: calib
+
+workflows:
+  main:
+    jobs:
+      - tests
+      - calib-file
