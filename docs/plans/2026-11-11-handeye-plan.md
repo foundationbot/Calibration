@@ -281,3 +281,18 @@ can end the project early, and it needs no robot.
 9. **The (old) phantom12 plate data** as an offline yardstick only (allowed on 24 Oct): still fine?
 10. **Go for H-1?** It is offline, Moonstone only (light, niced, 1 BLAS thread per job), no robot, about an hour of
     compute and writing (an estimate).
+
+### 9.1 The user's answers (11 Nov 2026)
+
+| # | Answer | What it changes |
+|---|---|---|
+| 1 | Both arms on every robot; phantom10 first | as proposed |
+| 2 | Porting the meshes and `_burstfusion` into the public repo is allowed | H0 ports them here |
+| 3 | Read B runs **on the robot only** | `_burstfusion` needs an aarch64 build in the kit; H0 measures B0 on a Thor CPU; the time budget must include it |
+| 4 | As accurate as possible within a reasonable time; **aim for < 6 mm** | the absolute bar proposal is 6 mm at the wrist (held-out median), refined by H-1; the paired better-than-live rule stays |
+| 5 | Not against hand commands; asked whether they help | open: answered in chat (one fixed hand pose per arm to repeat wave 2's open-hand conditions; a hand mesh is later work) |
+| 6 | Point-cloud tools, and OKVIS too | v1 consumers: burst point cloud (`BURST_URDF`) and OKVIS (`OKVIS_URDF`); cuRobo and box-pick later |
+| 7 | OK; **don't overdo kp: some joints start oscillating** | kp ≤ 100 for arm moves (lower where a joint oscillates); `armmotion.py` watches tracking error for oscillation and holds; H2's review checks it |
+| 8 | Yes; the arms are clear now | as proposed |
+| 9 | Probably fine | the (old) phantom12 plate data stays an offline yardstick |
+| 10 | Explain H-1 first; **do not start yet** | H-1 waits for an explicit go |
