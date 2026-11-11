@@ -493,6 +493,14 @@ class SpdSay:
 
 
 PIPER_DIR = Path.home() / ".local" / "share" / "calib-voice"
+
+
+def default_player(which=None) -> str:
+    """the wav player: pw-play (PipeWire), else aplay (ALSA; 10 Nov: other PCs may lack PipeWire), else pw-play's
+    usual path (the error then names it)"""
+    import shutil
+    which = which or shutil.which
+    return which("pw-play") or which("aplay") or "/usr/bin/pw-play"
 PIPER_CACHE_N = 120             # synthesised prompts kept (a few MB in the temp dir)
 
 
@@ -501,11 +509,11 @@ class PiperSay:
     'ridiculously artificial' (10 Nov). Text -> wav with piper (length_scale > 1 = slower), then played. Opt-in:
     make_speaker("piper") falls back to SpdSay when the binary or the model is missing."""
 
-    def __init__(self, binary=None, model=None, player="/usr/bin/pw-play", run=subprocess.run, length_scale=1.3,
+    def __init__(self, binary=None, model=None, player=None, run=subprocess.run, length_scale=1.3,
                  sentence_silence=0.45, wav=None):
         self.binary = Path(binary or PIPER_DIR / "piper" / "piper")
         self.model = Path(model or PIPER_DIR / "en_US-lessac-medium.onnx")
-        self.player, self.run = player, run
+        self.player, self.run = player or default_player(), run
         self.length_scale, self.sentence_silence = length_scale, sentence_silence
         self.wav = str(wav or Path(tempfile.gettempdir()) / f"calibtool-say-{os.getpid()}.wav")
 

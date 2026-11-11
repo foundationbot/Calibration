@@ -348,7 +348,8 @@ class Menu:
         keys = [k for k, _ in VOICES]
         last = self.cfg.get("voice") if self.cfg.get("voice") in keys else "piper"
         if not piper_available():
-            self.out("  Piper is not installed on this PC: the prompts are shown as text on screen.")
+            self.out("  Piper is not installed on this PC: the prompts are shown as text on screen "
+                     "(`calib --install-voice` installs it).")
             return "text"
         d = keys.index(last)
         line = "  ".join(f"{i}) {t}" for i, (_, t) in enumerate(VOICES, 1))

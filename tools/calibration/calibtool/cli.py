@@ -5,6 +5,8 @@ calib                    the menu (calibtool.menu): which robot, then only what 
 calib phantom10          the same menu for that robot
 calib --install [--install-dir DIR]   builds the single-file executable (calibtool.exe) into DIR/calib (~/.local/bin)
 calib --version          the kit hash this laptop runs (the same from the worktree and from the executable)
+calib --update           replaces this calib (or ~/.local/bin/calib) with the latest release's (calibtool.exe.update)
+calib --install-voice    downloads the Piper voice to ~/.local/share/calib-voice and checks it (calibtool.voice)
 calib phantom10 [--trial | --full [--dry-run] | --watch] [--session ID] [--replace] [--headless N]
     [--voice espeak|piper|text] [--no-speech] [--stop] [--status] [--say TEXT] [--no-sync]   the scripted path:
   - asks calibd's status first (live = its socket answers, with the kit hash it runs): a live session running this
@@ -307,6 +309,10 @@ def main(argv=None):
                     help="build the single-file executable `calib` (the kit inside) and install it")
     ap.add_argument("--install-dir", default="~/.local/bin", help="where --install puts calib")
     ap.add_argument("--version", action="store_true", help="print the kit hash this laptop runs and where the kit is")
+    ap.add_argument("--update", action="store_true",
+                    help="replace this calib with the latest release's (foundationbot/Calibration; gh when installed)")
+    ap.add_argument("--install-voice", action="store_true",
+                    help="download the Piper voice to ~/.local/share/calib-voice (Linux x86_64/aarch64) and check it")
     ap.add_argument("--watch", action="store_true", help="a read-only watch session (what a bare robot name did "
                                                          "before the menu)")
     ap.add_argument("--session", default=None, help="re-attach to (or restart) this session")
@@ -334,6 +340,12 @@ def main(argv=None):
     if a.install:
         from calibtool import exe
         return exe.install(a.install_dir)
+    if a.update:
+        from calibtool import exe
+        return exe.update()
+    if a.install_voice:
+        from calibtool import voice
+        return voice.install()
     if sum(map(bool, (a.full, a.trial, a.watch))) > 1:
         ap.error("--full, --trial and --watch are different sessions: pick one")
     if a.dry_run and not a.full:
