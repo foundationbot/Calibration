@@ -262,6 +262,18 @@ class Enabler:
             if self.clock() - t0 >= self.verify_s:
                 break
             self.sleep(POLL_S)
+        # 10 Nov, phantom10: the motors were already on (enabled by this session before a calibd restart; a ping from
+        # inside calibd had read motor_state 0): a second ENABLE_MOTORS logs no new count. The master's newest count
+        # in the last 15 min plus any ping reading "on" decide then
+        try:
+            jrc, jout = self.run(["journalctl", "-u", motors.SERVICE, "--since", "-15min", "-o", "cat",
+                                  "--no-pager"], timeout=10)
+        except Exception:  # noqa: BLE001
+            jrc, jout = 1, ""
+        recent = parse_enabled(jout) if jrc == 0 else None
+        if recent is not None and recent[0] == recent[1] and (state == 2 or self._ping_state() == 2):
+            return EnableResult(True, False, f"{recent[0]} of {recent[1]} motors enabled (they were already on; "
+                                "the master's log and ping agree)", cs, *recent)
         why = []
         if not state:
             why.append(f"ping motor_state {state} after enable-motors (rc {rc}: {(out or '').strip()[:80]})")

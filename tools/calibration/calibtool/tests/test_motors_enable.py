@@ -363,3 +363,24 @@ def test_a_partial_first_count_is_waited_out():
     en, r = make(run=LateRun())
     res = en.enable("Y", gantry=True)
     assert res.ok and (res.n, res.of) == (29, 29), res.detail
+
+
+class AlreadyOnRun(Run):
+    """motors already on: a new ENABLE_MOTORS logs nothing; the journal's last 15 min hold 'enabled 29/29'"""
+
+    def __init__(self):
+        super().__init__(ping_after_enable=2)
+        self.motor_state = 2
+
+    def __call__(self, argv, timeout=5):
+        if argv[0] == "journalctl":
+            since = argv[argv.index("--since") + 1]
+            return 0, ("[ACTIVE] none: (29 motors, enabled 29/29, wkc 144/144)\n" if since == "-15min" else "boot\n")
+        return super().__call__(argv, timeout)
+
+
+def test_an_enable_of_motors_already_on_is_verified_from_the_masters_log():
+    """10 Nov, phantom10: 'enable not verified within 5 s: no N of N line' with the motors on all along"""
+    en, r = make(run=AlreadyOnRun())
+    res = en.enable("Y", gantry=True)
+    assert res.ok and (res.n, res.of) == (29, 29) and "already on" in res.detail
