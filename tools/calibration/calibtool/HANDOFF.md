@@ -20,7 +20,6 @@ Hand-eye has run live on phantom10 twice (11 and 13 Nov). Nothing hand-eye has b
   in the head**, found on 13 Nov.
 - **Accuracy on arm poses left out of the fit:** 3.9 / 3.6 mm (right / left) on 11 Nov's data; 5.7 / 11.2 mm on 13 Nov's.
   The left arm on 13 Nov had only 7 usable captures.
-- **phantom10's hardware is the main obstacle now:** 48 V brownouts and USB drops of the head cameras (section 5).
 
 ## 1. Where things are
 
@@ -104,15 +103,11 @@ How to read it:
   - `/data/calib/handeye/p10-wave-1111a-*` (11 Nov).
 - **The SLAM snapshot** of 13 Nov 12:32 is in `/root/handeye-night-backup-20261113-123227/`.
 
-## 5. Hardware issues on phantom10 (tell the user before robot work)
+## 5. Hardware on phantom10
 
-| When | What |
-|---|---|
-| 13 Nov 13:07:45 | 48 V bus sagged to **30 V**; all 29 drives latched 0x3120 (under-voltage), the robot went limp (the master still reported "motors on"), then lost power by 13:19 |
-| 11 Nov 10:23 | hard power cut while idle; 11 Nov 09:00 a smaller sag (left ankle drive) |
-| 13 Nov 13:46 | both head camera boards (USB 2-3.1, 2-3.2) dropped off for 35 s, briefly on USB 2; port 1-1 flapping while the left arm moved (a wrist camera cable?) |
-| 12 Nov 18:46 | head camera 2-3.1 dropped and flapped USB 3 ↔ USB 2 for 20 s |
-| 11-13 Nov | the motor master's 30 s stale-command fallback ("holding last/current") moved the ankles by itself on 11 Nov; the user said: keep a note only |
+The 48 V brownouts and the head-camera USB drops of 11-13 Nov are **fixed** (the user, 13 Nov). Still worth knowing:
+the motor master's 30 s stale-command fallback ("holding last/current") moved the ankles by itself on 11 Nov; the
+tool's keep-alive now avoids it during sessions (the user said: keep a note only).
 
 ## 6. Root causes found 11-13 Nov (don't re-learn them)
 
@@ -165,31 +160,29 @@ How to read it:
 
 ## 8. Next steps (proposals: evaluate them, don't just follow)
 
-1. **Hardware first:** power (the brownouts) and the USB drops, by the user / the team, before more arm waves. Arms
-   dropping on a brownout mid-wave is the main robot risk.
-2. **Finish hand-eye on phantom10:**
+1. **Finish hand-eye on phantom10:**
    - redo the left wave (13 Nov had only 7 usable left captures), fit M12+headR;
    - decide the deploy target with the user: the temporary depth config, or the SLAM config after `restore-slam.sh`
      (the geometry check requires the same T_BS/T_SC as the fit);
    - deploy, roll back once (R), deploy again;
    - wire and run the post-check (2 poses per arm, `postcheck_*`).
-3. **The 13 Nov head refit's rotation (2-3°):** raise it with the user. Consider a fresh head calibration with `calib`
+2. **The 13 Nov head refit's rotation (2-3°):** raise it with the user. Consider a fresh head calibration with `calib`
    (with all the fixes) before the final hand-eye, since hand-eye depends on the head geometry.
-4. **Live-check the 12-13 Nov head-tool fixes** in a real session with the operator:
+3. **Live-check the 12-13 Nov head-tool fixes** in a real session with the operator:
    - camera recovery, keep-alive, session pins, head search, aim placements;
    - the scripted full-session stall test (`/data/calib/handeye/fulltest.py`) was blocked by the auto-mode
      classifier: the user must allow or run it.
-5. **Faster depth:** analyse 1280 vs 768 on the 13 Nov right arm (24 poses at both, `right/r768/`; matching it was cut
-   by the power loss). Then set `profiles` in `config/handeye/P10.json` (now "1280,768", which doubles captures).
-6. **Make it general:**
+4. **Faster depth:** analyse 1280 vs 768 on the 13 Nov right arm (24 poses at both, `right/r768/`; matching it was cut
+   by a power loss, since fixed). Then set `profiles` in `config/handeye/P10.json` (now "1280,768", which doubles captures).
+5. **Make it general:**
    - automatic per-robot planning (H1: today `plan_p10c.py` by hand on Moonstone; the menu refuses when the body moved);
    - other robots' setups;
    - camera recovery in the trial.
-7. **Consumers:**
+6. **Consumers:**
    - the point cloud's `frames.py` hard-codes the #816 URDF (its owner, Pointcloundv11, must select a per-robot URDF);
    - cuRobo and box-pick are not updated;
    - shoulder-roll zeros help policies only if put into the master's joint offsets (later; the user's decision).
-8. **A release** with the 12-13 Nov fixes (`release.sh`); a colleague is waiting to run `calib`.
+7. **A release** with the 12-13 Nov fixes (`release.sh`); a colleague is waiting to run `calib`.
 
 ## 9. Successor prompt (paste into a new session)
 
@@ -197,7 +190,7 @@ How to read it:
 You are the calibration agent for `calib` (foundationbot/Calibration, local clone ~/CODE/Calibration): the head-stereo
 calibration tool, now also doing hand-eye (camera-to-arm) calibration from its menu. Start by getting up to date --
 touch no robot, change no code, push nothing:
-1. Read tools/calibration/calibtool/HANDOFF.md (state at 13 Nov, results, robot state, hardware issues, root causes,
+1. Read tools/calibration/calibtool/HANDOFF.md (state at 13 Nov, results, robot state, root causes,
    how the user works, next steps), then the repo README.md, tools/calibration/calibtool/README.md,
    tools/calibration/armcal/README.md, docs/plans/2026-11-11-handeye-plan.md (+ its review) and
    tools/calibration/results/handeye-p10-2026-11-13/README.md.
@@ -208,7 +201,7 @@ touch no robot, change no code, push nothing:
    (tools/calibration/calibtool/tests/run_moonstone.sh); read-only, look at phantom10's state (is it reachable, which
    OKVIS runs, motors) and say what you find.
 Then evaluate HANDOFF.md section 8 (next steps) critically -- order, what is missing, what you would change -- and give
-the user a short plain summary: where the tool stands, the hardware issues, and your proposed plan. Start no robot work
+the user a short plain summary: where the tool stands and your proposed plan. Start no robot work
 and no milestone without the user's go. Commits carry Co-Authored-By plus `Claude-Session: <your name> [<ref>]`; never
 write the user's name in files, branches or commits.
 ```

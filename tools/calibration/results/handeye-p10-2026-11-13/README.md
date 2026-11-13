@@ -50,7 +50,7 @@ How to read it:
   cameras' T_SC by about 1-2°. That refit's camera rotation looks 2-3° off; it matters for SLAM too.
 - **The shoulder-roll zeros** agree between days: right −1.2 to −1.7°, left −0.6 to −1.2°.
 
-## Hardware events during the session
+## Hardware events during the session (since fixed by the user, 13 Nov)
 
 | Time | Event |
 |---|---|
