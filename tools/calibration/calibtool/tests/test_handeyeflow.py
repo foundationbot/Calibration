@@ -151,3 +151,16 @@ def test_a_refused_deploy_changes_nothing_and_says_why():
     assert h.session() == 6
     assert not [ln for ln in r.lines if "handeye_deploy deploy" in ln and "--dry-run" not in ln]
     assert any("stale for this camera geometry" in x for x in out)
+
+
+def test_the_detached_wave_redirects_its_whole_group_so_ssh_returns():
+    """13 Nov live: only the python was redirected, the subshell kept ssh's stdout open, ssh hung 60 s"""
+    r = Robot()
+    h, _ = flow(r)
+    h.upload_plans()
+    h.start_wave("Right")
+    line = [ln for ln in r.lines if ln.startswith("setsid")][0]
+    inner = line.split("setsid bash -c ", 1)[1]
+    import shlex as _s
+    body = _s.split(inner)[0]
+    assert "( {" in body and "; } >" in body and "run.out 2>&1 < /dev/null &" in body

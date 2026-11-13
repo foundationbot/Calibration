@@ -100,8 +100,10 @@ class HandEye:
         extra = f" --frames {int(self.cfg.get('frames', 5))}"
         if self.cfg.get("profiles"):
             extra += f" --profiles {shlex.quote(self.cfg['profiles'])}"
-        line = (f"mkdir -p {shlex.quote(d)} && ( {self.py(self.wave_args(arm) + ' --out ' + shlex.quote(d) + extra)}"
-                f" > {shlex.quote(d)}/run.out 2>&1 < /dev/null & ) ; echo started")
+        # the WHOLE detached group redirected (13 Nov: with only the python redirected, the subshell kept ssh's
+        # stdout open, the ssh call hung for its timeout and the laptop lost the session while the arm moved)
+        line = (f"mkdir -p {shlex.quote(d)} && ( {{ {self.py(self.wave_args(arm) + ' --out ' + shlex.quote(d) + extra)}"
+                f" ; }} > {shlex.quote(d)}/run.out 2>&1 < /dev/null & ) ; echo started")
         rc, out, err = self.sh(f"setsid bash -c {shlex.quote(line)}")
         if "started" not in out:
             raise RuntimeError(f"the {arm} wave did not start: {err.strip()[-300:]}")
