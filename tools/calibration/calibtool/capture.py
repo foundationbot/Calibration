@@ -329,6 +329,17 @@ class Capture:
                 "error": self.error, "running": self.running}
 
 
+# 13 Nov phantom10: after a producer restart that did not restart the camera board, the pool's slot sequence ran a
+# constant 52036 behind the meta queue's frame_sequence, so dma_ipc's read(meta) (check_sequence) refused EVERY fresh
+# frame as "recycled": 300 empty reads, a session BLOCKED in preflight and a camera that looked stalled for good. The
+# reader learns such an offset from SEQ_LEARN_N consecutive FRESH frames (meta younger than SEQ_FRESH_NS: a lagging
+# reader never learns from old ones) and then reads unchecked, keeping both guarantees by hand: the slot holds this
+# frame (slot sequence == meta sequence + offset, else recycled -> NONE_READ) and it was not rewritten during the copy
+# (the slot sequence is the same after it).
+SEQ_LEARN_N = 3
+SEQ_FRESH_NS = 200_000_000
+
+
 class DmaCameras:
     """the camera source over dma_ipc (module d): one read-only consumer + frame pool per camera. The first attach
     waits for the producer (start-up); a re-attach never blocks the reader: it runs in a helper thread with
@@ -343,6 +354,8 @@ class DmaCameras:
         self._helpers, self._ready = {}, {}
         self._lock = threading.Lock()
         self.attach_errors = {}
+        self.seq_offset = {}            # camera -> the learned slot - meta sequence offset (13 Nov), when nonzero
+        self._seq_cand = {}             # camera -> (offset, consecutive fresh sightings)
         for c in self.cams:
             self._install(c, self._open(c, wait=True))
 
@@ -396,6 +409,39 @@ class DmaCameras:
         h.join(self.attach_timeout if timeout is None else timeout)
         return self._adopt(c)
 
+    def _offset_read(self, c, m):
+        """the frame of meta m when the pool's slot sequence runs a constant offset from the meta's (module note),
+        else None"""
+        p = self.p[c]
+        ss, slot = getattr(p, "slot_sequence", None), getattr(m, "pool_slot_index", None)
+        if ss is None or slot is None:
+            return None
+        try:
+            s0 = int(ss(int(slot)))
+        except Exception:  # noqa: BLE001
+            return None
+        off = s0 - int(m.frame_sequence)
+        if off == 0:
+            return None                 # the binding's own check refused it: really recycled / in flight
+        if self.seq_offset.get(c) != off:
+            fresh = time.time_ns() - int(getattr(m, "publish_timestamp_ns", 0) or 0) < SEQ_FRESH_NS
+            cand, n = self._seq_cand.get(c, (None, 0))
+            n = n + 1 if (fresh and cand == off) else (1 if fresh else 0)
+            self._seq_cand[c] = (off, n)
+            if n < SEQ_LEARN_N:
+                return None
+            self.seq_offset[c] = off
+        try:
+            b = p.read(m, check_sequence=False)
+        except TypeError:
+            return None
+        try:
+            if b is None or int(ss(int(slot))) != s0:
+                return None             # rewritten during the copy
+        except Exception:  # noqa: BLE001
+            return None
+        return b
+
     def changed(self, c) -> bool:
         return self._ident(int(c)) != self.ident.get(int(c))
 
@@ -406,6 +452,8 @@ class DmaCameras:
         if m is None:
             return None
         buf = self.p[c].read(m)
+        if buf is None:
+            buf = self._offset_read(c, m)
         if buf is None:
             return NONE_READ
         w, h = int(m.width), int(m.height)

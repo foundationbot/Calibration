@@ -406,3 +406,115 @@ def test_a_hanging_reattach_does_not_block_the_reader(tmp_path):
     old = cams.q[3]
     cams.read(3, 0.0)                           # the reader adopts the late attach
     assert cams.q[3] is not old
+
+
+# ------------------------------------------------------------------ 13 Nov: pool sequence offset (phantom10)
+
+def _offset_dma(entries, offset, slots=8, torn_at=(), stale_ns=None):
+    """a pool whose slot sequence = meta frame_sequence + offset (phantom10 13 Nov after a producer restart without the
+    camera: meta 101665 vs slot 49629). read(check_sequence=True) refuses every frame, as the real binding did"""
+    import time as _t
+
+    class Consumer:
+        def __init__(self):
+            self.i = 0
+
+        def next(self, timeout):
+            if self.i >= len(entries):
+                return None
+            m = entries[self.i]
+            self.i += 1
+            return m
+
+    class Q:
+        def __init__(self, name, create=False, wait=True):
+            pass
+
+        def make_consumer(self, max_lag=8):
+            return Consumer2()
+
+    POOL = []
+
+    class Pool:
+        def __init__(self, name, create=False):
+            self.reads, self.bump, self.cur = 0, {}, {}
+
+        def slot_sequence(self, slot):
+            m = self.cur[slot]
+            return m.frame_sequence + offset + (slots if getattr(m, "_stale", False) else 0) + self.bump.get(slot, 0)
+
+        def read(self, m, check_sequence=True):
+            self.reads += 1
+            if check_sequence:
+                return None
+            if m.frame_sequence in torn_at:
+                self.bump[m.pool_slot_index] = slots          # the producer rewrote the slot during the copy
+            return m._buf
+
+    class Consumer2(Consumer):
+        def next(self, timeout):
+            m = Consumer.next(self, timeout)
+            if m is not None:
+                POOL[0].cur[m.pool_slot_index] = m
+            return m
+
+    def _mk(seq, slot, over=False):
+        e = _Meta(3, seq, _t.time_ns() if stale_ns is None else _t.time_ns() - stale_ns)
+        e.publish_timestamp_ns = e.capture_timestamp_ns
+        e.pool_slot_index, e._over = slot, over
+        e._buf = memoryview(np.zeros(36, np.uint8).tobytes())
+        return e
+    def make_pool(name, create=False):
+        p = Pool(name, create)
+        POOL[:] = [p]
+        return p
+    mod = types.SimpleNamespace(VideoMetaQueue=Q, VideoFramePool=make_pool,
+                                video_meta_queue_name=lambda c: f"/video_meta_cam{c}",
+                                video_frame_pool_name=lambda c: f"/video_frames_cam{c}")
+    return mod, _mk
+
+
+def _entries(n, start=101665):
+    return [(start + i, i % 8) for i in range(n)]
+
+
+def test_a_constant_pool_sequence_offset_is_learned_and_frames_read():
+    import time as _t
+    mod, mk = _offset_dma([], 49629 - 101665)
+    ents = [mk(s, sl) for s, sl in _entries(6)]
+    mod2, _ = _offset_dma(ents, 49629 - 101665)
+    cams = cp.DmaCameras(mod2, 3, 3)
+    got = [cams.read(3, 0.01) for _ in range(6)]
+    assert got[:cp.SEQ_LEARN_N - 1] == [cp.NONE_READ] * (cp.SEQ_LEARN_N - 1)       # learning: not trusted yet
+    assert all(isinstance(f, cp.Frame) for f in got[cp.SEQ_LEARN_N - 1:])
+    assert cams.seq_offset[3] == 49629 - 101665
+
+
+def test_a_recycled_slot_is_still_refused_after_learning():
+    ents = []
+    mod, mk = _offset_dma(ents, -52036)
+    ents += [mk(s, sl) for s, sl in _entries(4)]
+    stale = mk(101669, 4)
+    stale._stale = True                              # the slot holds a newer frame (one pool cycle on)
+    ents.append(stale)
+    cams = cp.DmaCameras(mod, 3, 3)
+    got = [cams.read(3, 0.01) for _ in range(5)]
+    assert isinstance(got[3], cp.Frame) and got[4] is cp.NONE_READ
+
+
+def test_a_lagging_reader_never_learns_an_offset_from_old_frames():
+    ents = []
+    mod, mk = _offset_dma(ents, -52036, stale_ns=int(0.5e9))     # every entry 0.5 s old
+    ents += [mk(s, sl) for s, sl in _entries(6)]
+    cams = cp.DmaCameras(mod, 3, 3)
+    assert all(cams.read(3, 0.01) is cp.NONE_READ for _ in range(6))
+    assert cams.seq_offset.get(3) is None
+
+
+def test_a_frame_rewritten_during_the_copy_is_refused():
+    ents = []
+    mod, mk = _offset_dma(ents, -52036, torn_at=(101668,))
+    ents += [mk(s, sl) for s, sl in _entries(4)]
+    cams = cp.DmaCameras(mod, 3, 3)
+    got = [cams.read(3, 0.01) for _ in range(4)]
+    assert isinstance(got[2], cp.Frame) and got[3] is cp.NONE_READ
