@@ -1,17 +1,20 @@
 """The hand-eye deploy (milestone H4; hand-eye plan, docs/plans/2026-11-11-handeye-plan.md, section 6): a fitted URDF
-correction (armcal.urdffit) and its HEAD term put on a robot as ONE transaction, with a rollback.
+correction (armcal.urdffit) and its camera term put on a robot as ONE transaction, with a rollback.
 
 What it does
 ------------
 The fit (a folder: fit.json, geometry.json, readb-right.json / readb-left.json) corrects the URDF OKVIS reads now
-(NeckYaw origin, the shoulder-roll zeros) and, for M12+head, says where the camera sits in the head (HEAD, mm, head
-frame). The deploy writes, next to the robot's files in /etc/phantomos/okvis (= /etc/okvis in the OKVIS pod):
+(NeckYaw origin, the shoulder-roll zeros) and, for M12+headR / M12+head, says how the camera sits in the head: turned
+by HEADR (a rotation vector, deg, head frame) and/or moved by HEAD (mm, head frame). Together they are one transform
+D = [R(HEADR) | HEAD] (urdffit.head_transform: turn about the head's axes, then move). The deploy writes, next to the
+robot's files in /etc/phantomos/okvis (= /etc/okvis in the OKVIS pod):
   - <robot>_mk1_handeye_<date>.urdf: the robot's own URDF text with only the fitted <origin> lines changed and a
     provenance header (base md5, the live config's sha, the new T_BS's sha, the fit, the session);
   - <live config>_handeye<date>.yaml: a copy of the LIVE config (whatever robot.env names at the deploy, not the one
-    the fit ran with) where only (a) the three translation numbers of T_BS change, by HEAD applied exactly once
-    (T_BS' = D(HEAD) T_BS, rotation kept), (b) `dma: urdf:` names the new URDF, (c) header lines say what and why
-    (a machine-readable `# handeye: {...}` line among them); every other byte is kept;
+    the fit ran with) where only (a) T_BS changes, by D applied exactly once (T_BS' = D T_BS: its rotation AND
+    translation for M12+headR, the translation only for M12+head; the changed numbers written with full precision),
+    (b) `dma: urdf:` names the new URDF, (c) header lines say what and why (the T_BS before, and a machine-readable
+    `# handeye: {...}` line); every other byte is kept;
 then points robot.env's OKVIS_CALIBRATION at the new config, restarts OKVIS by the path detected at the snapshot (the
 DaemonSet's `rollout restart`, or okvis.sh on the robots with a bare okvis/okvis2x pod; never a zero grace period) and
 checks OKVIS loaded both files: its log names the new config's sha256 prefix (the entrypoint) and says
@@ -19,9 +22,9 @@ checks OKVIS loaded both files: its log names the new config's sha256 prefix (th
 The transaction itself is calibtool.deploy.Deployer (the head calibration's: backup, rollback.sh first, atomic
 writes, drift checks, the load check), given the URDF as an extra file.
 
-Model only (mode "model_only"): T_BS is kept; only the URDF changes. The default model is then M12 (fitted without the
-head term): M12+head's URDF terms were fitted together with HEAD (correlations -0.8 to -0.97), so dropping HEAD from
-it would leave them biased; asking model-only for a model with a HEAD term is refused.
+Model only (mode "model_only"): T_BS is kept; only the URDF changes. The default model is then M12 (fitted without a
+camera term): M12+head's URDF terms were fitted together with HEAD (correlations -0.8 to -0.97), and M12+headR's with
+HEADR, so dropping the camera term would leave them biased; asking model-only for a model with one is refused.
 
 The checks (all before anything is written; any one refuses)
 -----------------------------------------------------------
@@ -32,11 +35,11 @@ The checks (all before anything is written; any one refuses)
   geometry      the live config's T_BS and cameras' T_SC equal the ones the captures were taken with (geometry.json;
                 T_SC from the fit-time config, read on the robot and its sha256 checked): else "hand-eye stale for
                 this camera geometry" -- a head calibration changed it since, run the hand-eye again
-  once          the live config does not carry this fit already (`# handeye:` line): HEAD is never applied twice (a
+  once          the live config does not carry this fit already (`# handeye:` line): D is never applied twice (a
                 second deploy would also fail the T_BS and base-URDF checks)
   the fit       its records share one URDF md5 and one camera-in-head (and agree with geometry.json); HEAD under
-                MAX_HEAD_MM; the new URDF and T_BS reproduce the fit's prediction for every fitted capture (FK of the
-                written files, to PREDICT_TOL_MM)
+                MAX_HEAD_MM, HEADR under MAX_HEAD_DEG; the new URDF and T_BS reproduce the fit's prediction for every
+                fitted capture (FK of the written files, to PREDICT_TOL_MM)
   restart path  OKVIS can be restarted on this robot
 
 Rolling back
@@ -70,6 +73,8 @@ T_TOL = 1e-9                    # T_BS / T_SC: the same text parses to the same 
 T_BC_TOL = 1e-6                 # a record's T_BC against T_BS @ T_SC_depth (the burst's T_SC is float32)
 PREDICT_TOL_MM = 1e-3           # written files vs the fit's in-memory prediction
 MAX_HEAD_MM = 40.0              # a camera does not sit 4 cm from where the head's T_BS puts it: a units/sign slip
+MAX_HEAD_DEG = 10.0             # nor 10 deg off the head calibration's rotation (phantom10: 3.4 / 3.7 deg): radians?
+HEAD_KEYS = {"dxyz", "drot"}    # the camera term in fit.json (urdffit: HEAD mm, HEADR deg)
 MARKER = "handeye:"
 GATE_MM = 6.0                   # the user's aim (plan 9.1 #4): held-out / post-check median at the wrist
 ALPHA = 0.05
@@ -80,7 +85,7 @@ MIN_POSTCHECK = 6
 
 _TBS = re.compile(r"^[^#\n]*?\bT_BS:\s*\[(?P<body>[^\]]*)\]", re.M)       # never inside a comment
 _NUM = re.compile(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?")
-TBS_TRANSLATION = (3, 7, 11)
+TBS_TOP = tuple(range(12))      # the rotation and translation rows (the 4th row stays 0 0 0 1)
 
 
 def _tbs_match(text):
@@ -104,14 +109,23 @@ def t_sc(text) -> list:
     return [np.asarray(T) for T in imu.t_sc(text)]
 
 
-def apply_head(text, head_mm) -> str:
-    """T_BS' = D(HEAD) T_BS: the three translation numbers + HEAD (mm -> m), each rewritten in place (repr of the
-    float); the rotation and every other byte kept"""
+def head_D(head) -> np.ndarray:
+    """D (4x4) of a camera term {"dxyz": mm, "drot": deg} (either or both; None: the identity), by urdffit's own
+    convention (head_transform: turn about the head's axes, then move)"""
+    from armcal import urdffit
+    head = head or {}
+    return urdffit.head_transform(head.get("dxyz"), head.get("drot"))
+
+
+def apply_head(text, head_mm=None, head_rot_deg=None) -> str:
+    """T_BS' = D T_BS, D = [R(head_rot_deg) | head_mm] in the head frame: each of T_BS's 12 rotation and translation
+    numbers that changes is rewritten in place (repr of the float: full precision, reads back exactly); every other
+    byte kept. Translation only (no rotation): only the three translation numbers change, by + head_mm (exactly: the
+    identity rows add zeros)."""
     from calibtool import imu
     m = _tbs_match(text)
-    T = t_bs(text)
-    T[:3, 3] = T[:3, 3] + 1e-3 * np.asarray(head_mm, float)
-    body = imu._rewrite(m.group("body"), T.ravel(), set(TBS_TRANSLATION))
+    T = head_D({"dxyz": head_mm, "drot": head_rot_deg}) @ t_bs(text)
+    body = imu._rewrite(m.group("body"), T.ravel(), set(TBS_TOP))
     return text[:m.start("body")] + body + text[m.end("body"):]
 
 
@@ -301,7 +315,8 @@ class HandeyeFit:
 
 
 def choose(fit: HandeyeFit, mode="head", model=None):
-    """(model, URDF change without HEAD, HEAD mm or None)"""
+    """(model, URDF change without the camera term, the camera term {"dxyz": mm, "drot": deg} (numpy; either or both)
+    or None)"""
     if mode not in ("head", "model_only"):
         raise ValueError(f"mode must be 'head' or 'model_only', got {mode!r}")
     models = fit.report.get("models") or {}
@@ -316,11 +331,18 @@ def choose(fit: HandeyeFit, mode="head", model=None):
                          f"it they are biased; deploy {model} with the head term, or model-only with M12")
     if not change:
         raise ValueError(f"model {model} changes no URDF origin")
-    head_mm = None if head is None else np.asarray(head["dxyz"], float)
-    if head_mm is not None and np.linalg.norm(head_mm) > MAX_HEAD_MM:
-        raise ValueError(f"HEAD {np.round(head_mm, 1).tolist()} mm is over {MAX_HEAD_MM:g} mm: a units or sign slip, "
-                         "not a camera position; not deploying it")
-    return model, change, head_mm
+    if head is None:
+        return model, change, None
+    if not head or set(head) - HEAD_KEYS:
+        raise ValueError(f"the camera term of {model} is {sorted(head)}: want {sorted(HEAD_KEYS)} (either or both)")
+    head = {k: np.asarray(v, float) for k, v in head.items()}
+    if "dxyz" in head and np.linalg.norm(head["dxyz"]) > MAX_HEAD_MM:
+        raise ValueError(f"HEAD {np.round(head['dxyz'], 1).tolist()} mm is over {MAX_HEAD_MM:g} mm: a units or sign "
+                         "slip, not a camera position; not deploying it")
+    if "drot" in head and np.linalg.norm(head["drot"]) > MAX_HEAD_DEG:
+        raise ValueError(f"HEADR {np.round(head['drot'], 2).tolist()} deg is over {MAX_HEAD_DEG:g} deg: a units slip "
+                         "(radians?), not a camera rotation; not deploying it")
+    return model, change, head
 
 
 # ================================================================ the snapshot
@@ -446,7 +468,8 @@ def precheck(snap: HandeyeSnapshot, fit: HandeyeFit, registry=None) -> list:
 class Build:
     mode: str
     model: str
-    head_mm: object
+    head_mm: object                 # the camera's move in the head (mm), or None
+    head_rot_deg: object            # the camera's turn in the head (rotation vector, deg), or None
     urdf_name: str
     urdf_text: str
     config_name: str
@@ -464,7 +487,8 @@ class Build:
     def summary(self) -> dict:
         d = asdict(self)
         d.pop("urdf_text"), d.pop("config_text")
-        d["head_mm"] = None if self.head_mm is None else np.asarray(self.head_mm).tolist()
+        for k in ("head_mm", "head_rot_deg"):
+            d[k] = None if getattr(self, k) is None else np.asarray(getattr(self, k)).tolist()
         return d
 
 
@@ -477,14 +501,15 @@ def free_name(stem, ext, taken) -> str:
     raise ValueError(f"no free name for {stem}{ext}")
 
 
-def predict_check(fit: HandeyeFit, base, change, head_mm, new_urdf_text, T_BS_new) -> float:
+def predict_check(fit: HandeyeFit, base, change, head, new_urdf_text, T_BS_new) -> float:
     """max |offset| difference (mm) over the fitted captures between the fit's prediction (urdffit.off_change: base +
-    change, camera moved by HEAD) and the written files' (the new URDF parsed, T_BC' = T_BS' T_BS_fit^-1 T_BC)"""
+    change, camera moved by the camera term `head`) and the written files' (the new URDF parsed,
+    T_BC' = T_BS' T_BS_fit^-1 T_BC)"""
     from armcal import urdffit
     from armcal.urdf import Urdf
     ch = dict(change)
-    if head_mm is not None:
-        ch["HEAD"] = {"dxyz": np.asarray(head_mm, float)}
+    if head is not None:
+        ch["HEAD"] = dict(head)
     new = Urdf(new_urdf_text)
     move = np.asarray(T_BS_new, float) @ np.linalg.inv(fit.geometry.T_BS)
     worst = 0.0
@@ -510,8 +535,11 @@ def build(snap: HandeyeSnapshot, fit: HandeyeFit, mode="head", model=None, date=
     stem = re.sub(r"_handeye\d{8}[a-z]?$", "", PurePosixPath(snap.deploy.calibration or "okvis.yaml").stem)
     config_name = free_name(f"{stem}_handeye{date}", ".yaml", set(snap.listing) | {urdf_name})
     T_old = t_bs(live)
-    text = apply_head(live, head) if head is not None else live
+    h_mm, h_deg = (None, None) if head is None else (head.get("dxyz"), head.get("drot"))
+    text = apply_head(live, h_mm, h_deg) if head is not None else live
     T_new = t_bs(text)
+    moved = " then ".join(([f"turned by HEADR {np.round(h_deg, 4).tolist()} deg"] if h_deg is not None else [])
+                          + ([f"moved by HEAD {np.round(h_mm, 3).tolist()} mm"] if h_mm is not None else []))
     text = set_urdf(text, dp.container_path(urdf_name))
     sc = t_sc(text)
     p = fit.report["models"][model]
@@ -522,17 +550,17 @@ def build(snap: HandeyeSnapshot, fit: HandeyeFit, mode="head", model=None, date=
             f"session {fit.geometry.session}",
             f"goes with the OKVIS config {config_name}, made from the live {snap.deploy.calibration} (sha256 "
             f"{_sha256(live)[:12]}); its T_BS sha {geom_sha(T_new)}" + (
-                f" = the live T_BS (sha {geom_sha(T_old)}) moved by HEAD {np.round(head, 3).tolist()} mm"
-                if head is not None else " = the live T_BS, unchanged (no HEAD term)")]
+                f" = D T_BS of the live T_BS (sha {geom_sha(T_old)}), the camera {moved} in the head frame"
+                if head is not None else " = the live T_BS, unchanged (no camera term)")]
     urdf_text = variant_text(base, change, prov)
     mk = {"fit": fit.fit_id, "session": session, "date": date, "mode": mode, "model": model,
-          "head_mm": None if head is None else [round(float(v), 6) for v in head],
+          "head_mm": None if h_mm is None else [round(float(v), 6) for v in h_mm],
+          "head_rot_deg": None if h_deg is None else [round(float(v), 6) for v in h_deg],
           "T_BS": geom_sha(T_new), "T_SC": geom_sha(sc), "urdf": dp.container_path(urdf_name),
           "urdf_md5": _md5(urdf_text), "base_urdf": snap.urdf, "base_md5": _md5(snap.urdf_text),
           "from": f"{PurePosixPath(snap.deploy.calibration or '?').name} ({_sha256(live)[:12]})"}
-    head_line = (f"T_BS translation + HEAD {np.round(head, 3).tolist()} mm (head frame; T_BS' = D(HEAD) T_BS, applied "
-                 f"once), the T_BS before: {np.round(T_old[:3, 3], 9).tolist()} m" if head is not None else
-                 "T_BS unchanged (model only: no HEAD term)")
+    head_line = (f"T_BS' = D T_BS, applied once: the camera {moved} (head frame); the T_BS before (rows 1-3): "
+                 f"{T_old[:3].tolist()}" if head is not None else "T_BS unchanged (no camera term)")
     text = add_note(text, [f"hand-eye deploy {date} (calibtool.handeye_deploy, session {session or '-'}): from "
                            f"{mk['from']}; urdf: {snap.urdf} -> {mk['urdf']} (fit {fit.fit_id}, model {model})",
                            head_line, f"{MARKER} {json.dumps(mk, separators=(',', ':'))}"])
@@ -542,8 +570,8 @@ def build(snap: HandeyeSnapshot, fit: HandeyeFit, mode="head", model=None, date=
     if not worst <= PREDICT_TOL_MM:
         raise ValueError(f"the written URDF and T_BS predict the fitted captures {worst:.2g} mm off the fit "
                          f"(limit {PREDICT_TOL_MM:g} mm): not deploying")
-    return Build(mode, model, head, urdf_name, urdf_text, config_name, text, image_size(text), mk, T_old.tolist(),
-                 T_new.tolist(), worst)
+    return Build(mode, model, h_mm, h_deg, urdf_name, urdf_text, config_name, text, image_size(text), mk,
+                 T_old.tolist(), T_new.tolist(), worst)
 
 
 # ================================================================ the consumers
@@ -615,8 +643,9 @@ class HandeyeResult:
     def report(self) -> str:
         b = self.build
         L = [f"hand-eye deploy: {self.detail}",
-             f"  mode {b.get('mode')}, model {b.get('model')}, HEAD {b.get('head_mm')} mm; written files predict the "
-             f"fit to {b.get('predict_mm', float('nan')):.1e} mm",
+             f"  mode {b.get('mode')}, model {b.get('model')}, HEAD {b.get('head_mm')} mm, HEADR "
+             f"{b.get('head_rot_deg')} deg; written files predict the fit to "
+             f"{b.get('predict_mm', float('nan')):.1e} mm",
              f"  URDF {b.get('urdf_name')}, config {b.get('config_name')} ({b.get('size')})",
              f"  rollback: bash {self.deploy.get('rollback_script')}  (R in the tool)"]
         if self.rollback is not None:
