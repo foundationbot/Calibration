@@ -35,6 +35,9 @@ import threading
 import time
 from pathlib import Path
 
+from calibtool import health   # module level: _health needs it on every step (12 Nov: a local import elsewhere
+                                # left it undefined there; every step after the tool's own camera restart failed)
+
 DEADMAN_S = 5.0
 # the full session's phases (M5, flow.py drives them; --session-mode full). ACTIVE ones need the TUI heartbeat: the
 # operator's link is the deadman wherever the robot moves, could move next (guidance -> countdown -> grid) or deploys
@@ -595,7 +598,7 @@ class Daemon:
             trial.use_ids(self.ids)
 
     def preflight_done(self, res):
-        from calibtool import health, preflight as pf
+        from calibtool import preflight as pf
         st = self.m.state
         st["checks"] = [c.as_dict() for c in res.checks]
         st["preflight_green"] = pf.green(res.checks)

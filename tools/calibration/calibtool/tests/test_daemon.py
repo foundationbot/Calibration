@@ -1143,3 +1143,27 @@ def test_start_master_starts_only_an_inactive_master(tmp_path):
     dm.start_master(m, run=lambda argv, **kw: calls.append(argv) or SimpleNamespace(returncode=0, stdout="active\n",
                                                                                       stderr=""))
     assert ["systemctl", "start", "dma-ethercat"] not in calls
+
+
+def test_health_runs_after_the_tools_own_producer_restart(tmp_path):
+    """12 Nov phantom10: from the tool's own camera restart (state producer_own_t set) every step raised
+    NameError: name 'health' is not defined -- the health watch never ran again, a frozen camera was never restarted"""
+    c = Clock()
+    m = machine(tmp_path, c)
+    cap = cp.Capture(FakeSource(), 3, 0, clock=c)
+    cap.step()
+    cap.step()
+    d = dm.Daemon(m, cap, detector=lambda pair: _done((None, None)), to_obs=lambda det: None,
+                  sampler=lambda: {"boot_id": "b1", "clock_s": c.t, "load": 1.0}, clock=c)
+    d.preflight_done(pf.Result([], {}, {"fps": 25.0, "load": 1.0, "boot_id": "b1", "head_serials": [],
+                                        "head_ports": [], "producer": {}}))
+    m.state["producer_own_t"] = c.t
+    for _ in range(4):
+        c.t += 0.5
+        m.heartbeat()
+        cap.step()
+        cap.step()
+        d.safe_step()
+    st = m.store.load_state()
+    assert not st.get("step_errors"), st.get("last_step_error")
+    assert st["system"]["own_until"] == pytest.approx(m.state["producer_own_t"] + 60.0)
