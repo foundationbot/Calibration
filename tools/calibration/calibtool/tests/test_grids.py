@@ -369,3 +369,95 @@ def test_stored_holds_through_gridrun_equal_replay_feed(data_root):
     assert res.holds == [h.hold for h in holds]
     assert rp.tallies_dict(col.tallies()) == rp.tallies_dict(ref.tallies())
     assert col.labels() == ref.labels()
+
+
+# ---------------------------------------------------------------- a stalled camera mid-grid (12 Nov, phantom10)
+
+
+class StallWorld(World):
+    """World whose camera stalls on the given poses for `bad` grabs: no pairs, or the previous pose's pairs again (a
+    frozen camera repeating its last frame)"""
+
+    def __init__(self, n, stalled, bad=1, frozen=False):
+        super().__init__(n)
+        self.stalled, self.bad, self.frozen = dict.fromkeys(stalled, bad), bad, frozen
+        self._prev = []
+
+    def grab(self, n, timeout=None):
+        if self.stalled.get(self.pose, 0) > 0:
+            self.stalled[self.pose] -= 1
+            self.grabs.append(n)
+            return list(self._prev) if self.frozen else []
+        out = super().grab(n, timeout)
+        self._prev = out
+        return out
+
+
+class CameraWait:
+    def __init__(self, g, answer=None):
+        self.g, self.answer, self.calls = g, answer, []
+
+    def __call__(self):
+        self.calls.append(len(self.g.commands))       # the neck commands sent so far: none while it waits
+        return self.answer
+
+
+def test_a_starved_pose_waits_for_the_camera_and_is_captured_again_where_the_head_holds():
+    w = StallWorld(4, stalled=[1])
+    c = FakeCollection()
+    g = FakeNeckGrid(w)
+    events = []
+    run = grids.GridRun(g, w.grab, w.detect, c, "d110", POSES[:4], hold_ids=iter(range(100, 200)),
+                        on_event=lambda kind, **kw: events.append((kind, kw)))
+    run.camera_wait = wait = CameraWait(g)
+    res = run.run()
+    assert wait.calls == [2]                            # once, at pose 2 (index 1), before the next command
+    assert g.commands == POSES[:4]                      # no extra neck command: the same pose captured again
+    assert [h.hold for h in c.added] == [100, 101, 102, 103] and res.stopped is None
+    kinds_ = [k for k, _ in events]
+    assert kinds_.count("pose_starved") == 1 and kinds_.count("pose_recaptured") == 1
+    starved = dict(events)["pose_starved"]
+    assert starved["command"] == list(POSES[1]) and starved["fresh"] == 0
+    assert w.grabs == [3, 3, 3, 3, 3]
+
+
+def test_frozen_frames_repeating_the_last_stamps_count_as_starved():
+    w = StallWorld(3, stalled=[1], frozen=True)
+    run, w, c, g = make(world=w, n=3, camera_wait=None)
+    run.camera_wait = CameraWait(g)
+    res = run.run()
+    assert len(run.camera_wait.calls) == 1
+    assert [h.hold for h in c.added] == [100, 101, 102]
+    t1 = c.added[1].data["img_t0"]
+    assert min(t1) > max(c.added[0].data["img_t0"])     # the hold is made of the fresh pairs, not the frozen ones
+    assert res.stopped is None
+
+
+def test_a_pose_that_stays_starved_is_given_up_after_the_tries():
+    w = StallWorld(3, stalled=[1], bad=grids.RECAPTURE_TRIES + 5)
+    events = []
+    run, w, c, g = make(world=w, n=3, on_event=lambda kind, **kw: events.append(kind))
+    run.camera_wait = CameraWait(g)
+    res = run.run()
+    assert len(run.camera_wait.calls) == grids.RECAPTURE_TRIES
+    assert events.count("pose_lost") == 1
+    assert [h.hold for h in c.added] == [100, 101] and not res.records[1].found
+    assert g.commands == POSES[:3]
+
+
+def test_an_abort_while_waiting_for_the_camera_stops_the_grid():
+    w = StallWorld(4, stalled=[1])
+    stops = iter([None, None, "abort", "abort"])
+    run, w, c, g = make(world=w, n=4, should_stop=lambda: next(stops))
+    run.camera_wait = CameraWait(g, answer="abort")
+    res = run.run()
+    assert res.stopped == "abort" and g.commands == POSES[:2]
+    assert len(run.camera_wait.calls) == 1
+
+
+def test_without_camera_wait_a_starved_pose_is_not_retried():
+    w = StallWorld(3, stalled=[1])
+    run, w, c, g = make(world=w, n=3)
+    res = run.run()
+    assert [h.hold for h in c.added] == [100, 101] and w.grabs == [3, 3, 3]
+    assert res.records[1].n_pairs == 0

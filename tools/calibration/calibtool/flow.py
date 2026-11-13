@@ -56,19 +56,26 @@ countdown "Moving the head now. About N minutes." (POSE_S per pose left), "Halfw
 placement "Head sweep done. You can move the board now."; a HOLD there "The head stopped. <plain_reason>. Waiting for
 the operator." (once; G counts down again). Grid poses snake row by row (snake): no 68 deg yaw swing between rows.
 
+A stalled camera in a grid or the IMU sweep (12 Nov, phantom10): no next neck command while calibd says the camera is
+stalled (state camera_stalled_s); past CAMERA_SAY_S "The head waits for the camera.", and once it is back the countdown
+runs again before the head moves. A pose whose grab got no fresh pairs is grabbed again where the head holds it
+(grids.GridRun camera_wait). calibd's camera recovery (camrecover) restarts the producer through restart_cameras: the
+same no-overlap cycle and own-restart hook (producer_own_t) as the flow's own restarts, never two at once.
+
 Every robot action goes into the session's command log (sessionctl.Recorder -> <session>/commands.txt): in a dry run
 (Robot.dry_run, every backend recording instead of sending) that file is the dry-run command list of the session."""
 import json
 import math
 import re
+import threading
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import numpy as np
 
-from calibtool import deploy as dp, grids, imusweep, neck as nk, place, planner, postcheck as pc, protocol, \
-    sessionctl as sc
+from calibtool import camrecover, deploy as dp, grids, imusweep, neck as nk, place, planner, postcheck as pc, \
+    producer as pr, protocol, sessionctl as sc
 from calibtool.producer import LeaseHeld, ProducerError, Spec
 
 STAGES = ("motors", "setup", "collect", "sweep", "decide", "deploy_size", "check", "deploy", "postcheck", "report",
@@ -104,6 +111,8 @@ POSE_S = 1.6                    # seconds per grid pose until this session has m
                                 # step 08's timing measured 2.5 on phantom11)
 GRID_DONE_TEXT = "Head sweep done. You can move the board now."
 HALFWAY_TEXT = "Halfway through."
+CAMERA_WAIT_TEXT = "The head waits for the camera."
+CAMERA_SAY_S = 3.0              # a camera gap shorter than this between poses is waited out silently, no countdown
 MOTION_PHASES = frozenset({"GRID", "CHECK_GRID", "IMU_SWEEP"})
 # a HOLD's reason in plain words: (substrings of the raw reason, the words), the first match wins
 _PLAIN = ((("not reached", "no result for both neck joints", "off by"), "the neck did not reach a pose"),
@@ -269,7 +278,7 @@ class _GatedRig(nk.NeckSweepRig):
         self.flow = flow
 
     def move_neck(self, pitch_deg, yaw_deg):
-        if self.flow._between_poses() == "abort":
+        if self.flow._between_poses(camera=True) == "abort":
             raise Aborted()
         self.neck.goto(pitch_deg, yaw_deg)
 
@@ -304,6 +313,8 @@ class FullFlow:
         self._reconfirmed = False
         self._lease_beat = None
         self._grid_poses, self._pose_done = [], 0
+        self._prod_lock = threading.Lock()  # one producer restart at a time: the flow's own or camrecover's
+        self._cam_paused = False            # a camera wait was said: the countdown runs before the next pose
 
     # ------------------------------------------------------------ state, events, speech
 
@@ -413,8 +424,9 @@ class FullFlow:
             self._event("countdown_interrupted", phase=phase)
             self._check()
 
-    def _between_poses(self):
-        """grids/neck should_stop: None to go on; "abort". A HOLD waits here (nothing sent) for G, then counts down"""
+    def _between_poses(self, camera=False):
+        """grids/neck should_stop: None to go on; "abort". A HOLD waits here (nothing sent) for G, then counts down;
+        camera=True (grids, the IMU sweep): a stalled camera waits here too (_camera_wait)"""
         self.m.tick()
         held = False
         while True:
@@ -422,16 +434,42 @@ class FullFlow:
             if ph in ("ABORTED", "STOPPED_LOUD"):
                 return "abort"
             if ph != "HOLD":
+                if camera and self._camera_out():
+                    if self._camera_wait() == "abort":
+                        return "abort"
+                    continue                    # a HOLD may have come meanwhile
                 break
             held = True
             self._say_held()
             self._idle()
         self._hold_said = False
-        if held:
+        if held or self._cam_paused:
+            self._cam_paused = False
             try:
                 self._countdown(self.m.phase)
             except Aborted:
                 return "abort"
+        return None
+
+    def _camera_out(self) -> bool:
+        """calibd flags the camera stalled (no new left/right pair for daemon.STALE_S)"""
+        return self.m.state.get("camera_stalled_s") is not None
+
+    def _camera_wait(self):
+        """the head holds (nothing is sent) until calibd sees new pairs again -> None, or "abort". Past CAMERA_SAY_S
+        it is said once, and the countdown runs again before the next neck command (_between_poses)"""
+        t0, said = self.mono(), False
+        while self._camera_out():
+            if self.m.phase in ("ABORTED", "STOPPED_LOUD"):
+                return "abort"
+            if not said and self.mono() - t0 >= CAMERA_SAY_S:
+                said = True
+                self._event("grid_camera_wait", phase=self.m.phase, stalled_s=self.m.state.get("camera_stalled_s"))
+                self._say("camera", CAMERA_WAIT_TEXT)
+            self._idle()
+        if said:
+            self._event("grid_camera_back", waited_s=round(self.mono() - t0, 1))
+            self._cam_paused = True
         return None
 
     # ------------------------------------------------------------ the run
@@ -622,17 +660,42 @@ class FullFlow:
     def _producer_change(self):
         """ProducerCtl calls this before and after each own camera producer restart: health takes the next minute as
         the tool's own (producer_own_t), and the operator is told (10 Nov: "tool should tell me when it restarts the
-        camera producer")"""
-        self.m.state["producer_own_t"] = self.clock()
-        if not getattr(self, "_producer_restarting", False):
-            self._producer_restarting = True
+        camera producer"). It waits for a camrecover restart still running (_prod_lock: never two cycles at once)"""
+        if not getattr(self, "_own_restarting", False):
+            self._prod_lock.acquire()
+            self.m.state["producer_own_t"] = self.clock()
+            self._own_restarting = self._producer_restarting = True
             self._upd(busy={"what": "restarting the cameras (the camera producer): a few seconds; the camera may drop "
                                     "off USB and come back", "since": self.clock()})
             self._say("cameras", "Restarting the cameras. A few seconds.")
         else:
-            self._producer_restarting = False
+            self.m.state["producer_own_t"] = self.clock()
+            self._own_restarting = self._producer_restarting = False
             self._upd(busy=None)
             self._say("cameras", "Cameras back.")
+            self._prod_lock.release()
+
+    def restart_cameras(self, reason="stall"):
+        """camrecover's restart (calibd's loop asks; it runs in a worker thread): the producer restarted as it is (its
+        current args: the collection size) by the same no-overlap cycle as ProducerCtl, with the same own-restart
+        marks (producer_own_t before and after: health takes the next minute as the tool's own; _producer_restarting).
+        Quiet: camrecover says what happens. ProducerError while the flow restarts the producer itself"""
+        if not self._prod_lock.acquire(blocking=False):
+            raise ProducerError("the flow is restarting the camera producer itself right now")
+        try:
+            self._event("camera_restart_cycle", reason=str(reason))
+            self.m.state["producer_own_t"] = self.clock()
+            self._producer_restarting = True
+            self._upd(busy={"what": "restarting the camera producer (the camera stalled): a few seconds",
+                            "since": self.clock()})
+            try:
+                pr.restart(self.producer.kube, replicas=self.spec.replicas, sleep=self.sleep, clock=self.clock)
+            finally:
+                self.m.state["producer_own_t"] = self.clock()
+                self._producer_restarting = False
+                self._upd(busy=None)
+        finally:
+            self._prod_lock.release()
 
     def _quality(self):
         """the per-section data status for the operator's screen (state["quality"]); never stops the session"""
@@ -678,8 +741,9 @@ class FullFlow:
             self._grid_poses, self._pose_done, self._grid_kind = remaining, 0, kind
             g = grids.GridRun(lambda ps, on_pose, ss, n=n: nk.run_grid(n, ps, on_pose, ss), self.robot.grab,
                               self.robot.detect, col, target.name, remaining, predict=predict,
-                              hold_ids=self._hold_ids(), should_stop=self._between_poses, on_event=self._grid_event,
-                              stop_when_rule_met=(kind == "collect"))
+                              hold_ids=self._hold_ids(), should_stop=lambda: self._between_poses(camera=True),
+                              on_event=self._grid_event, stop_when_rule_met=(kind == "collect"),
+                              camera_wait=self._camera_wait)
             res = g.run()
             remaining = remaining[len(res.records):]
             self._upd(grid=res.as_dict())
@@ -1323,6 +1387,7 @@ class FullFlow:
                "collection": {"done": fl.get("done", []), "unreachable": fl.get("unreachable", []),
                               "near": fl.get("near", {}),
                               "redo": fl.get("redo", []), "holds": int(fl.get("next_hold") or 0)},
+               "camera": st.get("camera_recovery"),
                "commands": str(Path(self.dirs.root) / "commands.txt")}
         d = Path(self.dirs.report)
         d.mkdir(parents=True, exist_ok=True)
@@ -1342,6 +1407,7 @@ class FullFlow:
         if rep["collection"]["near"]:
             md.append("- placed where the operator could reach (close enough): " + ", ".join(
                 f"{k} at {int(round(v * 100))} centimetres" for k, v in rep["collection"]["near"].items()))
+        md += camrecover.report_lines(rep["camera"])
         md.append(f"- robot commands: {rep['commands']}")
         (d / "session.md").write_text("\n".join(md) + "\n")
         self._event("report", outcome=rep["outcome"], aborted=aborted)

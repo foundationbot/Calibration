@@ -20,6 +20,12 @@ placement goes to the redo list with its whole pose list. A grid held by the ope
 the poses it did not reach; an abort ends the session. With stop_when_rule_met the grid also ends as soon as the
 collection's stop rule is met (Collection.stop).
 
+A stalled camera (camera_wait given; 12 Nov, phantom10: a head-camera USB drop froze the frames mid-session): a pose
+whose grab brought fewer than CAPTURE_FRAMES fresh pairs (none, or the same capture stamps again: a frozen camera) is
+starved. The neck sends nothing more meanwhile (the head holds the pose: on_pose has not returned), camera_wait()
+waits until the camera is back (-> None, or "abort"), and the pose is grabbed again where the head still is, up to
+RECAPTURE_TRIES times (then it goes on with what it has: pose_lost). Events pose_starved / pose_recaptured / pose_lost.
+
 End of placement: Collection.end_placement -> the snapshot and its gap sentences, spoken while the operator moves the
 board. Collector walks the placements: the defaults, then the planner's extras until the stop rule is met, then the
 redo list once; a placement the operator cannot make (key C) is recorded as unreachable."""
@@ -37,6 +43,7 @@ EARLY_MISS_FRAC = 0.5
 DARK_LEVEL = 40.0               # mean grey level (0-255) of the predicted board region below which a miss is "dark"
 BUMP_PX = 60.0
 BUMP_RUN = 3
+RECAPTURE_TRIES = 3             # a starved pose is grabbed again at most this often (each after the camera is back)
 
 
 @dataclass
@@ -178,11 +185,13 @@ class GridRun:
     grab(n) -> pairs (.left.y, .right.y, .t0, .t1, .dt_ns); detect(yl, yr) -> (left, right) corners or a Future of
     them; collection: replay.Collection; placement: its name (the take); poses [(pitch, yaw)] deg; predict(pitch, yaw)
     -> Visible or None; hold_ids: an iterator of global hold ids; should_stop() -> None | "abort" | "hold";
-    on_event(kind, **kw)"""
+    on_event(kind, **kw); camera_wait() -> None once the camera delivers again, or "abort" (module text: a starved pose
+    is grabbed again; None = no such check)"""
 
     def __init__(self, neck_grid, grab, detect, collection, placement, poses, predict=None, hold_ids=None,
                  per_hold=PER_HOLD, frames=CAPTURE_FRAMES, should_stop=None, on_event=None, stop_when_rule_met=False,
-                 rule=None, bump=None, target=None, still_px=STILL_PX, min_tags=MIN_TAGS):
+                 rule=None, bump=None, target=None, still_px=STILL_PX, min_tags=MIN_TAGS, camera_wait=None,
+                 recapture_tries=RECAPTURE_TRIES):
         self.neck_grid, self.grab, self.detect, self.col = neck_grid, grab, detect, collection
         self.placement, self.poses = str(placement), [tuple(map(float, p)) for p in poses]
         self.predict, self.per_hold, self.frames = predict, int(per_hold), int(frames)
@@ -198,6 +207,8 @@ class GridRun:
         self._pending = None
         self._prev_cmd = None
         self._stop_rule = False
+        self.camera_wait, self.recapture_tries = camera_wait, int(recapture_tries)
+        self._last_t0 = None            # the newest capture stamp a pose used (a frozen camera repeats it)
 
     # ------------------------------------------------------------ per pose
 
@@ -211,8 +222,41 @@ class GridRun:
             return "stop_rule"
         return None
 
-    def _on_pose(self, done):
+    def _fresh(self, pairs) -> list:
+        """the pairs with a capture stamp not seen before (each stamp once, newer than the last pose's)"""
+        out, seen = [], set()
+        for p in pairs:
+            t0 = int(p.t0)
+            if t0 in seen or (self._last_t0 is not None and t0 <= self._last_t0):
+                continue
+            seen.add(t0)
+            out.append(p)
+        return out
+
+    def _grab(self, done) -> list:
+        """the pose's pairs; with camera_wait a starved pose waits for the camera and is grabbed again (module text)"""
         pairs = self.grab(self.frames)
+        if self.camera_wait is None:
+            return pairs
+        pairs = self._fresh(pairs)
+        tries = 0
+        while len(pairs) < self.frames:
+            cmd = [float(x) for x in done.command]
+            if tries >= self.recapture_tries:
+                self.on_event("pose_lost", placement=self.placement, command=cmd, fresh=len(pairs), tries=tries)
+                break
+            self.on_event("pose_starved", placement=self.placement, command=cmd, fresh=len(pairs))
+            if self.camera_wait():
+                break
+            tries += 1
+            pairs = self._fresh(self.grab(self.frames))
+            self.on_event("pose_recaptured", placement=self.placement, command=cmd, fresh=len(pairs), tries=tries)
+        if pairs:
+            self._last_t0 = max(int(p.t0) for p in pairs)
+        return pairs
+
+    def _on_pose(self, done):
+        pairs = self._grab(done)
         futs = [self.detect(p.left.y, p.right.y) for p in pairs]
         self._flush()
         self._pending = (len(self.records) + len(self._queued()), done, pairs, futs)

@@ -1044,3 +1044,113 @@ def test_d_disables_motors_this_session_only_took_over(tmp_path):
 def test_okvis_pods_are_found_on_okvis_sh_robots_too():
     """10 Nov: phantom10/11's OKVIS pod is okvis/okvis2x labelled app.kubernetes.io/name=okvis"""
     assert "okvis2x" in dp.OKVIS_LABEL and "okvis)" in dp.OKVIS_LABEL and " in (" in dp.OKVIS_LABEL
+
+
+# ------------------------------------------------------------------ a stalled camera (12 Nov, phantom10)
+
+def test_restart_cameras_is_the_flows_own_no_overlap_cycle_marked_as_its_own(tmp_path):
+    s = Session(tmp_path, keys=FULL_KEYS)
+    t0 = s.clock.t
+    s.flow.restart_cameras("stall")
+    assert s.lines("producer") == ["k0s kubectl scale deploy producer -n dma-video --replicas=0",
+                                   "k0s kubectl scale deploy producer -n dma-video --replicas=1"]
+    assert s.m.state["producer_own_t"] >= t0                # health takes the next minute as the tool's own
+    assert s.m.state["busy"] is None and s.flow._producer_restarting is False
+    assert s.says == []                                     # camrecover says what happens
+    assert "camera_restart_cycle" in s.kinds()
+
+
+def test_restart_cameras_refuses_while_the_flow_restarts_the_producer_itself(tmp_path):
+    s = Session(tmp_path, keys=FULL_KEYS)
+    s.flow._producer_change()                               # ProducerCtl: before its own cycle
+    with pytest.raises(pr.ProducerError):
+        s.flow.restart_cameras("stall")
+    s.flow._producer_change()                               # ... and after it
+    s.flow.restart_cameras("stall")                         # free again
+    assert s.lines("producer")
+
+
+def test_a_camera_stall_mid_grid_holds_the_head_and_captures_the_pose_again(tmp_path):
+    """the camera stalls at the first grid's second pose: no neck command while it is out, "The head waits for the
+    camera.", the pose grabbed again where the head is, the countdown before the head moves on, no pose lost"""
+    s = Session(tmp_path, keys=FULL_KEYS)
+    inner = s.robot_side.grab
+    st = {"n": 0, "until": None}
+
+    def grab(n):
+        if s.m.phase == "GRID":
+            st["n"] += 1
+            if st["n"] == 2:
+                s.m.state["camera_stalled_s"] = 7.0         # what calibd's stall check says
+                st["until"] = s.clock.t + 20.0
+                return []
+        return inner(n)
+
+    def camera_back():
+        if st["until"] is not None and s.clock.t >= st["until"]:
+            s.m.state["camera_stalled_s"] = None
+            st["until"] = None
+    s.robot_side.grab = grab
+    s.op.hooks.append(camera_back)
+    s.run()
+    ev = s.events()
+    k = [e["kind"] for e in ev]
+    i_st, i_w, i_b, i_re = (k.index(x) for x in ("pose_starved", "grid_camera_wait", "grid_camera_back",
+                                                 "pose_recaptured"))
+    assert i_st < i_w < i_b < i_re
+    assert "neck_command" not in k[i_st:i_re]               # the head held the pose
+    nxt = k.index("neck_command", i_re)
+    assert "countdown_done" in k[i_re:nxt]                  # counted down before it moved on
+    assert ev[i_w]["stalled_s"] == 7.0 and ev[i_b]["waited_s"] >= 15
+    assert fl.CAMERA_WAIT_TEXT in [x.text for x in s.says]
+    first = next(e for e in ev if e["kind"] == "grid_end")
+    assert first["holds"] == len(POSES)                     # no pose lost
+    assert s.m.phase in dm.TERMINAL
+
+
+def test_a_short_camera_gap_between_poses_is_waited_out_silently(tmp_path):
+    """a 1 s gap after a pose's capture: the next pose waits for it, says nothing and does not count down again"""
+    s = Session(tmp_path, keys=FULL_KEYS)
+    inner = s.robot_side.grab
+    st = {"n": 0, "until": None, "waited": False}
+
+    def grab(n):
+        out = inner(n)
+        if s.m.phase == "GRID":
+            st["n"] += 1
+            if st["n"] == 2:
+                s.m.state["camera_stalled_s"] = 1.2
+                st["until"] = s.clock.t + 1.0
+        return out
+
+    def camera_back():
+        if st["until"] is not None:
+            st["waited"] = True
+            if s.clock.t >= st["until"]:
+                s.m.state["camera_stalled_s"], st["until"] = None, None
+    s.robot_side.grab = grab
+    s.op.hooks.append(camera_back)
+    s.run()
+    assert st["waited"] and st["until"] is None
+    assert fl.CAMERA_WAIT_TEXT not in [x.text for x in s.says]
+    k = s.kinds()
+    assert "grid_camera_wait" not in k and "pose_starved" not in k
+    first = k.index("grid_end")
+    assert k[:first].count("countdown_done") == 1          # only the grid's own countdown
+
+
+def test_the_report_has_the_camera_section(tmp_path):
+    from calibtool import camrecover as cr
+    s = Session(tmp_path, keys=FULL_KEYS)
+    s.m.state["camera_recovery"] = {
+        "episodes": [{"start": 1.79e9, "end": 1.79e9 + 22, "reason": "stall", "outcome": "recovered",
+                      "usb_missing": True, "min_speed": 480}],
+        "restarts": [1.79e9 + 6], "suspects": [{"t": 1.79e9 + 400, "sentence": "Camera dropped off USB twice in 6 "
+                                                "minutes (port 2-3.1, fell back to USB 2): suspect the head camera "
+                                                "cable or hub.", "lines": ["usb 2-3.1: USB disconnect"]}]}
+    s.run()
+    md = (Path(s.dirs.report) / "session.md").read_text()
+    assert "- camera: 1 stall(s) acted on, 1 automatic producer restart(s)" in md
+    assert "SUSPECT" in md and "`usb 2-3.1: USB disconnect`" in md
+    assert json.loads((Path(s.dirs.report) / "session.json").read_text())["camera"]["restarts"]
+    assert cr.report_lines(s.m.state["camera_recovery"])[0] in md

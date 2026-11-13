@@ -14,7 +14,9 @@ Server       a Unix socket in the session folder; each client gets the state as 
 RobotLock    flock on <root>/calibd.lock: one calibration job per robot.
 Daemon       one loop step (~2 Hz): deadman tick, capture counters, live detection of the newest pair (process pool),
              the health watch on capture counters + system samples (its events go to events.jsonl and the NOT NORMAL
-             banner), the placement trial while TRIAL (paused in HOLD), state saved.
+             banner), the camera recovery in a full session (camrecover: a stalled camera gets one producer restart per
+             stall, through the flow's own restart path, spoken and in the banner), the placement trial while TRIAL
+             (paused in HOLD), state saved.
 M2 is READ-ONLY on the robot: the producer and motors are only read (producer.Kube(read_only=True)); the banner says so.
 
 CLI (on the robot): python -m calibtool.daemon {start|run|attach|stop|status} --root R [--session S] [--profile P10]
@@ -591,6 +593,8 @@ class Daemon:
         self._paused_at = None          # when the running trial was last interrupted (HOLD, a stalled camera)
         self._stall_since = None        # when the newest pair got older than STALE_S
         self._stall_said = False
+        self.recovery = None            # camrecover.Recovery (a full session: use_recovery)
+        self._sample = None             # the newest system sample the health watch took
         self.stop_flag = threading.Event()
         # prompt ids continue after the ones a previous run of this session spoke (Machine.resume keeps the max)
         self.ids = itertools.count(int(machine.state.get("say_id_max") or 0) + 1)
@@ -633,7 +637,8 @@ class Daemon:
             out.append(f"calibd step failing ({st['step_error_run']} in a row): {st.get('last_step_error')}")
         if st.get("camera_stalled_s") is not None:
             out.append(f"CAMERA STALLED: no new left/right pair for {st['camera_stalled_s']:.0f} s (frozen or dropped); "
-                       "the trial waits")
+                       + ("the trial waits" if self.trial is not None else "the session waits for it"))
+        out += list((st.get("camera_recovery") or {}).get("banner") or ())
         if st["phase"] == "BLOCKED" or (st["phase"] == "HOLD" and st.get("preflight_green") is False):
             out.append("preflight failed: " + ", ".join(c["name"] for c in st["checks"]
                                                         if c["status"] == "fail" and c["gate"] == "collect"))
@@ -702,14 +707,16 @@ class Daemon:
         self.m.state["pool_rebuilds"] = int(self.m.state.get("pool_rebuilds") or 0) + 1
         self.m.store.event("detect_pool_rebuilt", t=self.clock(), rebuilds=self.m.state["pool_rebuilds"])
 
-    def _health(self, t):
+    def _health(self, t) -> list:
+        """the health watch on a fresh sample (every sample_every_s) -> its new events ([] between samples)"""
         if self.watch is None:
-            return
+            return []
         if self._last_sample is not None and t - self._last_sample < self.sample_every_s:
-            return
+            return []
         self._last_sample = t
         snap = self.m.state.get("capture") or {}
         s = dict(self.sampler() or {})
+        self._sample = s
         s["cams"] = snap.get("cams") or {}
         s["sync_median_ms"] = snap.get("sync_median_ms")
         own = self.m.state.get("producer_own_t")
@@ -720,6 +727,39 @@ class Daemon:
         if evs:
             self.m.state["health"] = [e.as_dict() for e in self.watch.events[-HEALTH_KEEP:]]
         self.m.state["system"] = {k: v for k, v in s.items() if k not in ("cams", "dmesg", "producer_log")}
+        return evs
+
+    def use_recovery(self, restart, baseline=None, run=None):
+        """the camera recovery of a full session: restart(reason) restarts the producer (FullFlow.restart_cameras);
+        baseline: the preflight's (head_serials, head_ports); run: camrecover's job runner (tests)"""
+        from calibtool import camrecover, place
+        b = baseline or {}
+
+        def say(text):
+            self._say(place.Say(next(self.ids), float(self.clock()), "camera", text))
+
+        def note_restart(t, why):
+            if self.watch is not None:
+                self.watch.note_restart(t, why)
+        kw = {} if run is None else {"run": run}
+        self.recovery = camrecover.Recovery(
+            restart, event=lambda kind, **k: self.m.store.event(kind, t=self.clock(), **k), say=say,
+            head_serials=b.get("head_serials") or (), head_ports=b.get("head_ports") or (), on_restart=note_restart,
+            **kw)
+        return self.recovery
+
+    def _recover(self, t, evs):
+        """the camera recovery's step (camrecover module text); a HOLD counts as the phase it came from"""
+        r = self.recovery
+        if r is None:
+            return
+        st = self.m.state
+        ph = st.get("held_from") if self.m.phase == "HOLD" else self.m.phase
+        own = st.get("producer_own_t")
+        r.tick(t, ph, st.get("camera_stalled_s"), evs, self._sample,
+               own_until=None if own is None else float(own) + health.OWN_WINDOW_S,
+               busy=bool(getattr(self.flow, "_producer_restarting", False)))
+        st["camera_recovery"] = r.as_dict(t)
 
     def say(self, s):
         """a prompt from another thread (the flow): numbered from self.ids, saved under the machine's lock"""
@@ -768,7 +808,7 @@ class Daemon:
         if full and fresh is not False and self.obs_box is not None:
             self.obs_box.put(fresh, self.miss)
         stalled = self._stall(t)
-        self._health(t)
+        self._recover(t, self._health(t))
         if full and self.flow is not None and self.m.phase in TERMINAL:
             self.flow.handle_terminal_keys()            # D after the end: the motor disable
         if self.trial is not None and self.m.phase == "TRIAL":
@@ -904,7 +944,9 @@ class SystemSampler:
         except OSError:
             d["imu_head"] = None
         try:
-            d["usb"] = {s: v[0] for s, v in pf.usb_speeds(self.sysfs).items()}
+            sp = pf.usb_speeds(self.sysfs)
+            d["usb"] = {s: v[0] for s, v in sp.items()}
+            d["usb_ports"] = {s: v[1] for s, v in sp.items()}
         except OSError:
             pass
         with self._lock:
@@ -1055,6 +1097,9 @@ def cmd_run(a):
             d.flow = _full_flow(prof, m, d, dirs, cap, pools, rig, (W, H), res, probes, dry_run, a.session)
         except Exception as e:  # noqa: BLE001
             flow_failed(m, "could not set up the session", e)
+        if d.flow is not None:
+            # 12 Nov, phantom10: a camera that dropped off USB stayed frozen for 287 s (nothing acted on a stall)
+            d.use_recovery(d.flow.restart_cameras, res.baseline)
     d.start_loop()
     if full and d.flow is not None:
         threading.Thread(target=run_flow, args=(m, d.flow), name="calibd-flow", daemon=True).start()
