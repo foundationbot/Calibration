@@ -222,3 +222,33 @@ def test_check_refuses_tool_without_targets(monkeypatch):
                                                                               "returncode": 0})())
     res = hw.check(hw.DryRun(NAMES, START), dict(plan(), snapshot={"q_deg": START}), tool="t")
     assert not res["ok"] and "targets" in res["problems"][0]
+
+
+
+class FlakyGrab(hw.DryRun):
+    """the grabber fails `fails` times, then works"""
+    def __init__(self, *a, fails=1):
+        super().__init__(*a)
+        self.fails = fails
+
+    def run(self, argv, timeout):
+        self.sent.append(argv)
+        if hw.GRAB in argv and self.fails > 0:
+            self.fails -= 1
+            return 1, "TimeoutError: no 5 consecutive frames in 9.3 s"
+        return 0, "RESULT dry-run"
+
+
+def test_a_failed_burst_is_retried_before_the_wave_stops(tmp_path):
+    r = FlakyGrab(NAMES, START, fails=2)
+    w, _ = make(tmp_path, robot=r)
+    w.run(hand_pose=None)                          # 2 failures, then fine: the wave completes
+    kinds = [json.loads(l)["kind"] for l in (tmp_path / "log.jsonl").read_text().splitlines()]
+    assert kinds.count("burst_retry") == 2 and kinds[-1] == "done"
+
+
+def test_three_failures_stop_the_wave(tmp_path):
+    r = FlakyGrab(NAMES, START, fails=3)
+    w, _ = make(tmp_path, robot=r)
+    with pytest.raises(hw.Stop):
+        w.run(hand_pose=None)

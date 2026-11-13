@@ -49,6 +49,10 @@ MAX_MISS_DEG = 30.0
 MAX_PITCH, MAX_YAW = 26.0, 34.0
 PROFILE_FILE = "/dev/shm/okvis_depth_profile"   # OKVIS's runtime depth-profile request (all engines pre-loaded)
 PROFILE_SETTLE_S = 3.0                          # > one 1280 period (1.93 s) + latency: no old-profile frame in a burst
+# 13 Nov live: right after 768 -> 1280 the grabber got 4 of 5 frames in its 9.3 s (one 1280 depth frame every 1.93 s)
+# and the wave stopped; a capture is not a safety event: try again before stopping
+BURST_RETRIES = 2
+BURST_RETRY_WAIT_S = 2.0
 DESIRED_STILL_S = 0.5
 
 
@@ -313,7 +317,16 @@ class Wave:
             rc, out = p.returncode, p.stdout + p.stderr
         self._event("burst", name=name, rc=rc, dt=round(time.time() - t0, 2), tail=out.strip().splitlines()[-2:])
         if rc != 0:
+            tries = getattr(self, "_burst_tries", 0)
+            if tries < BURST_RETRIES:
+                self._burst_tries = tries + 1
+                self._event("burst_retry", name=name, attempt=tries + 1)
+                if not isinstance(self.r, DryRun):
+                    time.sleep(BURST_RETRY_WAIT_S)
+                return self.burst(name)
+            self._burst_tries = 0
             raise Stop(f"burst {name} failed")
+        self._burst_tries = 0
 
     def hand(self, pose):
         hand = "1" if self.arm == "Right" else "0"
