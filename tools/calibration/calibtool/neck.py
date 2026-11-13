@@ -6,8 +6,10 @@ Safety, each enforced here (tests/test_neck.py pins every one):
     stiffness); Neck.arm() refuses otherwise, before any command
   - Neck.arm() refuses when /dev/shm/desired advances during START_STILL_S (another program is commanding) or when the
     neck joints are not in /dev/shm/config's names
-  - every command pins the arm, spine and leg joints (PIN_PREFIXES) at their angles AT ARM TIME (step 08: the tool's
-    own re-hold of unlisted joints at their measured pose made phantom14's body creep over its grids)
+  - every command pins the arm, spine and leg joints (PIN_PREFIXES) at their angles at the session's FIRST arm (step 08:
+    the tool's own re-hold of unlisted joints made phantom14's body creep; 12 Nov: per-grid pins let a displaced arm
+    sag during the sweep); a later grid returns displaced joints slowly in its first move (RETURN_*); keepalive() is a
+    motionless re-send while waiting, so the master's 30 s stale-command fallback never takes over
   - pitch clamped to +-MAX_PITCH (26: +26 commanded reached +27.7 on phantom15, limit 27.5), yaw to +-MAX_YAW (34: a
     mechanical stop at 35.9 on phantom14), whatever the caller asks
   - kp only: motion_argv takes an optional kp and has no damping parameter at all (gains other than kp are never
@@ -56,6 +58,20 @@ ARRIVE_TIMEOUT_S = 4.0
 # 10 Nov (phantom11 measured 2.53 s per grid pose: 1.0 s ramp + 0.8 s fixed hold + capture): the ramp scales with the
 # step (grid neighbours are 8-11 deg apart) and the hold is short; the capture still waits until the measured neck is
 # within MAX_ERR_DEG (ARRIVE) and still (STILL_DEG between reads), so nothing is captured while the head moves
+# 12 Nov (phantom10, operator: "arm was moving while head was sweeping"): the pins were re-read at every grid, so a
+# joint displaced between grids (an arm bumped at a near placement, the master's 30 s stale-command fallback moving the
+# legs) was pinned where it was and, held at the tool's kp 30, sagged during the sweep: the arm visibly moved, grid by
+# grid (left shoulder roll +11 -> +3 -> -1 -> -4 deg). Now the body is pinned ONCE per session (the first arm(), the
+# robot hanging as the operator enabled it); a later grid whose joints are off by more than RETURN_MIN_DEG brings them
+# back in its first move, slowly (after the countdown: the operator stands back)
+RETURN_MIN_DEG = 2.0
+RETURN_RATE_DEG_S = 10.0
+RETURN_MIN_RAMP_S = 2.0
+# while the session waits (placements, fit) a motionless re-send keeps the master's command fresh: without it the
+# master's 30 s stale-command fallback ("holding last/current") moved phantom10's ankles and knees by itself (11-12 Nov)
+KEEPALIVE_S = 20.0
+KEEPALIVE_RAMP_S = 0.3
+KEEPALIVE_HOLD_S = 0.1
 SPEED_DEG_S = 30.0
 RAMP_MIN_S = 0.35
 FAST_SETTLE_S = 0.2
@@ -86,9 +102,18 @@ def clamp(pitch, yaw):
     return p, y, (p, y) != (float(pitch), float(yaw))
 
 
+def pin_angles(names, q_deg) -> dict:
+    """{joint: deg} of every arm/spine/leg joint (the neck and ankles are not pinned)"""
+    return {n: float(q_deg[i]) for i, n in enumerate(names) if n.startswith(PIN_PREFIXES)}
+
+
+def pins_text(angles: dict) -> str:
+    return ",".join(f"{n}={v:.2f}" for n, v in angles.items())
+
+
 def pins(names, q_deg) -> str:
     """'Joint=deg,...' holding every arm/spine/leg joint at q_deg (the neck and ankles are not pinned)"""
-    return ",".join(f"{n}={q_deg[i]:.2f}" for i, n in enumerate(names) if n.startswith(PIN_PREFIXES))
+    return pins_text(pin_angles(names, q_deg))
 
 
 def neck_errors(out, idx) -> dict:
@@ -187,6 +212,8 @@ class Neck:
             motion_argv(self.tool, 0, 0, "", 1, 1, kp=kp)     # validates kp now
         self.armed = False
         self.pins = None
+        self.session_pins = None    # {joint: deg} taken at the first arm(): held for the whole session
+        self.return_deg = 0.0       # how far the body is off session_pins at this arm(): the first goto returns it slowly
         self.neck_idx = None
         self.commands = []          # every argv sent, in order
         self.log = []               # per command: argv, t_start, t_end, rc, errors
@@ -211,10 +238,39 @@ class Neck:
             raise NeckRefused(f"/dev/shm/desired advanced during {START_STILL_S:g} s ({h0} -> {h1}): something is "
                               "commanding the motors; stop it first (the robot must hang on the gantry)")
         self.neck_idx = (names.index(NECK[0]), names.index(NECK[1]))
-        self.pins = pins(names, q)
+        now = pin_angles(names, q)
+        if self.session_pins is None:
+            self.session_pins = now
+        dev = {n: abs(now[n] - v) for n, v in self.session_pins.items() if n in now}
+        self.return_deg = max(dev.values(), default=0.0)
+        if self.return_deg < RETURN_MIN_DEG:
+            self.return_deg = 0.0
+        self.returning = {n: round(now[n] - v, 2) for n, v in self.session_pins.items()
+                          if n in now and abs(now[n] - v) >= RETURN_MIN_DEG}
+        self.pins = pins_text(self.session_pins)
         self._exit = (h1, self.clock())
         self.armed = True
         return self.pins
+
+    def keepalive(self):
+        """a motionless re-send while the session waits: every pinned joint and the neck at their MEASURED angles
+        (nothing moves, a displaced joint is not pushed back here), so the master's command stays fresh. -> "sent",
+        None (not armed / too soon) or "foreign" (another writer moved /dev/shm/desired: nothing sent)"""
+        if not self.armed or self._exit is None or self.clock() - self._exit[1] < KEEPALIVE_S:
+            return None
+        h = self.robot.desired_head()
+        if h != self._exit[0]:
+            return "foreign"
+        names, q = self.robot.joints()
+        p, y = q[self.neck_idx[0]], q[self.neck_idx[1]]
+        argv = motion_argv(self.tool, round(p, 2), round(y, 2), pins(names, q), KEEPALIVE_RAMP_S, KEEPALIVE_HOLD_S,
+                           kp=self.kp)
+        t0 = self.clock()
+        self.commands.append(argv)
+        rc, out = self.run(argv, timeout=KEEPALIVE_RAMP_S + KEEPALIVE_HOLD_S + TOOL_TIMEOUT_S)
+        self.log.append({"argv": argv, "t_start": t0, "t_end": self.clock(), "rc": rc, "keepalive": True})
+        self._exit = (self.robot.desired_head(), self.clock())
+        return "sent"
 
     def _foreign_check(self):
         h0, t0 = self._exit
@@ -270,13 +326,18 @@ class Neck:
         p, y, clamped = clamp(pitch, yaw)
         self._foreign_check()
         ramp, settle = self.timing(p, y)
+        ret = self.return_deg
+        if ret:                     # the body back to the session's pins, slowly, in this first move after arm()
+            ramp = round(max(ramp, RETURN_MIN_RAMP_S, ret / RETURN_RATE_DEG_S), 2)
+            self.return_deg = 0.0
         argv = motion_argv(self.tool, p, y, self.pins, ramp, settle, kp=self.kp)
         t_start = self.clock()
         self.commands.append(argv)
         rc, out = self.run(argv, timeout=ramp + settle + TOOL_TIMEOUT_S)
         t_end = self.clock()
         errs = neck_errors(out, self.neck_idx)
-        self.log.append({"argv": argv, "t_start": t_start, "t_end": t_end, "rc": rc, "errors": errs})
+        self.log.append({"argv": argv, "t_start": t_start, "t_end": t_end, "rc": rc, "errors": errs,
+                         **({"return_deg": round(ret, 2)} if ret else {})})
         self._exit = (self.robot.desired_head(), self.clock())
         if len(errs) != 2:
             raise NeckMissed(f"pose {p:+.1f}/{y:+.1f}: the tool reported no result for both neck joints (rc {rc}): "

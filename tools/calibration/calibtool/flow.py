@@ -105,6 +105,9 @@ POSE_S = 1.6                    # seconds per grid pose until this session has m
 GRID_DONE_TEXT = "Head sweep done. You can move the board now."
 HALFWAY_TEXT = "Halfway through."
 MOTION_PHASES = frozenset({"GRID", "CHECK_GRID", "IMU_SWEEP"})
+# where the motionless keep-alive runs (neck.KEEPALIVE_S): waiting with the motors on, not in HOLD / ABORTED / LOUD
+KEEPALIVE_PHASES = frozenset({"PLACE", "IMU_PLACE", "CHECK_PLACE", "POST_PLACE", "FIT", "DECIDE", "DEPLOY_SIZE",
+                              "DEPLOY", "POSTCHECK", "REPORT", "FINISH", "DONE"})
 # a HOLD's reason in plain words: (substrings of the raw reason, the words), the first match wins
 _PLAIN = ((("not reached", "no result for both neck joints", "off by"), "the neck did not reach a pose"),
           (("another program", "/dev/shm/desired", "commanding the motors"), "another program moved the motors"),
@@ -329,6 +332,7 @@ class FullFlow:
 
     def _idle(self):
         self.m.tick()
+        self.keepalive()
         t = self.mono()
         if self._lease_beat is None or t - self._lease_beat >= LEASE_BEAT_S:
             self._lease_beat = t
@@ -581,6 +585,11 @@ class FullFlow:
         while True:
             try:
                 n.arm()
+                if getattr(n, "returning", None):
+                    # 12 Nov: a joint off the session's pins (bumped, or moved by the master's stale fallback) goes
+                    # back in the grid's first move, slowly and after the countdown; the operator hears it first
+                    self._event("body_return", joints=n.returning, max_deg=round(n.return_deg, 1))
+                    self._say("grid", "The arms moved. They go back first, slowly.")
                 return n
             except nk.NeckRefused as e:
                 self._event("neck_refused", why=str(e))
@@ -1485,6 +1494,24 @@ class FullFlow:
         for k in self.m.take_keys():
             if k == "D" and not self.fl.get("motors_disabled"):
                 self._motor_key()
+        self.keepalive()
+
+    def keepalive(self):
+        """the motionless re-send while the session waits with the motors on (neck.Neck.keepalive: the master's 30 s
+        stale-command fallback moved phantom10's legs by itself). Never in HOLD / ABORTED / STOPPED_LOUD (send
+        nothing there), never after D, never before the neck was armed."""
+        n = getattr(self, "neck", None)
+        if (n is None or not getattr(n, "armed", False) or self.fl.get("motors_disabled")
+                or self.m.phase not in KEEPALIVE_PHASES):
+            return
+        try:
+            r = n.keepalive()
+        except Exception as e:  # noqa: BLE001  (a failed keep-alive only lets the master's fallback happen)
+            self._event("keepalive_error", error=f"{type(e).__name__}: {e}")
+            return
+        if r == "foreign" and not self.fl.get("keepalive_foreign"):
+            self.fl["keepalive_foreign"] = True
+            self._event("keepalive_skipped", why="another program is writing /dev/shm/desired")
 
 
 def me_warning() -> str:

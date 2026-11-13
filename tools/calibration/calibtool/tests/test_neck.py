@@ -441,3 +441,64 @@ def test_fast_timing_scales_the_ramp_with_the_step_and_holds_briefly():
     n.goto(8, 35)                                        # a tiny step still gets RAMP_MIN_S
     a = n.commands[-1]
     assert float(a[a.index("--ramp") + 1]) == neck.RAMP_MIN_S
+
+
+# ---------------------------------------------------------------- 12 Nov: session pins, slow return, keep-alive
+
+
+def test_pins_are_the_sessions_first_and_a_displaced_body_returns_slowly():
+    n, r, t, c = make()
+    n.arm()
+    pins0 = n.pins
+    n.goto(0, 0)
+    roll = NAMES.index("LeftShoulderPitch")
+    r.q[roll] += 15.0                        # an arm displaced between grids (bumped, or the master's fallback)
+    n.arm()
+    assert n.pins == pins0                   # not re-read: the arm is not pinned where it was displaced to
+    assert n.return_deg == pytest.approx(15.0) and n.returning == {"LeftShoulderPitch": 15.0}
+    n.goto(0, 1)                             # a 1 deg neck step: alone it would be RAMP_MIN_S
+    ramp = float(n.commands[-1][n.commands[-1].index("--ramp") + 1])
+    assert ramp == pytest.approx(max(neck.RETURN_MIN_RAMP_S, 15.0 / neck.RETURN_RATE_DEG_S))
+    assert n.log[-1]["return_deg"] == pytest.approx(15.0)
+    n.goto(0, 2)                             # only the first move after arm() is slowed
+    assert float(n.commands[-1][n.commands[-1].index("--ramp") + 1]) == pytest.approx(neck.RAMP_MIN_S)
+
+
+def test_small_deviation_needs_no_return():
+    n, r, t, c = make()
+    n.arm()
+    r.q[NAMES.index("SpineYaw")] += 1.0
+    n.arm()
+    assert n.return_deg == 0.0
+
+
+def test_keepalive_is_motionless_and_keeps_the_foreign_check_quiet():
+    n, r, t, c = make()
+    n.arm()
+    n.goto(10, 5)
+    assert n.keepalive() is None             # too soon
+    c.sleep(neck.KEEPALIVE_S + 0.1)
+    r.q[NAMES.index("RightElbowPitch")] = -33.0       # the body as it is now (e.g. displaced): pinned there, not pushed
+    before = (r.q[NECK_IDX[0]], r.q[NECK_IDX[1]])      # (the fake tool sags the neck after each command)
+    assert n.keepalive() == "sent"
+    a = n.commands[-1]
+    spec = dict(kv.split("=") for kv in a[1].split(","))
+    assert spec["RightElbowPitch"] == "-33.00"
+    assert (float(spec["NeckPitch"]), float(spec["NeckYaw"])) == pytest.approx(before)
+    assert "--kd" not in a
+    n.goto(11, 5)                            # the own keep-alive is not mistaken for another writer
+
+
+def test_keepalive_sends_nothing_when_another_program_commands():
+    n, r, t, c = make()
+    n.arm()
+    n.goto(0, 0)
+    c.sleep(neck.KEEPALIVE_S + 0.1)
+    r.foreign_at = [c.t]
+    k = len(n.commands)
+    assert n.keepalive() == "foreign" and len(n.commands) == k
+
+
+def test_keepalive_needs_an_armed_neck():
+    n, r, t, c = make()
+    assert n.keepalive() is None
