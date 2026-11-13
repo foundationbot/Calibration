@@ -1167,3 +1167,119 @@ def test_health_runs_after_the_tools_own_producer_restart(tmp_path):
     st = m.store.load_state()
     assert not st.get("step_errors"), st.get("last_step_error")
     assert st["system"]["own_until"] == pytest.approx(m.state["producer_own_t"] + 60.0)
+
+
+# ------------------------------------------------------------------ the camera recovery in the loop (12 Nov, phantom10)
+
+def _sync_run(fn):
+    """camrecover's job runner, synchronous: the restart runs at once"""
+    err = None
+    try:
+        fn()
+    except Exception as e:  # noqa: BLE001
+        err = f"{type(e).__name__}: {e}"
+    return SimpleNamespace(done=lambda: True, error=lambda: err)
+
+
+def _recovering(tmp_path, c, usb):
+    from calibtool import camrecover  # noqa: F401
+    m, cap, d, box, flow, calls = full_daemon(tmp_path, c)
+    base = {"fps": 25.0, "load": 1.0, "boot_id": "b1", "head_serials": ["S1"], "head_ports": ["2-3.1"],
+            "producer": {}}
+    d.sampler = lambda: {"boot_id": "b1", "clock_s": c.t, "load": 1.0, "usb": dict(usb),
+                         "usb_ports": {k: "2-3.1" for k in usb}, "dmesg": []}
+    d.preflight_done(pf.Result([], {}, base))
+    restarts = []
+
+    def restart(reason):
+        restarts.append(reason)
+        m.state["producer_own_t"] = c.t             # what FullFlow.restart_cameras marks
+    d.use_recovery(restart, base, run=_sync_run)
+    m.heartbeat()
+    m.to("PLACE", "test")
+    return m, cap, d, restarts
+
+
+def _stalled(d, c, seconds, dt=0.15):
+    """steps with no new pair (the reader is not stepped)"""
+    for _ in range(int(round(seconds / dt))):
+        c.t += dt
+        d.m.heartbeat()
+        d.step()
+
+
+def test_a_stalled_camera_gets_one_producer_restart_said_and_shown(tmp_path):
+    from calibtool import camrecover as cr
+    c = Clock()
+    usb = {"S1": 5000}
+    m, cap, d, restarts = _recovering(tmp_path, c, usb)
+    _run(d, cap, c, 1.0)
+    _stalled(d, c, 5.0)
+    assert restarts == []
+    assert any("CAMERA STALLED" in b and "the session waits" in b for b in m.state["banner"])
+    _stalled(d, c, 2.0)
+    assert restarts == ["stall"]
+    assert d.watch.restarts and d.watch.restarts[0].reason == "stall"      # health counts it
+    assert any(b.startswith("CAMERA: producer restarted") for b in m.state["banner"]), m.state["banner"]
+    _stalled(d, c, 30.0)
+    assert restarts == ["stall"]                    # one per episode
+    _run(d, cap, c, 1.0)
+    said = [x["text"] for x in m.state["says"]]
+    assert said[-2:] == [cr.STOPPED_TEXT, cr.BACK_TEXT]
+    ev = kinds(m.store)
+    for k in ("camera_stalled", "camera_restart_requested", "camera_restart_done", "camera_recovered"):
+        assert k in ev, k
+    assert m.store.load_state()["camera_recovery"]["active"] is False
+
+
+def test_the_recovery_waits_for_superspeed_then_restarts(tmp_path):
+    from calibtool import camrecover as cr
+    c = Clock()
+    usb = {"S1": 5000}
+    m, cap, d, restarts = _recovering(tmp_path, c, usb)
+    _run(d, cap, c, 1.0)
+    usb.clear()                                     # off the bus
+    _stalled(d, c, 8.0)
+    assert restarts == [] and m.state["camera_recovery"]["state"] == "usb_wait"
+    assert any("waiting up to 30 s" in b for b in m.state["banner"])
+    usb["S1"] = 480
+    _stalled(d, c, 3.0)
+    assert restarts == []
+    usb["S1"] = 5000
+    _stalled(d, c, 1.5)
+    assert restarts == ["stall"]
+    said = [x["text"] for x in m.state["says"]]
+    assert said[-2:] == [cr.USB_TEXT, cr.USB_BACK_TEXT]
+
+
+def test_no_recovery_restart_inside_the_tools_own_restart_window(tmp_path):
+    c = Clock()
+    m, cap, d, restarts = _recovering(tmp_path, c, {"S1": 5000})
+    _run(d, cap, c, 1.0)
+    m.state["producer_own_t"] = c.t                 # the flow's own producer restart just ran
+    _stalled(d, c, 40.0)
+    assert restarts == []
+    _stalled(d, c, 25.0)                            # the own window (60 s) is over and frames are still gone
+    assert restarts == ["stall"]
+
+
+def test_a_hold_from_a_grid_still_recovers_the_camera(tmp_path):
+    c = Clock()
+    m, cap, d, restarts = _recovering(tmp_path, c, {"S1": 5000})
+    m.to("GRID", "test")
+    _run(d, cap, c, 1.0)
+    m.hold("test hold")
+    _stalled(d, c, 7.0)
+    assert m.phase == "HOLD" and restarts == ["stall"]
+
+
+def test_the_sampler_reads_the_head_cameras_usb_ports(tmp_path):
+    for ser, speed, port in (("S1", "5000", "2-3.1"),):
+        dd = tmp_path / "usb" / port
+        dd.mkdir(parents=True)
+        (dd / "idVendor").write_text(pf.MOVIDIUS + "\n")
+        (dd / "serial").write_text(ser + "\n")
+        (dd / "speed").write_text(speed + "\n")
+    s = dm.SystemSampler(kube=None, shm=tmp_path / "shm", sysfs=tmp_path / "usb")
+    s.refresh()
+    assert s()["usb"] == {"S1": 5000} and s()["usb_ports"] == {"S1": "2-3.1"}
