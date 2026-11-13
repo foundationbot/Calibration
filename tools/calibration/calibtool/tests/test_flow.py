@@ -980,14 +980,18 @@ def test_u_uses_the_board_where_it_is(tmp_path):
     assert any(e["kind"] == "grid_end" for e in s.events())
 
 
-def test_u_without_a_board_in_view_says_so(tmp_path):
+def test_u_without_a_board_in_view_searches_with_the_head_then_says_so(tmp_path):
+    """12 Nov operator: 'it says I cannot see the board so I cannot use it ... it should move the head a little to see
+    if it can find it': U with no board -> the head search (SEARCH_MAX per placement), then the old sentence"""
     keys = dict(FULL_KEYS)
-    keys["PLACE"] = ["U", "C", "C", "C", "C", "C", "C", "C", "C"]
+    keys["PLACE"] = ["U", "U", "U", "C", "C", "C", "C", "C", "C", "C", "C"]
     s = Session(tmp_path, keys=keys)
     s.robot_side.make_guide = lambda *a, **k: SimpleNamespace(
         update=lambda t, obs, miss=None: None, done=False, result=None, interrupted=lambda: None, last_obs=None)
     s.run()
-    assert fl.USE_NOT_SEEN_TEXT in [x.text for x in s.says]
+    texts = [x.text for x in s.says]
+    assert texts.count(fl.SEARCH_TEXT) >= fl.SEARCH_MAX
+    assert fl.USE_NOT_SEEN_TEXT in texts[texts.index(fl.SEARCH_TEXT):]
 
 
 def test_the_operator_is_told_when_the_cameras_restart(tmp_path):

@@ -137,6 +137,33 @@ NEW_SPOT_M = 0.15
 NEW_SPOT_GONE_S = 1.0
 NEXT_SPOT_TEXT = "Move the board to the next spot first."
 USE_NOT_SEEN_TEXT = "I cannot see the board, so I cannot use it. Show it to the head, then press U."
+# 12 Nov (operator: "it says I cannot see the board so I cannot use it, it should move the head a little to see if it
+# can find it"): a board not seen for SEARCH_AFTER_S at a new spot, or U with no board, makes the head look around its
+# home pose (small, slow moves, said first); found -> where to move the board for the home view, head back home
+SEARCH_AFTER_S = 10.0
+SEARCH_MAX = 2                      # searches per placement
+SEARCH_POSES = ((0.0, 12.0), (0.0, -12.0), (10.0, 0.0), (-10.0, 0.0), (10.0, 12.0), (10.0, -12.0), (-10.0, 12.0),
+                (-10.0, -12.0))     # (pitch, yaw) deg around home; + pitch = head down, + yaw = toward the robot's left
+SEARCH_LOOK_S = 1.2                 # per pose: wait this long for a fresh detection
+SEARCH_RAMP_S = 1.2
+SEARCH_SETTLE_S = 0.3
+SEARCH_TEXT = "I cannot see the board. Looking for it. The head moves a little."
+SEARCH_NONE_TEXT = "I still cannot see the board. Turn it to face the head and bring it in front of the robot."
+
+
+def board_move_text(pitch, yaw, z) -> str:
+    """the operator's move that brings a board found with the head at (pitch, yaw) into the home view"""
+    parts = []
+    side = float(z) * math.tan(math.radians(abs(float(yaw))))
+    if abs(yaw) >= 1.0:
+        # + yaw: the head turned toward the robot's left = the operator's right; bring the board to the other side
+        parts.append(f"about {int(round(side * 100 / 5.0)) * 5 or 5} centimetres to your {'left' if yaw > 0 else 'right'}")
+    up = float(z) * math.tan(math.radians(abs(float(pitch))))
+    if abs(pitch) >= 1.0:
+        parts.append(f"{'higher' if pitch > 0 else 'lower'} by about {int(round(up * 100 / 5.0)) * 5 or 5} centimetres")
+    if not parts:
+        return "Found it."
+    return "Found it. Move the board " + ", and ".join(parts) + "."
 EXTRAS_PER_E = 2            # E: this many more extra placements, then the fit and the decision again
 OVERRIDE_MIN_JUDGED = 5     # X: never accepts fewer judged regions than this (the rule is decide.Gates.min_judged)
 _JUDGED = re.compile(r"(\d+) judged entries.*?(\d+) needed")
@@ -809,6 +836,7 @@ class FullFlow:
         t0, paused = self.mono(), 0.0
         last = getattr(self, "_last_spot", None)
         moved, gone_t, said_next = last is None, None, False
+        cam_t, seen_t, searches = None, self.mono(), 0
         while True:
             if self.m.phase == "HOLD":
                 th = self.mono()
@@ -832,7 +860,12 @@ class FullFlow:
                     # decides it is good enough. The board must be seen now, and moved from the last placed spot
                     ob = getattr(g, "last_obs", None)
                     if ob is None:
-                        self._say("lost", USE_NOT_SEEN_TEXT)
+                        if searches < SEARCH_MAX and not self._camera_out():
+                            searches += 1
+                            self._search_board("key U")
+                            seen_t = self.mono()
+                        else:
+                            self._say("lost", USE_NOT_SEEN_TEXT)
                         continue
                     if not moved:
                         self._say("correction", NEXT_SPOT_TEXT)
@@ -845,6 +878,26 @@ class FullFlow:
                                       "Step back.")
                     return "placed_near"
             fresh, obs = self.robot.board_obs()
+            if self._camera_out():
+                # 12 Nov: during a camera stall / its recovery the guide hears nothing (it said "cannot see the board"
+                # over a frozen camera); the placement's clock pauses; camrecover speaks for the camera
+                if cam_t is None:
+                    cam_t = self.mono()
+                self._idle()
+                continue
+            if cam_t is not None:
+                paused += self.mono() - cam_t
+                cam_t, seen_t = None, self.mono()
+                g.interrupted()
+                self._say("intro", intro)
+            if fresh is not False and obs is not None:
+                seen_t = self.mono()
+            elif (moved and searches < SEARCH_MAX and self.mono() - seen_t >= SEARCH_AFTER_S
+                  and self.m.phase == phase):
+                searches += 1
+                self._search_board("not seen")
+                seen_t = self.mono()
+                continue
             if fresh is not False and not moved:
                 p = None if obs is None else getattr(obs, "p", None)
                 if obs is None:
@@ -878,6 +931,51 @@ class FullFlow:
                 self._say("skip", place.SKIP_TEXT)
                 return "timeout"
             self._idle()
+
+    def _camera_out(self) -> bool:
+        """the camera stalled or being recovered (camrecover's state, the daemon's stall flag)"""
+        st = self.m.state
+        return bool((st.get("camera_recovery") or {}).get("active")) or st.get("camera_stalled_s") is not None
+
+    def _search_board(self, why):
+        """the head looks around home for the board (SEARCH_POSES, slow, said first); found -> board_move_text; the
+        head goes home after. HOLD / abort stop it like any neck move"""
+        self._event("board_search", why=why)
+        self._say("search", SEARCH_TEXT)
+        self.sleep(2.0)                     # the operator hears it before anything moves
+        n = self._arm()
+        found = {}
+
+        def look(d):
+            t_end = self.mono() + SEARCH_LOOK_S
+            while self.mono() < t_end:
+                fresh, obs = self.robot.board_obs()
+                if fresh is not False and obs is not None:
+                    found.update(pitch=d.command[0], yaw=d.command[1], z=float(obs.z))
+                    return
+                self.sleep(0.1)
+
+        def stop():
+            if found:
+                return "found"
+            return self._between_poses()
+
+        saved = (getattr(n, "fast", None), getattr(n, "ramp_s", None), getattr(n, "settle_s", None))
+        try:
+            n.fast, n.ramp_s, n.settle_s = False, SEARCH_RAMP_S, SEARCH_SETTLE_S     # slow and even: someone is near
+            out = nk.run_grid(n, list(SEARCH_POSES), look, stop)
+        finally:
+            n.fast, n.ramp_s, n.settle_s = saved
+        if out.stopped == "abort":
+            raise Aborted()
+        self._home(n)
+        if found:
+            text = board_move_text(found["pitch"], found["yaw"], found["z"])
+            self._event("board_found", **found, said=text)
+            self._say("correction", text)
+        else:
+            self._event("board_not_found")
+            self._say("lost", SEARCH_NONE_TEXT)
 
     def _flat_wait(self):
         """IMU_PLACE: the board seen (>= FLAT_MIN_TAGS tags) and still for FLAT_STILL_S -> "placed"; C -> "skipped\""""
