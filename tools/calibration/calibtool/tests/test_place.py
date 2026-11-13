@@ -21,6 +21,11 @@ def obs(z=1.1, u=640.0, v=400.0, cut=(), n_tags=35):
     return detect.BoardObs(c, z, n_tags, 4 * n_tags, bool(cut), tuple(cut), c - 150, c + 150)
 
 
+def is_done(text) -> bool:
+    """'Good. That one is done. Step back.', with or without the measured distance (12 Nov: 'Good. 76 centimetres. ...')"""
+    return bool(re.fullmatch(r"Good\. (\d+ centimetres\. )?That one is done\. Step back\.", text))
+
+
 def guide(target=None, **kw):
     return place.PlacementGuide(target or place.target("1.1 m"), focal=F, size=(W, H), **kw)
 
@@ -46,7 +51,7 @@ def test_silent_while_carried_then_one_say_after_a_second_still():
     assert feed(g, moving(8)) == []
     says = feed(g, [obs()] * 4, t0=10.0)
     assert len(says) == 1
-    assert says[0].kind == "good" and says[0].text == "Good. That one is done. Step back."
+    assert says[0].kind == "good" and is_done(says[0].text)
     assert g.done
 
 
@@ -93,10 +98,27 @@ def test_distance_wording(z, first, cm):
     assert s[0].text == f"{first} About {cm} centimetres."
 
 
-def test_loose_tolerance_for_defaults_counts_the_band_it_measured():
-    for z in (0.95, 1.0, 1.2, 1.3):
+def test_defaults_aim_at_their_distance_not_the_whole_band():
+    """12 Nov phantom10: the 0.5 m placement used as-is at 0.66 m sat inside the 0.75 m band, so placement 2 was
+    'Good' at once with no distance said. Now Good only within the aim; the band counts only when the asked depth is
+    out of reach from the board's height (gravity path, test_a_band_depth_short_of_the_nominal...)"""
+    aim = place.target("1.1 m").aim_m
+    assert aim == pytest.approx(0.088)
+    for z, good in ((1.05, True), (1.15, True), (0.95, False), (1.3, False)):
         s = feed(guide(), [obs(z=z)] * 4)
-        assert (s[0].kind == "good") == (protocol.band_of(z)[0] == 1.1), z
+        assert (s[0].kind == "good") == good, (z, s[0].text)
+
+
+def test_the_0_75_m_placement_after_a_0_66_m_board_asks_for_the_distance_and_good_says_it():
+    s = feed(guide(place.target("0.75 m")), [obs(z=0.66)] * 4)
+    assert s[0].kind == "correction" and re.fullmatch(r"Move the board back\. About (5|10) centimetres\.", s[0].text), s[0].text
+    s = feed(guide(place.target("0.75 m")), [obs(z=0.74)] * 4)
+    assert s[0].kind == "good" and s[0].text == "Good. 74 centimetres. That one is done. Step back."
+    assert is_done(s[0].text)
+
+
+def test_far_and_tilted_keep_their_bands():
+    assert place.target("far").aim_m is None and place.target("tilted").aim_m is None
 
 
 def test_far_placement_limits():
@@ -153,7 +175,7 @@ def test_feedback_good_when_the_problem_changes_remaining_amount_when_it_shrinks
     s4 = feed(g, [obs(z=1.5, u=700)] * 4, t0=30.0)[0].text           # moved, but not closer
     assert s4.startswith("Not yet. Bring the board closer.")
     s5 = feed(g, [obs(z=1.1, u=640)] * 4, t0=40.0)[0]
-    assert s5.kind == "good" and s5.text == "Good. That one is done. Step back."
+    assert s5.kind == "good" and is_done(s5.text)
 
 
 def test_the_same_instruction_is_repeated_at_most_once_while_nothing_changes():
@@ -255,7 +277,7 @@ def test_a_board_at_the_feet_is_already_in_the_1_1_m_band():
     o = at(*AT_FEET)
     assert protocol.band_of(o.z)[0] == 1.1
     s = feed(gguide("1.1 m"), [o] * 4)
-    assert [x.text for x in s] == ["Good. That one is done. Step back."]
+    assert len(s) == 1 and is_done(s[0].text)
 
 
 @pytest.mark.parametrize("name", ["0.75 m", "0.5 m", "tilted"])
@@ -342,7 +364,7 @@ def test_partial_progress_says_what_is_left():
     s3 = feed(g, [at(-0.5, x + 0.4)] * 4, t0=20.0)[0].text         # moved, but back the wrong way
     assert s3 == "Not yet. Move the board 40 centimetres closer. Keep the same height."
     s4 = feed(g, [at(-0.5, x)] * 4, t0=30.0)[0]
-    assert s4.kind == "good" and s4.text == "Good. That one is done. Step back."
+    assert s4.kind == "good" and is_done(s4.text)
 
 
 def test_partial_progress_wording_for_every_direction():
@@ -399,7 +421,7 @@ def test_following_the_guide_ends_good_or_out_of_reach_never_beyond_the_stand(pi
                     continue
                 texts, dh = follow(gguide(name, pitch), dh0, dxy0, pitch)
                 where = (name, dh0, dxy0, texts)
-                assert texts[-1] in (place.DONE_TEXT, place.UNREACHABLE_TEXT), where
+                assert is_done(texts[-1]) or texts[-1] == place.UNREACHABLE_TEXT, where
                 if texts[-1] == place.UNREACHABLE_TEXT:
                     assert len(texts) == 1, where
                 assert dh0 - STAND.lower_max_m - 1e-9 <= dh <= dh0 + STAND.raise_max_m + 1e-9, where
@@ -409,7 +431,7 @@ def test_a_band_depth_short_of_the_nominal_counts_when_the_nominal_is_out_of_rea
     """phantom10 (camera 65.9 deg down, 9 Nov live): 1.6 m deep within 30 deg of the axis is near the floor, out of
     the stand's reach; the 1.6 m band starts at 1.35 m, which the trial reached (1.43 m) -> guide there, not skip"""
     texts, _ = follow(gguide("1.6 m", 65.9), -0.6, 0.72, pitch=65.9)
-    assert texts[-1] == place.DONE_TEXT, texts
+    assert is_done(texts[-1]), texts
 
 
 def test_a_height_change_counts_as_movement():
@@ -743,7 +765,7 @@ def test_keep_still_only_after_it_does_not_settle_for_unsettled_s():
         s = g.update(i * 0.5, o, miss=None if o else miss("none", n_tags=0))
         says += [s] if s else []
     says += feed(g, [obs(z=1.1)] * 4, t0=3.5)
-    assert [x.text for x in says] == [place.DONE_TEXT]
+    assert len(says) == 1 and is_done(says[0].text)
 
 
 def test_a_board_carried_steadily_is_not_asked_to_keep_still():
@@ -876,7 +898,7 @@ def test_following_the_guide_on_the_real_view_never_sends_the_board_back_up_or_d
                     continue
                 g = gguide(name, pitch, stand=place.Stand(auto_skip=False), **QUIET)
                 texts, moves = follow_view(g, dh0, dxy0, pitch, coarse=coarse)
-                ok = bool(texts) and (texts[-1] in ENDS or texts[-1].startswith("Close enough"))
+                ok = bool(texts) and (texts[-1] in ENDS or is_done(texts[-1]) or texts[-1].startswith("Close enough"))
                 if not ok or len(set(moves)) > 1:
                     bad.append((name, dh0, dxy0, texts))
     assert not bad, bad[:4]
@@ -889,7 +911,7 @@ def test_a_board_cut_at_the_top_in_the_band_is_moved_along_the_floor_not_lowered
     assert o.cut and o.cut[0] == "top" and 0.70 < o.z < 0.78
     g = gguide("tilted", 40.5, stand=place.Stand(auto_skip=False), **QUIET)
     texts, moves = follow_view(g, dh, dxy, 40.5, coarse=(0.30, 0.40))
-    assert texts[-1] == place.DONE_TEXT and len(texts) <= 3, texts
+    assert is_done(texts[-1]) and len(texts) <= 3, texts
     assert not moves or len(set(moves)) == 1, texts
 
 

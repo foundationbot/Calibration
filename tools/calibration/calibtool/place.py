@@ -101,6 +101,11 @@ VIEW_MARGIN_PX = 20.0
 BAND_STEP_M = 0.05       # depths of the target's band tried when its own is out of reach (phantom10: 1.6 m is)
 BAND_MARGIN_M = 0.05     # ... this far inside the band's edges
 DONE_TEXT = "Good. That one is done. Step back."
+
+
+def done_text(z=None) -> str:
+    """'Good. 76 centimetres. That one is done. Step back.' (the operator hears where it counted; 12 Nov)"""
+    return DONE_TEXT if z is None else f"Good. {int(round(float(z) * 100))} centimetres. That one is done. Step back."
 # 10 Nov (phantom10): the 0.5 m placement bounced between "Lower" and "Raise" (raised, a near board is cut by the
 # image's top edge). A near target's board that two corrections did not bring more than NEAR_GAIN_M nearer, within
 # NEAR_WITHIN_M of the target, is used where it is (its holds count toward the band they measure)
@@ -181,6 +186,8 @@ class Target:
     bearing_deg: object = None          # + toward the robot's left; None: straight ahead, not checked
     tol_deg: object = None
     refuse_beyond_m: object = None      # beyond this: "too far" (the far placement)
+    aim_m: object = None                # Good only within this of distance_m (when that depth is reachable from the
+                                        # board's height; else the band counts, as phantom10's out-of-reach 1.6 m)
 
 
 def _band(d):
@@ -192,8 +199,21 @@ def _band(d):
     return (lo, hi)
 
 
-DEFAULTS = (Target("0.5 m", 0.5, _band(0.5)), Target("0.75 m", 0.75, _band(0.75)), Target("1.1 m", 1.1, _band(1.1)),
-            Target("1.6 m", 1.6, _band(1.6)),
+# 12 Nov phantom10 (operator: "when asked for 0.75 m it was nowhere near there and the voice did not say a thing"): the
+# 0.5 m placement was used as-is at 0.66 m, already inside the 0.75 m band (0.63-0.93 m), so placement 2 was "Good" a
+# moment after the board moved, with no distance said: two placements at the same depth. Defaults now aim at their
+# distance (AIM_MIN_M or AIM_FRAC of it, whichever is larger) and "Good" says the measured distance.
+AIM_MIN_M = 0.06
+AIM_FRAC = 0.08
+
+
+def _aim(d):
+    return round(max(AIM_MIN_M, AIM_FRAC * d), 3)
+
+
+DEFAULTS = (Target("0.5 m", 0.5, _band(0.5), aim_m=_aim(0.5)), Target("0.75 m", 0.75, _band(0.75), aim_m=_aim(0.75)),
+            Target("1.1 m", 1.1, _band(1.1), aim_m=_aim(1.1)),
+            Target("1.6 m", 1.6, _band(1.6), aim_m=_aim(1.6)),
             Target("far", protocol.FAR_ASK_M, tuple(protocol.FAR_ACCEPT_M),
                    refuse_beyond_m=protocol.FAR_REFUSE_BEYOND_M),
             Target("tilted", 0.75, _band(0.75), tilted=True))
@@ -428,7 +448,8 @@ class PlacementGuide:
         if kind == "good":
             self.done, self.result = True, "placed"
             self.rest_t = self._start[0]
-            return self._say(t, kind, DONE_TEXT)
+            self.good_z = float(obs.z)
+            return self._say(t, kind, done_text(obs.z))
         if kind == "unreachable":
             # final, so a pause while carrying the board must not end the placement: two separate rests of a second
             # or one of three (review 9)
@@ -612,6 +633,18 @@ class PlacementGuide:
                         "centimetres.", "raise_head", z - t.distance_m)
             return ("correction", f"Bring the board closer. About {_cm(z - t.distance_m)} centimetres.", "far",
                     z - t.distance_m)
+        if t.aim_m is not None and abs(z - t.distance_m) > t.aim_m + 1e-9:
+            if sp is not None:
+                dh, dxy, h = sp
+                if self._spot(obs, up, h, dh, [t.distance_m]) is not None:      # the asked depth is reachable here
+                    return self._distance(obs, up, sp)
+                # not from this height: the band counts (phantom10's 1.6 m near the floor, 9 Nov)
+            elif z < t.distance_m:
+                return ("correction", f"Move the board back. About {_cm(t.distance_m - z)} centimetres.", "near",
+                        t.distance_m - z)
+            else:
+                return ("correction", f"Bring the board closer. About {_cm(z - t.distance_m)} centimetres.", "far",
+                        z - t.distance_m)
         if t.bearing_deg is not None and t.tol_deg is not None:
             b = self.bearing_deg(obs)
             if abs(b - t.bearing_deg) > t.tol_deg:
