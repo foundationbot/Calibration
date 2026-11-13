@@ -240,15 +240,16 @@ class FlakyGrab(hw.DryRun):
 
 
 def test_a_failed_burst_is_retried_before_the_wave_stops(tmp_path):
-    r = FlakyGrab(NAMES, START, fails=2)
+    r = FlakyGrab(NAMES, START, fails=hw.BURST_RETRIES)
     w, _ = make(tmp_path, robot=r)
-    w.run(hand_pose=None)                          # 2 failures, then fine: the wave completes
+    w.run(hand_pose=None)                          # every retry used, then fine: the wave completes
     kinds = [json.loads(l)["kind"] for l in (tmp_path / "log.jsonl").read_text().splitlines()]
-    assert kinds.count("burst_retry") == 2 and kinds[-1] == "done"
+    assert kinds.count("burst_retry") == hw.BURST_RETRIES and kinds[-1] == "done"
+    assert sum(hw.BURST_RETRY_WAITS_S) >= 30.0     # outlasts the 35 s USB stall with the grab attempts between
 
 
 def test_three_failures_stop_the_wave(tmp_path):
-    r = FlakyGrab(NAMES, START, fails=3)
+    r = FlakyGrab(NAMES, START, fails=hw.BURST_RETRIES + 1)
     w, _ = make(tmp_path, robot=r)
     with pytest.raises(hw.Stop):
         w.run(hand_pose=None)
