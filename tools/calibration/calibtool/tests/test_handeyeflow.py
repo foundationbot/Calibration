@@ -18,10 +18,15 @@ REPORT = {"chosen": "M12+head", "cv": {"M12+head": {"Right": {"n": 9, "median": 
 
 
 class Robot:
+    def deploy_out(self, line):
+        if self.refuse:
+            return "NOT DEPLOYED: hand-eye stale for this camera geometry"
+        return "dry run: 9 commands" if "--dry-run" in line else "DEPLOYED: OKVIS loaded the new config and URDF"
+
     """answers the flow's ssh lines; `logs` = per arm, the log.jsonl lines the wave writes (all at once)"""
 
-    def __init__(self, check=None, logs=None):
-        self.lines, self.check = [], check or {"ok": True, "problems": []}
+    def __init__(self, check=None, logs=None, refuse=False):
+        self.lines, self.check, self.refuse = [], check or {"ok": True, "problems": []}, refuse
         self.logs = logs or {a: [{"t": 0, "kind": "start"}, {"t": 1, "kind": "burst", "name": "01-p08-10-0", "dt": 9},
                                  {"t": 2, "kind": "done", "captures": 2}] for a in ("right", "left")}
 
@@ -41,6 +46,10 @@ class Robot:
             out = "/x/readb.json: 20 captures, 16 clean\nreadb wall time 30 s for 20 captures, 4 processes"
         elif line.startswith("cat ") and "fit.json" in line:
             out = json.dumps(REPORT)
+        elif "handeye_deploy deploy" in line:
+            out = self.deploy_out(line)
+        elif "rollback.sh" in line:
+            out = "rolled back"
         return SimpleNamespace(returncode=0, stdout=out, stderr="")
 
 
@@ -73,14 +82,14 @@ def test_no_yes_moves_nothing():
 
 def test_full_session_right_then_left_then_fit():
     r = Robot()
-    h, out = flow(r)
+    h, out = flow(r, answers=("y", "n"))
     assert h.session() == 0
     s = started(r)
     assert len(s) == 2 and "--arm Right" in s[0] and "--arm Left" in s[1]
     assert "/tool" in s[0] and "--grab /g.py" in s[0] and "/data/calib/handeye/20261111-150000/right" in s[0]
     assert any("armcal.urdffit" in ln and "/u.urdf" in ln for ln in r.lines)
     txt = "\n".join(out)
-    assert "7.0 mm" in txt and "5.1 mm" in txt and "NOT deployed" in txt
+    assert "7.0 mm" in txt and "5.1 mm" in txt and "not deployed" in txt
     assert txt.index("RIGHT arm") < txt.index("Start") if "Start" in txt else True
 
 
@@ -124,3 +133,21 @@ def test_p10_setup_is_shipped_and_consistent():
         bursts = [m for m in s["arms"][arm]["moves"] if m.get("burst")]
         assert bursts and all(len(m["deg"]) == 7 and m["necks"] for m in bursts)
         assert all(abs(p) <= 26 and abs(y) <= 34 for m in bursts for p, y in m["necks"])
+
+
+def test_deploy_dry_run_first_then_y_deploys_and_r_rolls_back():
+    r = Robot()
+    h, out = flow(r, answers=("y", "y", "R"))
+    assert h.session() == 0
+    dep = [ln for ln in r.lines if "handeye_deploy" in ln]
+    assert "geometry" in dep[0] and "--dry-run" in dep[1] and "--dry-run" not in dep[-1] and "deploy --fit" in dep[-1]
+    assert any("rollback.sh" in ln for ln in r.lines)
+    assert any("DEPLOYED" in x for x in out)
+
+
+def test_a_refused_deploy_changes_nothing_and_says_why():
+    r = Robot(refuse=True)
+    h, out = flow(r, answers=("y", "y"))
+    assert h.session() == 6
+    assert not [ln for ln in r.lines if "handeye_deploy deploy" in ln and "--dry-run" not in ln]
+    assert any("stale for this camera geometry" in x for x in out)

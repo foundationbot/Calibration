@@ -9,8 +9,11 @@ The session, in order (the operator is told what happens before anything moves):
   3. the operator's Y; then per arm: the wave detached on the robot (it survives a lost link: the arm holds wherever
      it stops), its log followed on screen; S + Enter writes the STOP file (the runner stops before its next command,
      the arm holds); read B over the arm's captures on the robot (scripts/handeye_match.sh)
-  4. the fit of both arms on the robot (armcal.urdffit): the corrected URDF written in the session folder, NOT deployed
-     (the deploy is milestone H4), and the table: held-out wrist error per arm, new vs the unmodified URDF.
+  4. the fit of both arms on the robot (armcal.urdffit): the corrected URDF written in the session folder, and the
+     table: held-out wrist error per arm, new vs the unmodified URDF.
+  5. the deploy (calibtool.handeye_deploy, on the robot): a dry run first (a refusal is said, nothing changes), Y
+     deploys (URDF + camera-in-head in T_BS, robot.env, OKVIS restart, load check, automatic rollback on failure),
+     then R rolls back if wanted.
 """
 from __future__ import annotations
 
@@ -157,6 +160,49 @@ class HandEye:
         d = json.loads(js) if rc2 == 0 and js.strip() else {}
         return {"rc": 0, "report": d, "urdf": urdf_out}
 
+    def deploy(self, dry_run) -> dict:
+        """calibtool.handeye_deploy ON the robot (it needs numpy; the laptop side is stdlib only) over this session's
+        fit folder: geometry.json from the bursts first, the records next to fit.json. -> {"rc", "text"}"""
+        d = shlex.quote(self.dir)
+        prep = (f"cp {d}/right/readb-right.json {d}/left/readb-left.json {d}/ && "
+                + self.py(f"-m calibtool.handeye_deploy geometry {d}/right/[0-9][0-9]-*.npz {d}/left/[0-9][0-9]-*.npz "
+                          f"--robot {shlex.quote(self.p.bot)} --session {shlex.quote(self.sid)} "
+                          f"--out {d}/geometry.json"))
+        rc, out, err = self.sh(prep, timeout=300)
+        if rc != 0:
+            return {"rc": rc, "text": (err or out).strip()[-600:]}
+        args = (f"-m calibtool.handeye_deploy deploy --fit {d} --deploy-dir {d}/deploy --session {shlex.quote(self.sid)}"
+                f" --no-wait-key" + (" --dry-run" if dry_run else ""))
+        rc, out, err = self.sh(self.py(args), timeout=600)
+        return {"rc": rc, "text": (out + ("\n" + err if err.strip() else "")).strip()}
+
+    def offer_deploy(self) -> int:
+        """the dry run first (a refusal is said before anything changes), then Y deploys, then R can roll back"""
+        say = self.out
+        say("Checking the deploy (dry run, nothing changes) ...")
+        dr = self.deploy(dry_run=True)
+        first = [ln for ln in dr["text"].splitlines() if ln.strip()][:12]
+        if dr["rc"] != 0 or "NOT DEPLOYED" in dr["text"]:
+            say("The deploy would be refused; nothing changed:")
+            for ln in first:
+                say("  " + ln)
+            return 6
+        say("The deploy would: write the corrected URDF and a copy of the live OKVIS config (camera-in-head added to "
+            "T_BS once), point robot.env at it and restart OKVIS; a rollback is kept.")
+        if (self.ask("Deploy it? OKVIS restarts. [y/N]: ") or "n").strip().lower() not in ("y", "yes"):
+            say("  not deployed; the fit stays in the session folder")
+            return 0
+        res = self.deploy(dry_run=False)
+        for ln in [x for x in res["text"].splitlines() if x.strip()][:30]:
+            say("  " + ln)
+        if res["rc"] != 0:
+            say("The deploy did not complete (rolled back automatically when OKVIS did not load it).")
+            return 7
+        if (self.ask("R + Enter rolls it back, Enter keeps it: ") or "").strip().upper() == "R":
+            rc, out, err = self.sh(f"bash {shlex.quote(self.dir)}/deploy/rollback.sh", timeout=300)
+            say("  rolled back" if rc == 0 else f"  the rollback failed: {(err or out).strip()[-300:]}")
+        return 0
+
     # ------------------------------------------------------------ the session
     def session(self) -> int:
         say = self.out
@@ -207,8 +253,8 @@ class HandEye:
             return 5
         for ln in table(f["report"]):
             say(ln)
-        say(f"The corrected URDF is on the robot at {f['urdf']} (NOT deployed: the deploy is still to come).")
-        return 0
+        say(f"The corrected URDF is on the robot at {f['urdf']}.")
+        return self.offer_deploy()
 
 
 def describe(e) -> str:
