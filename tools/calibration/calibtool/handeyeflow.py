@@ -102,7 +102,11 @@ class HandEye:
             extra += f" --profiles {shlex.quote(self.cfg['profiles'])}"
         # the WHOLE detached group redirected (13 Nov: with only the python redirected, the subshell kept ssh's
         # stdout open, the ssh call hung for its timeout and the laptop lost the session while the arm moved)
-        line = (f"mkdir -p {shlex.quote(d)} && ( {{ {self.py(self.wave_args(arm) + ' --out ' + shlex.quote(d) + extra)}"
+        # an earlier run's log moved aside first (13 Nov live: a retried left arm wrote into the folder of its stopped
+        # first try; follow() read the old "stopped" line and left a running wave unfollowed)
+        q = shlex.quote(d)
+        line = (f"mkdir -p {q} && {{ [ ! -f {q}/log.jsonl ] || mv {q}/log.jsonl {q}/log.prev-$(date +%s).jsonl; }}"
+                f" && ( {{ {self.py(self.wave_args(arm) + ' --out ' + shlex.quote(d) + extra)}"
                 f" ; }} > {shlex.quote(d)}/run.out 2>&1 < /dev/null & ) ; echo started")
         rc, out, err = self.sh(f"setsid bash -c {shlex.quote(line)}")
         if "started" not in out:

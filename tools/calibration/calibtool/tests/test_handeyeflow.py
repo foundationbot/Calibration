@@ -107,7 +107,7 @@ def test_alive_check_cannot_match_its_own_shell():
     r = Robot()
     h, _ = flow(r)
     h.session()
-    follow = [ln for ln in r.lines if "log.jsonl" in ln][0]
+    follow = [ln for ln in r.lines if "tail -n +" in ln][0]
     assert "[h]andeye_wave.py" in follow
 
 
@@ -164,3 +164,16 @@ def test_the_detached_wave_redirects_its_whole_group_so_ssh_returns():
     import shlex as _s
     body = _s.split(inner)[0]
     assert "( {" in body and "; } >" in body and "run.out 2>&1 < /dev/null &" in body
+
+
+def test_an_earlier_runs_log_is_moved_aside_before_a_new_wave():
+    """13 Nov live: the retried left arm's follow() read the first try's 'stopped' line and quit at once"""
+    r = Robot()
+    h, _ = flow(r)
+    h.upload_plans()
+    h.start_wave("Left")
+    line = [ln for ln in r.lines if ln.startswith("setsid")][0]
+    import shlex as _s
+    body = _s.split(line.split("setsid bash -c ", 1)[1])[0]
+    assert "mv /data/calib/handeye/20261111-150000/left/log.jsonl" in body or "log.prev-" in body
+    assert body.index("log.prev-") < body.index("handeye_wave.py")
