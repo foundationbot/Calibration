@@ -74,29 +74,60 @@ What it gives on phantom14's wave 2, against FAST:
 - model changes move a capture about 0.3 mm (FAST: 0.7 mm, p90 3-4 mm);
 - about a third of the captures fail the settled check and are not used.
 
-## The HEAD term and the deploy (H4)
+## The models and the camera term
 
-M12+head fits the camera's position in the head. That is not a URDF origin: the camera sits in the Head link through
-OKVIS's T_BS, which the head calibration owns. `urdffit.write_urdf` writes the URDF terms only and states the HEAD
-term in the file's header.
+`urdffit` fits every candidate, scores each by leaving one arm pose out at a time, and keeps the one with the
+smallest held-out wrist error. The candidates (`urdffit.MODELS`):
 
-The deploy (`calibtool/handeye_deploy.py`, module text = its README) puts HEAD into T_BS's translation, once:
-T_BS' = D(HEAD) T_BS, the rotation kept (the fit's prediction is T_TC = T_TB(neck) · D · T_BS · T_SC, so this is the
-only place it can go without changing the prediction; a test composes the written URDF and config and gets the fit's
-offsets back to 1e-6 mm, and the other order misses by > 5 mm). In short:
+| Model | Terms | Note |
+|---|---|---|
+| `M12+headR` | NeckYaw origin, a shoulder-roll zero per arm, the camera's **rotation** in the head (HEADR, deg) | listed first: wins a tie |
+| `M12+head` | the same, with the camera's **position** in the head (HEAD, mm) instead | H-1's model on phantom14 |
+| `M12` | NeckYaw origin and the shoulder rolls; no camera term | the fallback and the model-only deploy |
+| `M9`, `X1` | NeckYaw origin + right roll; the camera's position only | |
+
+How to read it:
+- **Why the rotation:** on phantom10 the head calibration's camera rotation was a few degrees off. One degree at the
+  wrist's ~0.6 m is ~10 mm. Held-out median / p90, M12+head -> M12+headR:
+  - 11 Nov: right 7.0 / 11.5 -> 3.9 / 10.4 mm, left 5.1 / 8.4 -> 3.6 / 8.4 mm (HEADR about -0.3, +3.4, 0.0 deg);
+  - 13 Nov (another head calibration): right 9.1 / 12.8 -> 5.7 / 10.5 mm, left 17.1 / 22.3 -> 11.2 / 14.8 mm (HEADR
+    about -2.7, +2.1, -1.5 deg).
+- **phantom14 still picks the position:** on H-1's data M12+head scores 3.8 mm and M12+headR 5.8 mm, so the choice
+  stays M12+head there (`test_p14_replay.py` pins this).
+- **Not a candidate unless asked for:** `M12+headRT` (position and rotation, 11 terms). It overfits: on 13 Nov it put
+  HEAD.y at +42.6 mm. Ask for it with `--models M12+headRT,...`.
+- **Captures more than 15 mm from their arm's median are dropped** before the fit. Without that cut, 11 Nov's right arm
+  goes to 11.5 / 52 mm.
+
+The camera term is one transform D = `urdffit.head_transform(HEAD, HEADR)` = [R | t] in the head frame. A point p of
+the head goes to R p + t: the camera is turned about the head's axes first, then moved. Synthetic captures with a
+known 2-3 deg turn give it back exactly when noise-free. With 2 mm of noise per capture, each axis is within 0.33 deg
+(standard errors 0.13-0.25 deg).
+
+## The camera term and the deploy (H4)
+
+The camera term is not a URDF origin: the camera sits in the Head link through OKVIS's T_BS, which the head
+calibration owns. `urdffit.write_urdf` writes the URDF terms only and states HEAD / HEADR in the file's header.
+
+The deploy (`calibtool/handeye_deploy.py`, module text = its README) puts D into T_BS, once: T_BS' = D T_BS. For
+M12+headR that changes T_BS's rotation and translation (all 12 numbers, full precision). For M12+head it changes the
+translation only. Why this order: the fit's prediction is T_TC = T_TB(neck) · D · T_BS · T_SC, so D T_BS is the only
+place D can go without changing the prediction. A test rebuilds each capture from the written URDF and config and
+gets the fit's offsets back to 1e-7 mm, for a camera moved, turned, and both. The other order (T_BS D) misses by 17-25
+mm, and a deploy built that way refuses itself. In short:
 
 - **What it writes** on the robot, next to the old files (never changing them): `<robot>_mk1_handeye_<date>.urdf` (the
   robot's own URDF with the fitted origins and a provenance header) and a copy of the LIVE OKVIS config with T_BS moved
-  by HEAD, `urdf:` pointing at the new URDF and a `# handeye: {...}` line; then robot.env names the new config and
+  by D, `urdf:` pointing at the new URDF and a `# handeye: {...}` line; then robot.env names the new config and
   OKVIS restarts by the path the head tool uses (DaemonSet or okvis.sh; never a zero grace period).
 - **Its checks** (any one refuses, nothing written): the machine-id names the fit's robot; robot.env, the config and the
   URDF are what the snapshot read; the URDF OKVIS reads is the one the captures were matched with (md5); the live
   T_BS and cameras' T_SC are the ones the captures were taken with (else "hand-eye stale for this camera geometry");
-  the live config does not carry this fit already (HEAD never twice); the written files reproduce the fit.
+  the live config does not carry this fit already (D never twice); the written files reproduce the fit.
 - **Verified** by OKVIS's log: the new config's sha (entrypoint) and `[Urdf] loaded '<new URDF>'`. A crash loop or a
   failed load rolls back by itself.
 - **Rolling back:** R in the tool, or `bash <deploy dir>/rollback.sh`: robot.env as it was, OKVIS restarted.
-- **Model only** (`--model-only`): T_BS kept, the M12 URDF (fitted without HEAD).
+- **Model only** (`--model-only`): T_BS kept, the M12 URDF (fitted without a camera term).
 - **Other consumers** (`calibtool/config/handeye_consumers.yaml`): the burst point cloud (Moonstone, hard-coded URDF)
   gets the per-robot URDF published as a file; cuRobo and box-pick are listed as not updated.
 

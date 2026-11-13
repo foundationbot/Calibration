@@ -11,19 +11,27 @@ correction, w the encoders' wrist point). Under changed origins, its offset is
 
     off = T_TB'(yaw, pitch) · D · T_BC · m  -  w'(q)        (mm, Torso frame)
 
-with T_TB' the neck chain and w' the wrist point of the changed URDF and D a translation of the camera in the head
-(the HEAD term). Valid for changes upstream of the matched links (neck, shoulders) and in the camera chain.
+with T_TB' the neck chain and w' the wrist point of the changed URDF and D = head_transform(HEAD, HEADR) the camera
+moved in the head: D = [R | t], R the rotation vector HEADR (deg) and t the translation HEAD (mm), both in the head
+frame; D · p = R · p + t (the camera turned about the head's origin, then moved). Valid for changes upstream of the
+matched links (neck, shoulders) and in the camera chain.
 
-The models (the hand-eye plan, section 4, and H-1's result), parameters in mm and deg:
-  M12+head (default, 8): NeckYaw origin xyz, a ShoulderRoll zero per arm, the camera's position in the head;
-  M12 (5): without the head term -- phantom14's deployed model, the fallback when the neck angles can't separate
-           the head term from the NeckYaw origin;
+The candidate models (MODELS: the hand-eye plan, section 4, H-1's result and phantom10's 11 + 13 Nov data), parameters
+in mm and deg; run() fits each, cross-validates each and keeps the one with the smallest held-out error:
+  M12+headR (DEFAULT, 8): NeckYaw origin xyz, a ShoulderRoll zero per arm, the camera's ROTATION in the head
+           (HEADR). On phantom10 it beat M12+head on both days (held-out median right 7.0 -> 3.9 mm and left
+           5.1 -> 3.6 mm on 11 Nov; right 9.1 -> 5.7 and left 17.1 -> 11.2 mm on 13 Nov): the head calibration's
+           camera rotation is a few degrees off, and a degree at the wrist's ~0.6 m is ~10 mm;
+  M12+head (8): the same with the camera's POSITION in the head (HEAD) instead -- H-1's model (phantom14);
+  M12 (5, FALLBACK): no camera term -- phantom14's deployed model, and the model-only deploy's;
   M9 (4): NeckYaw origin + the right shoulder roll;  X1 (3): the camera's position in the head only.
+Not a candidate unless asked for (EXTRA_MODELS, --models): M12+headRT (11: position AND rotation) overfits (13 Nov:
+HEAD.y +42.6 mm).
 Selection of the captures (before fitting): clean, and within OUTLIER_MM of the arm's median offset.
 
-The HEAD term is not a URDF origin: the camera sits in the Head link through T_BS, which the head calibration owns.
-write_urdf() therefore writes the URDF terms only and states the HEAD term in the header; the deploy
-(calibtool/handeye_deploy.py) puts it into T_BS's translation, once (see README.md)."""
+The camera terms (HEAD, HEADR) are not URDF origins: the camera sits in the Head link through T_BS, which the head
+calibration owns. write_urdf() therefore writes the URDF terms only and states the camera terms in the header; the
+deploy (calibtool/handeye_deploy.py) puts them into T_BS, once: T_BS' = D T_BS (see README.md)."""
 from __future__ import annotations
 
 import argparse
@@ -35,6 +43,7 @@ from pathlib import Path
 import numpy as np
 
 from armcal.urdf import Urdf, write_variant
+from rigmath import exp_rot  # noqa: E402  (scripts/ on sys.path through armcal)
 
 OUTLIER_MM = 15.0
 FD_STEP = 0.1                      # mm or deg: the finite-difference Jacobian step (as H-1 and phantom14)
@@ -56,16 +65,31 @@ def P_zero(joint: str):
     return f
 
 
+def P_rot(joint: str, i: int):
+    """the i-th component of a rotation vector (deg) of `joint`; only "HEAD" (the camera in the head) takes one"""
+    def f(v, ch):
+        ch.setdefault(joint, {}).setdefault("drot", np.zeros(3))[i] += v
+    return f
+
+
 NY = [("NY." + a, P_xyz("NeckYaw", i)) for i, a in enumerate("xyz")]
 HEAD = [("HEAD." + a, P_xyz("HEAD", i)) for i, a in enumerate("xyz")]
+# 13 Nov phantom10: with that day's refitted camera rotations the offsets grew with neck yaw (+-15 mm over +-12 deg)
+# and no translation model fitted them (M12+head 9.6 / 16 mm held out): the camera's ROTATION in the head
+HEADR = [("HEADR." + a, P_rot("HEAD", i)) for i, a in enumerate("xyz")]
 RROLL, LROLL = ("Rroll0", P_zero("RightShoulderRoll")), ("Lroll0", P_zero("LeftShoulderRoll"))
-MODELS = {
+MODELS = {                       # the default candidates, in order (a tie in choose() goes to the earlier)
+    "M12+headR": NY + [RROLL, LROLL] + HEADR,
     "M12+head": NY + [RROLL, LROLL] + HEAD,
     "M12": NY + [RROLL, LROLL],
     "M9": NY + [RROLL],
     "X1": HEAD,
 }
-DEFAULT, FALLBACK = "M12+head", "M12"
+EXTRA_MODELS = {                 # fitted only when asked for (--models): 13 Nov, HEAD.y +42.6 mm -- overfits
+    "M12+headRT": NY + [RROLL, LROLL] + HEAD + HEADR,
+}
+ALL_MODELS = {**MODELS, **EXTRA_MODELS}
+DEFAULT, FALLBACK = "M12+headR", "M12"
 
 
 def build(spec, x) -> dict:
@@ -124,14 +148,25 @@ def select(obs, max_mm: float = OUTLIER_MM):
 
 
 # ------------------------------------------------------------------------------------------------- prediction
-def offsets(obs, urdf: Urdf, head_dxyz=None) -> np.ndarray:
-    """(n,3) mm: each capture's wrist offset under `urdf` (and the camera moved by head_dxyz mm in the head)"""
+def head_transform(head_dxyz=None, head_drot=None) -> np.ndarray:
+    """D (4x4, m) = [R | t]: R the rotation vector head_drot (deg, head frame; Rodrigues), t = head_dxyz (mm, head
+    frame). It maps the camera's place in the head: T_BC' = D @ T_BC, i.e. a point p of the head frame goes to
+    R p + t -- turned about the head's origin first, then moved. No term: the identity."""
+    D = np.eye(4)
+    if head_drot is not None:
+        D[:3, :3] = exp_rot(np.radians(np.asarray(head_drot, float)))
+    if head_dxyz is not None:
+        D[:3, 3] = 1e-3 * np.asarray(head_dxyz, float)
+    return D
+
+
+def offsets(obs, urdf: Urdf, head_dxyz=None, head_drot=None) -> np.ndarray:
+    """(n,3) mm: each capture's wrist offset under `urdf` (and the camera moved by head_dxyz mm / turned by head_drot
+    deg in the head)"""
     if not obs:
         return np.zeros((0, 3))
     neck = urdf.chain("Torso", "Head")
-    D = np.eye(4)
-    if head_dxyz is not None:
-        D[:3, 3] = 1e-3 * np.asarray(head_dxyz, float)
+    D = head_transform(head_dxyz, head_drot)
     out = []
     for o in obs:
         wrist = urdf.chain("Torso", o.side + "WristRollLink")
@@ -142,8 +177,8 @@ def offsets(obs, urdf: Urdf, head_dxyz=None) -> np.ndarray:
 
 def off_change(obs, base: Urdf, change: dict) -> np.ndarray:
     change = dict(change)
-    head = change.pop("HEAD", None)
-    return offsets(obs, base.changed(change), None if head is None else head["dxyz"])
+    head = change.pop("HEAD", None) or {}
+    return offsets(obs, base.changed(change), head.get("dxyz"), head.get("drot"))
 
 
 # ------------------------------------------------------------------------------------------------- fit
@@ -260,26 +295,35 @@ def cv_summary(folds) -> dict:
 
 
 def choose(cv: dict, models=tuple(MODELS)) -> str:
-    """the candidate with the smallest pooled held-out median (cross-validation inside the fit data)"""
+    """the candidate with the smallest pooled held-out median (cross-validation inside the fit data); a tie goes to
+    the earlier in `models`"""
     return min((m for m in models if m in cv), key=lambda m: cv[m]["pooled_median"])
 
 
 # ------------------------------------------------------------------------------------------------- output
 def write_urdf(base: Urdf, f: Fit, out, provenance: list[str] = ()) -> Path:
-    """the corrected URDF: base with the fitted origins; the HEAD term (not a URDF origin) stated in the header"""
+    """the corrected URDF: base with the fitted origins; the camera terms HEAD / HEADR (not URDF origins) stated in
+    the header"""
     ch = dict(f.change)
     head = ch.pop("HEAD", None)
     lines = [f"model {f.model}: " + ", ".join(f"{n} = {v:+.3f} +- {e:.3f}" for n, v, e in zip(f.names, f.x, f.se))
              + " (mm, deg)",
              f"condition {f.cond:.0f}; rms {f.rms:.2f} mm per axis; captures right {f.n_right}, left {f.n_left}"]
-    if head is not None:
+    if head is not None and "dxyz" in head:
         lines.append("camera-in-head translation HEAD = %s mm (head frame) is NOT in this file: apply it once, to "
-                     "T_BS's translation (T_BS' = D(HEAD) T_BS), or not at all" % np.round(head["dxyz"], 3).tolist())
+                     "T_BS (T_BS' = D T_BS), or not at all" % np.round(head["dxyz"], 3).tolist())
+    if head is not None and "drot" in head:
+        lines.append("camera-in-head rotation HEADR = %s deg (rotation vector, head frame) is NOT in this file: apply "
+                     "it once, to T_BS (T_BS' = D T_BS, D = [R(HEADR) | HEAD]), or not at all"
+                     % np.round(head["drot"], 4).tolist())
     return write_variant(base, ch, out, lines + list(provenance))
 
 
 def run(right_json, left_json, urdf, models=tuple(MODELS), held_out=(), max_mm=OUTLIER_MM) -> dict:
     """the whole stage 2 on readb outputs: selection, full fit and LOPO per model, the choice, held-out scoring"""
+    unknown = [m for m in models if m not in ALL_MODELS]
+    if unknown:
+        raise ValueError(f"unknown models {unknown} (known: {', '.join(ALL_MODELS)})")
     base = Urdf.of(urdf)
     R0, _ = load_records(right_json) if right_json else ([], "Right")
     L0, _ = load_records(left_json) if left_json else ([], "Left")
@@ -294,7 +338,7 @@ def run(right_json, left_json, urdf, models=tuple(MODELS), held_out=(), max_mm=O
                               held_right=[o.name for o in HR], held_left=[o.name for o in HL]), models={}, cv={})
     fits = {}
     for m in models:
-        spec = MODELS[m]
+        spec = ALL_MODELS[m]
         f = fit(spec, R, L, base, m)
         fits[m] = f
         rep["models"][m] = f.summary()
@@ -314,7 +358,8 @@ def main(argv=None) -> int:
     ap.add_argument("--right", help="readb records of the right arm (JSON)")
     ap.add_argument("--left", help="readb records of the left arm (JSON)")
     ap.add_argument("--urdf", required=True, help="the URDF the captures were matched with")
-    ap.add_argument("--models", default=",".join(MODELS))
+    ap.add_argument("--models", default=",".join(MODELS),
+                    help=f"candidates, comma-separated (default: {','.join(MODELS)}; also: {','.join(EXTRA_MODELS)})")
     ap.add_argument("--held-out", default="", help="comma-separated arm poses (e.g. p08,pL09) kept out of the fit")
     ap.add_argument("--report", required=True)
     ap.add_argument("--out-urdf", help="write the chosen model's URDF here")

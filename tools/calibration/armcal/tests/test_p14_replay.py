@@ -3,7 +3,8 @@ skipped without it):
   - the numpy fusion equals the C++ module's stored fusions;
   - read B (burst file -> record, the fast computation) reproduces stored per-capture records of both arms;
   - stage 2 reproduces H-1's M12+head and M12 fits (parameters, standard errors, condition number, the
-    leave-one-arm-pose-out folds) and phantom14's deployed M12 URDF."""
+    leave-one-arm-pose-out folds) and phantom14's deployed M12 URDF. These name M12+head explicitly: the default
+    candidate is M12+headR since 13 Nov, and the cross-validation over the default set still picks M12+head here."""
 import json
 from pathlib import Path
 
@@ -85,6 +86,16 @@ def test_stage2_cross_validation_reproduces_h1(h1_data):
         assert np.allclose(r["new"], w["new"], atol=0.01) and np.allclose(r["base"], w["base"], atol=0.01)
     s = urdffit.cv_summary(folds)
     assert round(s["Right"]["median"], 1) == 3.6 and round(s["Left"]["median"], 1) == 5.3
+
+
+def test_the_default_candidates_choose_m12_head_on_phantom14(h1_data):
+    """the rotation model is the default candidate, but on phantom14's H-1 data the camera term that helps is the
+    position: the cross-validation picks M12+head (pooled held-out median 3.84 mm) over M12+headR (5.76 mm)"""
+    base, R, L, _, _, _ = h1_data
+    cv = {m: urdffit.cv_summary(urdffit.lopo(spec, R, L, base, m)) for m, spec in urdffit.MODELS.items()}
+    assert urdffit.choose(cv) == "M12+head"
+    assert cv["M12+head"]["pooled_median"] == pytest.approx(3.836, abs=0.01)
+    assert cv["M12+headR"]["pooled_median"] == pytest.approx(5.758, abs=0.01)
 
 
 def test_stage2_reproduces_phantom14s_deployed_urdf(p14, tmp_path):
