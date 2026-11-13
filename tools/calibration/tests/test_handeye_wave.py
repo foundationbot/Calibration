@@ -252,3 +252,11 @@ def test_three_failures_stop_the_wave(tmp_path):
     w, _ = make(tmp_path, robot=r)
     with pytest.raises(hw.Stop):
         w.run(hand_pose=None)
+
+
+def test_check_ignores_the_neck(monkeypatch):
+    monkeypatch.setattr(hw.subprocess, "run", lambda *a, **k: type("P", (), {"stdout": "targets", "stderr": "",
+                                                                              "returncode": 0})())
+    now = dict(START, NeckPitch=-14.7, NeckYaw=-11.2)
+    res = hw.check(hw.DryRun(NAMES, now), dict(plan(), snapshot={"q_deg": START}), tool="t", grab_test=lambda: (0, ""))
+    assert res["ok"], res["problems"]

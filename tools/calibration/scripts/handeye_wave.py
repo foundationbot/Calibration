@@ -189,7 +189,9 @@ def check(robot, plan, tool=MOTOR_TOOL, grab_test=None) -> dict:
     _, now = robot.names_and_angles()
     ref = (plan.get("snapshot") or {}).get("q_deg")
     if ref:
-        dev = {n: round(now[n] - ref[n], 2) for n in ref if n in now and abs(now[n] - ref[n]) > CHECK_MAX_DEV_DEG}
+        # the neck is commanded at every pose (and the clearance was checked at all planned neck angles): not compared
+        dev = {n: round(now[n] - ref[n], 2) for n in ref if n in now and not n.startswith("Neck")
+               and abs(now[n] - ref[n]) > CHECK_MAX_DEV_DEG}
         out["moved_since_plan"] = dev
         if dev:
             problems.append("the body is not as in the plan's snapshot (re-plan the clearance): "
