@@ -121,6 +121,9 @@ How to read it:
   origin xyz (shared), a ShoulderRoll zero offset per arm, and the camera's position in the head (8 parameters).
   phantom14's deployed M12 (5 parameters, without the head term) is the fallback when the neck angles can't separate
   the head term (correlation, standard errors). Results: `tools/calibration/results/handeye-h1-2026-11-11/`.
+- **Since 13 Nov the first candidate is M12+headR**: the camera's rotation in the head instead of its position. It won
+  on both phantom10 days; phantom14's data still choose M12+head. M12+headRT (both terms) overfits and is opt-in.
+  See `tools/calibration/armcal/README.md`, "The models and the camera term".
 - **The candidate list is fixed before any data are seen.** Proposal:
   - M12;
   - M9 (one shoulder roll);

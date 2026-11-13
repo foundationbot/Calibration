@@ -2,8 +2,9 @@
 post-check rule and the head tool's "stale" line -- against a FAKE robot only (test_deploy.FakeRobot, extended with the
 URDF reader's log lines, the host name, the machine-id and a directory listing). Nothing here touches a robot.
 
-The fit is synthetic: captures of both arms seen through a robot with known URDF errors and a known camera offset in
-the head (as armcal's test_urdffit), written as readb outputs, fitted by armcal.urdffit.run."""
+The fit is synthetic: captures of both arms seen through a robot with known URDF errors and a known camera place in
+the head -- moved (M12+head), turned (M12+headR) or both (M12+headRT) -- as armcal's test_urdffit, written as readb
+outputs, fitted by armcal.urdffit.run."""
 import hashlib
 import importlib.util
 import json
@@ -126,6 +127,9 @@ def mutations(robot):
 
 TRUE = {"NeckYaw": {"dxyz": [-8.0, 12.0, -20.0]}, "RightShoulderRoll": {"post_axis_deg": -1.2},
         "LeftShoulderRoll": {"post_axis_deg": -0.9}, "HEAD": {"dxyz": [-15.0, 4.0, -6.0]}}
+TURN = [-2.7, 2.1, -1.5]                          # deg, about phantom10's 13 Nov HEADR
+TRUE_R = {**TRUE, "HEAD": {"drot": TURN}}         # the camera turned in the head
+TRUE_RT = {**TRUE, "HEAD": {"dxyz": TRUE["HEAD"]["dxyz"], "drot": TURN}}      # turned, then moved
 NECKS = [(-0.2, 0.17), (0.0, 0.38), (0.2, 0.45), (0.1, 0.25)]
 Q0 = {"Right": {"RightShoulderPitch": -1.149872, "RightShoulderRoll": -0.347025, "RightShoulderYaw": 0.598868,
                 "RightElbowPitch": -1.167933, "RightWristYaw": 1.000419, "RightWristRoll": 0.356826,
@@ -135,6 +139,18 @@ Q0 = {"Right": {"RightShoulderPitch": -1.149872, "RightShoulderRoll": -0.347025,
                "LeftGripperYaw": 1.117396}}
 
 
+def true_D(head):
+    """the camera's true move in the head, built WITHOUT urdffit.head_transform: turned about the head's axes by the
+    rotation vector (rigmath's Rodrigues), then moved"""
+    R, t = np.eye(3), np.zeros(3)
+    if head and "drot" in head:
+        w = np.radians(np.asarray(head["drot"], float))
+        R = rot_axis(w / np.linalg.norm(w), float(np.linalg.norm(w)))
+    if head and "dxyz" in head:
+        t = 1e-3 * np.asarray(head["dxyz"], float)
+    return transform(R, t)
+
+
 def records(side, change=TRUE, poses=4, T_BC_rec=T_BC, noise_mm=0.0, seed=0, base=BASE, prefix="p"):
     """a readb output of `side`: captures seen through the true robot (change), stored as readb would (T_TC, E, wrist
     under the base URDF; the camera-in-head the burst carried, T_BC_rec)"""
@@ -142,9 +158,7 @@ def records(side, change=TRUE, poses=4, T_BC_rec=T_BC, noise_mm=0.0, seed=0, bas
     ch = dict(change)
     head = ch.pop("HEAD", None)
     true = base.changed(ch)
-    D = np.eye(4)
-    if head is not None:
-        D[:3, 3] = 1e-3 * np.asarray(head["dxyz"])
+    D = true_D(head)
     res = []
     for k in range(poses):
         q = {n: v + rng.normal(0, 0.15) for n, v in Q0[side].items()}
@@ -163,15 +177,13 @@ def records(side, change=TRUE, poses=4, T_BC_rec=T_BC, noise_mm=0.0, seed=0, bas
     return {"urdf": URDF_H, "urdf_md5": hashlib.md5(BASE_TEXT.encode()).hexdigest(), "side": side, "res": res}
 
 
-@pytest.fixture(scope="module")
-def fit_dir(tmp_path_factory):
-    d = tmp_path_factory.mktemp("fit")
-    (d / "readb-right.json").write_text(json.dumps(records("Right", seed=1)))
-    (d / "readb-left.json").write_text(json.dumps(records("Left", seed=2)))
+def make_fit_dir(d, change, model):
+    (d / "readb-right.json").write_text(json.dumps(records("Right", change, seed=1)))
+    (d / "readb-left.json").write_text(json.dumps(records("Left", change, seed=2)))
     urdf = d / "base.urdf"
     urdf.write_text(BASE_TEXT)
-    rep, _ = urdffit.run(d / "readb-right.json", d / "readb-left.json", urdf, models=("M12+head", "M12"))
-    rep["chosen"] = "M12+head"
+    rep, _ = urdffit.run(d / "readb-right.json", d / "readb-left.json", urdf, models=(model, "M12"))
+    rep["chosen"] = model
     (d / "fit.json").write_text(json.dumps(rep, indent=1))
     geo = he.FitGeometry("P10", "p10-test", f"/etc/phantomos/okvis/{FIT_NAME}",
                          hashlib.sha256(FIT_CFG.encode()).hexdigest(), T_BS, T_SC_DEPTH)
@@ -179,9 +191,33 @@ def fit_dir(tmp_path_factory):
     return d
 
 
+@pytest.fixture(scope="module")
+def fit_dir(tmp_path_factory):
+    return make_fit_dir(tmp_path_factory.mktemp("fit"), TRUE, "M12+head")
+
+
+@pytest.fixture(scope="module")
+def fit_dir_r(tmp_path_factory):
+    return make_fit_dir(tmp_path_factory.mktemp("fit_r"), TRUE_R, "M12+headR")
+
+
+@pytest.fixture(scope="module")
+def fit_dir_rt(tmp_path_factory):
+    return make_fit_dir(tmp_path_factory.mktemp("fit_rt"), TRUE_RT, "M12+headRT")
+
+
 @pytest.fixture
 def fit(fit_dir):
     return he.HandeyeFit.load(fit_dir)
+
+
+@pytest.fixture
+def fit_r(fit_dir_r):
+    return he.HandeyeFit.load(fit_dir_r)
+
+
+# the three camera terms: moved (H-1's M12+head), turned (the default M12+headR), both (M12+headRT, opt-in)
+KINDS = {"fit_dir": TRUE, "fit_dir_r": TRUE_R, "fit_dir_rt": TRUE_RT}
 
 
 class Clock:
@@ -226,6 +262,26 @@ def test_apply_head_moves_only_the_three_translation_numbers():
     assert he.t_sc(new)[0].tolist() == he.t_sc(LIVE_CFG)[0].tolist()
 
 
+def test_apply_head_with_a_rotation_rewrites_all_twelve_numbers_once_and_nothing_else():
+    """T_BS' = D T_BS with D = [R(HEADR) | HEAD]: T_BS's rotation AND translation change, written with full precision
+    (they read back as exactly D @ T_BS), the 4th row and every byte outside T_BS's rows kept"""
+    head, turn = np.array([-15.0, 4.0, -6.0]), np.array(TURN)
+    new = he.apply_head(LIVE_CFG, head, turn)
+    T0, T1 = he.t_bs(LIVE_CFG), he.t_bs(new)
+    D = true_D({"dxyz": head, "drot": turn})
+    assert np.allclose(T1, D @ T0, atol=1e-15, rtol=0)
+    assert np.array_equal(T1, he.head_D({"dxyz": head, "drot": turn}) @ T0)        # full precision: bit for bit
+    assert np.all(T1[:3] != T0[:3]) and np.array_equal(T1[3], T0[3])                  # all 12 changed, row 4 kept
+    a, b = LIVE_CFG.splitlines(), new.splitlines()
+    changed = [i for i, (x, y) in enumerate(zip(a, b)) if x != y]
+    assert len(a) == len(b) and len(changed) == 3                                     # T_BS's rows 1-3 only
+    m0, m1 = he._tbs_match(LIVE_CFG), he._tbs_match(new)
+    assert LIVE_CFG[:m0.start("body")] == new[:m1.start("body")] and LIVE_CFG[m0.end("body"):] == new[m1.end("body"):]
+    R1 = T1[:3, :3]
+    assert np.abs(R1 @ R1.T - np.eye(3)).max() < 1e-8 and np.linalg.det(R1) > 0
+    assert he.t_sc(new)[0].tolist() == he.t_sc(LIVE_CFG)[0].tolist()
+
+
 def test_set_urdf_keeps_quotes_and_comment_and_only_the_dma_key():
     t = "%YAML:1.0\nfoo:\n    urdf: x\ndma:\n    imu_name: \"N\"\n    urdf: \"/etc/okvis/a.urdf\"  # c\n    body: H\n"
     out = he.set_urdf(t, "/etc/okvis/b.urdf")
@@ -241,36 +297,66 @@ def test_the_template_config_reads():
 # ---------------------------------------------------------------- the T_BS convention: the proof
 
 
-def test_new_urdf_and_new_tbs_reproduce_the_fits_prediction(fit):
-    """the camera in the torso composed from the WRITTEN files (the new URDF's neck chain, the new config's T_BS, the
-    depth camera's T_SC) predicts every fitted capture's wrist exactly as the fit does; the other order (HEAD in the
-    IMU frame, T_BS D) does not"""
-    robot = Robot()
-    hd = deployer(robot, fit, dry_run=True)
+def written_offsets(fit, urdf_text, T_BS_written, side):
+    """each fitted capture's wrist offset (mm) rebuilt from WRITTEN files only: the new URDF's neck chain and wrist,
+    the new config's T_BS and the depth camera's T_SC -- no urdffit prediction code"""
+    u = Urdf(urdf_text)
+    out = []
+    for o in fit.selected(side):
+        T_TC = u.chain("Torso", "Head").T({"NeckYaw": o.yaw, "NeckPitch": o.pitch}) @ T_BS_written @ T_SC_DEPTH
+        out.append(1e3 * ((T_TC @ o.m)[:3] - u.chain("Torso", side + "WristRollLink").T(o.q)[:3, 3]))
+    return np.array(out)
+
+
+@pytest.mark.parametrize("kind", list(KINDS))
+def test_new_urdf_and_new_tbs_reproduce_the_fits_prediction(kind, request):
+    """the convention proof, for a camera moved, turned, and both: the camera in the torso composed from the WRITTEN
+    files (the new URDF's neck chain, the new config's T_BS, the depth camera's T_SC) predicts every fitted capture's
+    wrist exactly as the fit does (urdffit.off_change); the other order (the camera term in the IMU frame, T_BS D)
+    does not"""
+    fit = he.HandeyeFit.load(request.getfixturevalue(kind))
+    hd = deployer(Robot(), fit, dry_run=True)
     hd.deploy()
     b = hd.build
-    new_urdf, T_BS_new = Urdf(b.urdf_text), he.t_bs(b.config_text)
+    T_BS_new = he.t_bs(b.config_text)
     model, change, head = he.choose(fit, "head")
-    ch = dict(change, HEAD={"dxyz": head})
+    D = he.head_D(head)
+    T_BS_wrong = T_BS @ D
     worst, worst_wrong = 0.0, 0.0
-    D_wrong = np.eye(4)
-    D_wrong[:3, 3] = 1e-3 * head
     for side in ("Right", "Left"):
-        obs = fit.selected(side)
-        assert len(obs) == 16
-        want = urdffit.off_change(obs, BASE, ch)
-        for o, w in zip(obs, want):
-            T_TC = new_urdf.chain("Torso", "Head").T({"NeckYaw": o.yaw, "NeckPitch": o.pitch}) @ T_BS_new @ T_SC_DEPTH
-            got = 1e3 * ((T_TC @ o.m)[:3] - new_urdf.chain("Torso", side + "WristRollLink").T(o.q)[:3, 3])
-            worst = max(worst, np.abs(got - w).max())
-            T_wrong = new_urdf.chain("Torso", "Head").T({"NeckYaw": o.yaw, "NeckPitch": o.pitch}) @ T_BS @ D_wrong \
-                @ T_SC_DEPTH
-            bad = 1e3 * ((T_wrong @ o.m)[:3] - new_urdf.chain("Torso", side + "WristRollLink").T(o.q)[:3, 3])
-            worst_wrong = max(worst_wrong, np.abs(bad - w).max())
+        assert len(fit.selected(side)) == 16
+        want = urdffit.off_change(fit.selected(side), BASE, dict(change, HEAD=head))
+        worst = max(worst, np.abs(written_offsets(fit, b.urdf_text, T_BS_new, side) - want).max())
+        worst_wrong = max(worst_wrong, np.abs(written_offsets(fit, b.urdf_text, T_BS_wrong, side) - want).max())
     assert worst < 1e-6 and b.predict_mm < 1e-6
     assert worst_wrong > 5.0                                  # the convention matters at the mm level
-    # and the fit recovered the synthetic robot's true terms (noise-free captures)
-    assert np.allclose(head, TRUE["HEAD"]["dxyz"], atol=0.05)
+    assert np.allclose(T_BS_new, D @ T_BS, atol=1e-15, rtol=0)
+    # and the fit recovered the synthetic robot's true camera term (noise-free captures)
+    true = KINDS[kind]["HEAD"]
+    assert set(head) == set(true)
+    if "dxyz" in true:
+        assert np.allclose(head["dxyz"], true["dxyz"], atol=0.05)
+    if "drot" in true:
+        assert np.allclose(head["drot"], true["drot"], atol=0.01)
+    assert np.allclose(D, true_D(true), atol=2e-4)
+
+
+@pytest.mark.parametrize("kind", ["fit_dir_r", "fit_dir_rt"])
+def test_the_wrong_composition_order_is_refused_by_the_deploy(kind, request, monkeypatch):
+    """mutation check: a deploy that wrote T_BS D instead of D T_BS (the camera term in the IMU frame) fails its own
+    proof (the written files vs the fit's prediction) and writes nothing"""
+    fit = he.HandeyeFit.load(request.getfixturevalue(kind))
+
+    def wrong_order(text, head_mm=None, head_rot_deg=None):
+        m = he._tbs_match(text)
+        T = he.t_bs(text) @ he.head_D({"dxyz": head_mm, "drot": head_rot_deg})
+        return text[:m.start("body")] + imu._rewrite(m.group("body"), T.ravel(), set(he.TBS_TOP)) + text[m.end("body"):]
+
+    monkeypatch.setattr(he, "apply_head", wrong_order)
+    robot = Robot()
+    with pytest.raises(dp.DeployRefused, match="mm off the fit"):
+        deployer(robot, fit).deploy()
+    assert mutations(robot) == []
 
 
 def test_head_is_in_the_head_frame_and_moves_the_camera_by_exactly_head(fit):
@@ -280,7 +366,28 @@ def test_head_is_in_the_head_frame_and_moves_the_camera_by_exactly_head(fit):
     _, _, head = he.choose(fit, "head")
     T_new = he.t_bs(hd.build.config_text)
     moved = (T_new @ T_SC_DEPTH)[:3, 3] - (T_BS @ T_SC_DEPTH)[:3, 3]
-    assert np.allclose(1e3 * moved, head, atol=1e-9)
+    assert np.allclose(1e3 * moved, head["dxyz"], atol=1e-9)
+    assert np.array_equal(T_new[:3, :3], T_BS[:3, :3])        # M12+head: the rotation kept bit for bit
+
+
+def test_headr_turns_the_camera_about_the_head_axes(fit_r):
+    """M12+headR: the camera's new place in the head is R(HEADR) applied in the HEAD frame to the old one (rotation and
+    position), and the deployed header and marker say so"""
+    robot = Robot()
+    hd = deployer(robot, fit_r, dry_run=True)
+    res = hd.deploy()
+    b = hd.build
+    _, _, head = he.choose(fit_r, "head")
+    assert set(head) == {"drot"} and b.head_mm is None and np.allclose(b.head_rot_deg, TURN, atol=0.01)
+    R = true_D(head)[:3, :3]
+    T_new = he.t_bs(b.config_text)
+    assert np.allclose((T_new @ T_SC_DEPTH)[:3, :3], R @ T_BC[:3, :3], atol=1e-12)
+    assert np.allclose((T_new @ T_SC_DEPTH)[:3, 3], R @ T_BC[:3, 3], atol=1e-12)
+    mk = he.marker(b.config_text)
+    assert mk["model"] == "M12+headR" and mk["head_mm"] is None and np.allclose(mk["head_rot_deg"], TURN, atol=0.01)
+    assert "T_BS' = D T_BS, applied once: the camera turned by HEADR" in b.config_text
+    assert str(T_BS[:3].tolist()) in b.config_text                    # the T_BS before, in full
+    assert "turned by HEADR" in b.urdf_text and "HEADR [" in res.report()
 
 
 # ---------------------------------------------------------------- the transaction
@@ -327,7 +434,9 @@ def test_deploy_switches_okvis_and_verifies_the_load(fit, tmp_path):
     assert "rollback" in res.report()
 
 
-def test_head_is_never_applied_twice(fit):
+@pytest.mark.parametrize("kind", ["fit", "fit_r"])
+def test_head_is_never_applied_twice(kind, request):
+    fit = request.getfixturevalue(kind)
     robot = Robot()
     assert deployer(robot, fit).deploy().ok
     with pytest.raises(dp.DeployRefused) as e:
@@ -434,6 +543,16 @@ def test_model_only_keeps_tbs_byte_for_byte_and_uses_m12(fit):
         he.choose(fit, "model_only", "M12+head")
 
 
+def test_model_only_refuses_the_rotation_model_and_falls_back_to_m12(fit_r):
+    with pytest.raises(ValueError, match="fitted together with the head term"):
+        he.choose(fit_r, "model_only", "M12+headR")
+    model, _, head = he.choose(fit_r, "model_only")
+    assert model == "M12" and head is None
+    robot = Robot()
+    res = deployer(robot, fit_r, mode="model_only").deploy()
+    assert res.ok and he.t_bs(robot.files[NEW_CFG]).tolist() == T_BS.tolist()
+
+
 def test_refuses_another_robot_and_an_unknown_machine_id(fit):
     with pytest.raises(dp.DeployRefused, match="robot identity"):
         deployer(Robot(machine_id="9851aca02a7d" + "0" * 20, hostname="phantom12"), fit).deploy()
@@ -475,6 +594,16 @@ def test_a_huge_head_term_is_refused(fit):
     rep["models"]["M12+head"]["change"]["HEAD"]["dxyz"] = [-213.5, 0.0, 0.0]
     with pytest.raises(ValueError, match="units or sign slip"):
         he.choose(he.HandeyeFit(fit.path, rep, fit.geometry, fit.records, fit.sha12), "head")
+
+
+def test_a_huge_or_unknown_camera_rotation_is_refused(fit_r):
+    rep = json.loads(json.dumps(fit_r.report))
+    rep["models"]["M12+headR"]["change"]["HEAD"]["drot"] = [-154.7, 120.3, -85.9]         # radians read as deg x 57
+    with pytest.raises(ValueError, match="units slip"):
+        he.choose(he.HandeyeFit(fit_r.path, rep, fit_r.geometry, fit_r.records, fit_r.sha12), "head")
+    rep["models"]["M12+headR"]["change"]["HEAD"] = {"rpy": [1.0, 0, 0]}
+    with pytest.raises(ValueError, match="camera term"):
+        he.choose(he.HandeyeFit(fit_r.path, rep, fit_r.geometry, fit_r.records, fit_r.sha12), "head")
 
 
 def test_a_wrong_geometry_json_is_caught(fit):
