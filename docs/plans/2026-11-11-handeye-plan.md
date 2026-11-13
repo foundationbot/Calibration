@@ -248,6 +248,17 @@ How to read it:
 
 ---
 
+> **Status 13 Nov 2026** (session CalibrationV11; details in `tools/calibration/calibtool/HANDOFF.md`):
+> - H-1 GO; H0 done (robust matcher);
+> - H1 not automated: plans made by hand on Moonstone (`plan_p10c.py`);
+> - H2 runner built and used live;
+> - H3 done on phantom10 on 11 and 13 Nov;
+> - H4 built, dry-run live on 13 Nov, not yet deployed;
+> - H5 menu session built and used live.
+>
+> The default model is now **M12+headR**: the camera's rotation in the head; see
+> `results/handeye-p10-2026-11-13/README.md`.
+
 ## 8. Milestones (each gets its own TDD plan and the user's go)
 
 | # | Milestone | Where | Done when |

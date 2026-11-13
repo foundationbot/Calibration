@@ -85,21 +85,54 @@ is not used yet.
 
 **Safety.** Nothing in a motion phase resumes by itself: after a link loss, a crash or a reboot it comes back in HOLD and needs G (and Y). Design section 7 has the full list.
 
-## Hand-eye calibration (first version, 11 Nov 2026)
+## Hand-eye calibration (13 Nov 2026)
 
-`calib` → robot → **hand-eye calibration**, offered for robots whose profile says `handeye: true` and that have a
-stored setup `config/handeye/<bot>.json` (the arm-wave plans, checked for clearance in MuJoCo against the snapshot in
-the file; P10 only so far). `calibtool/handeyeflow.py`:
-1. copies the kit (now with `armcal`);
-2. runs the preflight per arm, read-only (`scripts/handeye_wave.py --check`): the fixed motion tool, motors on (it
-   never enables them), nobody else commanding, the body within 3° of the plan's snapshot (else: re-plan on Moonstone
-   first), depth flowing;
-3. asks Y, then runs each arm's wave detached on the robot and shows its log; **S + Enter** stops the arm where it is
-   (it holds);
-4. runs read B (`scripts/handeye_match.sh`) and the fit (`armcal.urdffit`) on the robot and prints the table.
+`calib` → robot → **hand-eye calibration** is offered for robots that have both:
+- `handeye: true` in their profile;
+- a stored setup `config/handeye/<bot>.json`: the arm-wave plans, checked for clearance in MuJoCo against the snapshot
+  in the file (P10 only so far; made on Moonstone with `results/handeye-p10-2026-11-11/plan_p10c.py`).
 
-The corrected URDF stays in `<root>/handeye/<session>/`: nothing is deployed yet (milestone H4). Depth profiles:
-`profiles` in the setup file (e.g. `"768"`) switches OKVIS's depth profile for the waves and restores it after.
+`calibtool/handeyeflow.py` runs the session:
+1. **Copies the kit,** now with `armcal`.
+2. **Runs the preflight per arm, read-only** (`scripts/handeye_wave.py --check`):
+   - the fixed motion tool;
+   - motors on (it never enables them);
+   - nobody else commanding;
+   - the body within 3° of the plan's snapshot, neck excepted (else re-plan on Moonstone first);
+   - depth flowing.
+3. **Asks Y,** then runs each arm's wave detached on the robot and shows its log.
+   - **S + Enter** stops the arm where it is (it holds).
+   - The wave pins every other joint, ramps at ≤ 5°/s (≥ 6 s), and retries a failed depth capture after 2, 10 and 20 s.
+4. **Matches and fits on the robot:** read B (`scripts/handeye_match.sh`, about 30 s per arm), then the fit
+   (`armcal.urdffit`). The default model is **M12+headR**: NeckYaw origin, shoulder-roll zeros, and the camera's
+   rotation in the head. The screen prints the held-out table.
+5. **Offers the deploy** (`calibtool/handeye_deploy.py`, on the robot):
+   - a dry run first (a refusal is said, nothing changes);
+   - Y deploys: the URDF, the camera term into a copy of the live config's T_BS, robot.env, an OKVIS restart, a load
+     check, and a rollback on failure;
+   - R rolls back.
+
+**Depth profiles:** `profiles` in the setup file (e.g. `"768"`) switches OKVIS's depth profile for the waves and
+restores it after. `"1280,768"` captures each pose at both, the second into `<arm>/r768/`.
+
+**Not yet:**
+- the post-check after a deploy (the rule is in `handeye_deploy.postcheck_*`);
+- automatic per-robot planning;
+- camera recovery in trials.
+
+## The head session's behaviour changes of 12-13 Nov (see HANDOFF.md section 6)
+
+- **Default placements aim at their distance:** max(6 cm, 8 %). "Good" says the measured distance.
+- **The head looks for a board it cannot see:** 10 s unseen, or U with no board in view. It makes small slow moves, says
+  so first, and says where to move the board.
+- **A stalled camera gets one automatic producer restart** (`camrecover.py`, full sessions):
+  - it waits for the camera to be back on USB 3;
+  - sweeps pause and re-capture;
+  - a repeat within 10 min is reported as hardware.
+- **The body is pinned once per session.** A displaced joint goes back slowly after the countdown. A motionless
+  keep-alive every 20 s while waiting stops the motor master's 30 s stale-command fallback.
+- **The camera reader handles a frame pool whose slot sequence runs a constant offset from the meta queue's**, which
+  happens after a producer restart without a camera reset.
 
 ## Developing
 
@@ -124,7 +157,8 @@ bash tools/calibration/calibtool/tests/run_moonstone.sh <worktree> <name> [pytes
 | decision | `livecfg` (OKVIS configs by `distortion_type`, `radtan_scope`), `scaling`, `decide` (paired bootstrap, gates) |
 | speed | `solver`, `score`, `refit` (live refit after each placement) |
 | IMU | `imu`, `imusweep`, `gravity` |
-| live robot | `capture`, `detect`, `health`, `preflight`, `motors` (read-only), `motors_enable`, `neck`, `producer`, `storage`, `profile` + `config/{profiles,robots}.yaml` |
+| live robot | `capture`, `detect`, `health`, `camrecover` (stalled camera -> one producer restart), `preflight`, `motors` (read-only), `motors_enable`, `neck`, `producer`, `storage`, `profile` + `config/{profiles,robots}.yaml` |
+| hand-eye | `handeyeflow` (the menu's session), `handeye_deploy` (URDF + camera term, rollback, post-check rule, consumers in `config/handeye_consumers.yaml`), setups `config/handeye/<bot>.json`; computation in `../armcal`, robot-side `../scripts/handeye_wave.py`, `handeye_match.sh` |
 | session | `daemon` (calibd: state machine, persistence, deadman), `place` (spoken guidance), `grids`, `flow` + `flowrobot` + `sessionctl` (the full session), `deploy`, `postcheck`, `selfrestore` |
 | laptop | `cli`, `menu` (the robot menu, continue / new / discard), `tui` (render, keys, speech, progress, quality), `exe` (the single-file build, `--update`), `voice` (`--install-voice`) |
 | robots | `onboard` (a new robot: identity, kit, rig, profile), `quality` (per-section data status on screen) |

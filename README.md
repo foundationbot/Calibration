@@ -97,7 +97,7 @@ Then the screen opens. From here the tool guides you; you mostly press a key whe
 | **M** | press M | opens the motor screen |
 | **Y** | press Y once the robot hangs on the gantry and nobody is at its head | switches the motors on (or takes them over if they're already on) |
 | Setup | step away from the head | sets up the cameras for the collection, then **turns the head to the middle** (after a countdown) |
-| 6 placements | put the board where the voice says, wait for "Good", step back | counts down ("Step back. 3, 2, 1"), sweeps the head over the board (~65 s per placement) |
+| 6 placements | put the board where the voice says, wait for "Good, N centimetres", step back | counts down ("Step back. 3, 2, 1"), sweeps the head over the board (~65 s per placement); if it can't see the board it looks around with small head moves and tells you where to move it |
 | Extras (0–6) | the same, if asked | only when a gap would make the calibration unreliable; each says what it's for |
 | IMU sweep | lay the board **flat on the floor** in front of the robot | sweeps the head for about 80 s |
 | Fit + decision | nothing (~20 s) | fits, and compares with the live calibration |
@@ -116,7 +116,8 @@ Each key only works where the screen offers it. The bottom line of the screen al
 - **G**: continue after a HOLD. The tool holds when something is not right (e.g. the laptop's link dropped); it says
   why. A countdown runs again before anything moves.
 - **C**: can't put the board there. Skips this placement.
-- **U**: use the board where it is (e.g. the near placement can't get closer than 60 cm).
+- **U**: use the board where it is (e.g. the near placement can't get closer than 60 cm). If the board isn't in view,
+  the head first looks for it and tells you where to move it.
 - **F**: finish collecting (during extra placements). Goes on to the IMU sweep and the fit.
 - **R**: on the motor screen: restart the motor master (only while the motors are off). At the end: roll back the
   deploy.
@@ -134,6 +135,15 @@ Every key you press shows at once on the screen, and then what it did (or why it
 - **During a sweep:** a progress bar and the time left.
 - **During collection:** a map of how much data each part of each camera's image has (`ok` = enough), and what is
   still needed.
+
+---
+
+### Hand-eye calibration (arm to camera)
+
+On robots set up for it (phantom10 so far), the menu also offers **hand-eye calibration**: both arms, the neck and the
+hands move through checked poses while the head cameras watch. The tool fits the robot's arm and head geometry, shows
+the error on poses it did not use, and offers to deploy (with a rollback). Nothing moves before your **Y**;
+**S + Enter** stops an arm where it is. Keep clear of both arms.
 
 ---
 
@@ -175,6 +185,8 @@ rig file). Commit and push them, and make a new release, so other laptops know t
 | **HOLD** | the tool stopped and is waiting | read the reason on the screen; press **G** to continue |
 | *Connection lost … reconnecting* | the laptop's link to the robot dropped | wait; it reconnects by itself. The robot holds; press **G** when back. |
 | the voice keeps asking for a spot you can't reach | the stand can't get there | **U** (use it where it is) or **C** (skip) |
+| *The camera stopped. Restarting it.* | a head camera froze or dropped off USB | wait: the tool restarts the camera and continues; the head waits. Twice within 10 minutes is reported as a cable / hub problem: get it checked |
+| *The arms moved. They go back first, slowly.* | an arm was moved since the last sweep | stand clear; the arm returns after the countdown |
 | *not enough data* at the end | too few parts of the image were checked | **E** for more placements, or **X** to decide anyway |
 
 How to read it: find the message you see in the left column; the right column is what to do.
