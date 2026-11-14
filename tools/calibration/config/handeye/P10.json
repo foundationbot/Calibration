@@ -1,49 +1,62 @@
 {
- "_about": "hand-eye session setup for P10 (phantom10): the arm-wave plans (MuJoCo clearance >= 3 cm on every path from this snapshot, also with the measured sag x1.3; plan_p10c.py) and the snapshot they were checked against. calib refuses the wave when any joint moved > 3 deg from it: re-plan on Moonstone first. profiles 1280,768: every pose also captured at the 768 depth profile (13 Nov: is the faster profile as accurate?)",
+ "_about": "hand-eye session setup for P10 (phantom10): the arm-wave plans (MuJoCo clearance >= 3 cm on every path from this snapshot, also with the measured sag x1.3; plan_p10c.py) and the snapshot they were checked against. calib refuses the wave when any joint moved > 3 deg from it: re-plan on Moonstone first. profiles 1280 (13 Nov 19:30: the 768 comparison data exist from 13 Nov 12:54, right/r768; one profile halves the burst time)",
  "robot": "phantom10",
  "bot": "P10",
  "urdf": "/etc/phantomos/okvis/mk1_1.urdf",
  "grab": "/root/burst-grab/repo/tools/burst_pointcloud/grab.py",
  "grab_pydeps": "/root/burst-grab/pydeps",
- "profiles": "1280,768",
+ "profiles": "1280",
  "frames": 5,
  "snapshot": {
-  "t": "2026-11-13 12:45",
+  "t": "2026-11-13 19:25",
   "q_deg": {
-   "LeftShoulderPitch": -15.709872223136209,
-   "LeftShoulderRoll": -4.853085046820425,
-   "LeftShoulderYaw": 1.0898280788967023,
-   "LeftElbowPitch": -4.75690018849419,
-   "LeftWristYaw": -0.1689191425913043,
-   "LeftWristRoll": 2.0897132385949146,
-   "LeftGripperYaw": -0.11242920928706758,
-   "RightShoulderPitch": -11.332186271795242,
-   "RightShoulderRoll": 2.2228225264610617,
-   "RightShoulderYaw": -2.362064256984823,
-   "RightElbowPitch": -14.691832527345808,
-   "RightWristYaw": -8.337186740558732,
-   "RightWristRoll": 4.398757084930455,
-   "RightGripperYaw": 11.677235475833239,
-   "NeckPitch": 27.872149314009672,
-   "NeckYaw": -0.32546995985405264,
-   "SpineYaw": -13.859252958088764,
-   "LeftHipRoll": -20.147449541988077,
-   "LeftHipYaw": 59.899666190744625,
-   "LeftHipPitch": -26.438103286441304,
-   "LeftKneePitch": 25.92360221173717,
-   "RightHipRoll": 20.032541854486368,
-   "RightHipYaw": -60.12763058448297,
-   "RightHipPitch": -32.733148842530845,
-   "RightKneePitch": 33.21605687722909,
-   "LeftAnkleRoll": -1.4841168637132613,
-   "LeftAnklePitch": -20.59621687612001,
-   "RightAnkleRoll": -2.9828573758829315,
-   "RightAnklePitch": -29.21736019368556
+   "LeftShoulderPitch": -10.450987708478754,
+   "LeftShoulderRoll": -5.676713653170167,
+   "LeftShoulderYaw": 24.191379153310017,
+   "LeftElbowPitch": -10.38494234052567,
+   "LeftWristYaw": -72.45136139450449,
+   "LeftWristRoll": -4.8949088564293515,
+   "LeftGripperYaw": 6.856149011500677,
+   "RightShoulderPitch": -9.538417232530751,
+   "RightShoulderRoll": 3.6981982421405877,
+   "RightShoulderYaw": -9.25317231109174,
+   "RightElbowPitch": -16.791333640464764,
+   "RightWristYaw": -7.170463218047263,
+   "RightWristRoll": 0.8037094268524583,
+   "RightGripperYaw": 9.543690138570001,
+   "NeckPitch": 1.150653154611487,
+   "NeckYaw": 0.22933960963904534,
+   "SpineYaw": -11.744384773110927,
+   "LeftHipRoll": -20.15794925028968,
+   "LeftHipYaw": 59.904898115648855,
+   "LeftHipPitch": -25.435643252147702,
+   "LeftKneePitch": 25.722039914235506,
+   "RightHipRoll": 20.03231645824376,
+   "RightHipYaw": -60.13977466082725,
+   "RightHipPitch": -33.555332863871136,
+   "RightKneePitch": 34.37184099801114,
+   "LeftAnkleRoll": -1.3189095287294623,
+   "LeftAnklePitch": -20.668932777571257,
+   "RightAnkleRoll": -3.151293682796854,
+   "RightAnklePitch": -29.18544271969409
   }
  },
  "arms": {
   "Right": {
    "moves": [
+    {
+     "name": "lift",
+     "deg": [
+      -19.54,
+      3.7,
+      -9.25,
+      -16.79,
+      -7.17,
+      0.8,
+      9.54
+     ],
+     "burst": false
+    },
     {
      "name": "stage",
      "deg": [
@@ -51,9 +64,9 @@
       -8.0,
       6.0,
       -65.0,
-      -8.34,
-      4.4,
-      11.68
+      -7.17,
+      0.8,
+      9.54
      ],
      "burst": false
     },
@@ -250,27 +263,40 @@
       -8.0,
       6.0,
       -65.0,
-      -8.34,
-      4.4,
-      11.68
+      -7.17,
+      0.8,
+      9.54
+     ],
+     "burst": false
+    },
+    {
+     "name": "lift_back",
+     "deg": [
+      -19.54,
+      3.7,
+      -9.25,
+      -16.79,
+      -7.17,
+      0.8,
+      9.54
      ],
      "burst": false
     },
     {
      "name": "rest",
      "deg": [
-      -11.33,
-      2.22,
-      -2.36,
-      -14.69,
-      -8.34,
-      4.4,
-      11.68
+      -9.54,
+      3.7,
+      -9.25,
+      -16.79,
+      -7.17,
+      0.8,
+      9.54
      ],
      "burst": false
     }
    ],
-   "source": "plan_p10c.py from the snapshot of 1794602695667105393; clearance >= 0.03 m incl. sag x1.3"
+   "source": "plan_p10d.py from the snapshot of 1794626751928935309; clearance >= 0.03 m incl. sag x1.3"
   },
   "Left": {
    "moves": [
@@ -281,9 +307,9 @@
       8.0,
       -6.0,
       -65.0,
-      -0.17,
-      2.09,
-      -0.11
+      -72.45,
+      -4.89,
+      6.86
      ],
      "burst": false
     },
@@ -449,27 +475,27 @@
       8.0,
       -6.0,
       -65.0,
-      -0.17,
-      2.09,
-      -0.11
+      -72.45,
+      -4.89,
+      6.86
      ],
      "burst": false
     },
     {
      "name": "rest",
      "deg": [
-      -15.71,
-      -4.85,
-      1.09,
-      -4.76,
-      -0.17,
-      2.09,
-      -0.11
+      -10.45,
+      -5.68,
+      24.19,
+      -10.38,
+      -72.45,
+      -4.89,
+      6.86
      ],
      "burst": false
     }
    ],
-   "source": "plan_p10c.py from the snapshot of 1794602695667105393; clearance >= 0.03 m incl. sag x1.3"
+   "source": "plan_p10d.py from the snapshot of 1794626751928935309; clearance >= 0.03 m incl. sag x1.3"
   }
  }
 }
