@@ -367,3 +367,47 @@ def test_discard_asks_first_and_does_nothing_on_no(tmp_path):
 def test_a_discarded_session_is_not_offered():
     lk = menu.Look(sessions=[sess(DEAD_SID, "DISCARDED")], now=NOW)
     assert lk.unfinished == []
+
+
+def _run_discard(tmp_path, okvis, rc=0):
+    """the DISCARD snippet as the robot runs it, with a fake k0s / bash on PATH that record their argv"""
+    import os
+    import subprocess
+    import sys
+    sid = "20261113-180519-P10"
+    d = tmp_path / "root" / "sessions" / sid
+    d.mkdir(parents=True)
+    (d / "state.json").write_text(json.dumps({"phase": "FINISH", "flow": {"okvis": okvis}}))
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    log = tmp_path / "argv.log"
+    for name in ("k0s", "bash"):
+        f = bin_ / name
+        f.write_text(f"#!/bin/sh\necho \"{name} $*\" >> {log}\nexit {rc}\n")
+        f.chmod(0o755)
+    env = dict(os.environ, PATH=f"{bin_}:{os.environ['PATH']}")
+    r = subprocess.run([sys.executable, "-", str(tmp_path / "root"), sid], input=menu.DISCARD, text=True,
+                       capture_output=True, env=env)
+    st = json.loads((d / "state.json").read_text())
+    return r, st, (log.read_text() if log.exists() else "")
+
+
+def test_discard_starts_okvis_again_when_the_session_stopped_it(tmp_path):
+    """13 Nov, phantom10: a discarded session left OKVIS off (the DaemonSet's node label); the next deploy failed"""
+    ok = {"restart": {"kind": "daemonset"}, "node": "phantom10", "label_value": "true", "stopped": True}
+    r, st, argv = _run_discard(tmp_path, ok)
+    assert r.returncode == 0, r.stderr
+    assert "k0s kubectl label node phantom10 foundation.bot/has-okvis=true --overwrite" in argv
+    assert st["phase"] == "DISCARDED" and st["flow"]["okvis"]["stopped"] is False
+    assert "OKVIS started again" in r.stdout
+
+
+def test_discard_is_refused_when_okvis_cannot_be_started_again(tmp_path):
+    ok = {"restart": {"kind": "daemonset"}, "node": "phantom10", "label_value": "true", "stopped": True}
+    r, st, _ = _run_discard(tmp_path, ok, rc=1)
+    assert r.returncode != 0 and st["phase"] == "FINISH" and "NOT discarded" in r.stderr
+
+
+def test_discard_leaves_okvis_alone_when_the_session_did_not_stop_it(tmp_path):
+    r, st, argv = _run_discard(tmp_path, {"restart": {"kind": "daemonset"}, "stopped": False})
+    assert r.returncode == 0 and st["phase"] == "DISCARDED" and argv == ""

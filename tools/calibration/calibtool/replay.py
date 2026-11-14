@@ -314,6 +314,12 @@ class Collection:
         self._open = []
         return snap
 
+    def reopen(self):
+        """collect again after finish() (calib's E): the labeler reopened when it can be"""
+        f = getattr(self.labeler, "reopen", None)
+        if f is not None:
+            f()
+
     def finish(self) -> dict:
         """close the session (the assignment's finish(): held-back holds may move to TEST) -> the final state"""
         before = self.labels()

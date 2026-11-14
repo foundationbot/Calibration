@@ -59,6 +59,11 @@ OKVIS_DS = "okvis2x"
 # robots (phantom10, phantom11) OKVIS is the pod okvis/okvis2x labelled app.kubernetes.io/name=okvis. With only the
 # first, the tool never found OKVIS there: every deploy waited UP_TIMEOUT_S and read "not verified"
 OKVIS_LABEL = "app.kubernetes.io/name in (okvis2x,okvis)"
+# the DaemonSet's node selector: OKVIS is off on a node whose label is not "true" (RUNBOOK 7; sessionctl.OkvisCtl)
+OKVIS_NODE_LABEL = "foundation.bot/has-okvis"
+# okvis.sh refuses without this DaemonSet ("OKVIS is not installed on this robot's k0s"): 13 Nov, phantom10 ran OKVIS
+# from the positronic DaemonSet with nav-agent deleted, and a deploy that picked okvis.sh failed at its restart
+OKVIS_SH_NEEDS = ("okvis", "nav-agent")
 OKVIS_CONTAINER = "okvis2x"
 HEAD_CAMERA_JSON = "/etc/phantom/head_camera.json"
 DEPENDENT_ROOTS = ("/etc/phantomos", "/etc/phantom", "/etc/okvis", "/opt/configs", "/data/configs")
@@ -284,23 +289,66 @@ class RestartPath:
     kind: str                   # "daemonset" | "okvis_sh" | "none"
     argv: list
     detail: str
+    node: str = None            # daemonset: the node whose OKVIS_NODE_LABEL schedules the pod
+    label_off: bool = False     # daemonset: OKVIS off by that label when detected; argv sets it true
 
     def as_dict(self):
         return asdict(self)
 
 
+def label_of(remote: Remote, node):
+    """node's OKVIS_NODE_LABEL value ("" when unset), None when it could not be read"""
+    rc, out = remote.call(kubectl("get", "node", node, "-o",
+                                  "jsonpath={.metadata.labels." + OKVIS_NODE_LABEL.replace(".", "\\.") + "}"))
+    return out.strip() if rc == 0 else None
+
+
+def node_label(remote: Remote):
+    """(this robot's node name, its OKVIS_NODE_LABEL value or "" when unset); (None, None) when not known"""
+    rc, out = remote.call(["hostname"])
+    node = out.strip() if rc == 0 and out.strip() else None
+    return (None, None) if node is None else (node, label_of(remote, node))
+
+
+def label_argv(node, value="true") -> list:
+    return kubectl("label", "node", node, f"{OKVIS_NODE_LABEL}={value}", "--overwrite")
+
+
 def restart_path(remote: Remote, origin="calibtool") -> RestartPath:
+    """how OKVIS is (re)started on this robot, from how it is INSTALLED, not from whether it runs now (13 Nov,
+    phantom10: an earlier session had left the DaemonSet off by its node label; 'no OKVIS pod' was read as an okvis.sh
+    robot, and the deploy's restart and its rollback both failed):
+      daemonset  the positronic DaemonSet scheduled here: rollout restart; or scheduled nowhere only because this node's
+                 OKVIS_NODE_LABEL is not "true" (it selects on it): the label set true (label_off);
+      okvis_sh   okvis.sh, only when what it needs is there (OKVIS_SH_NEEDS; it refuses without it);
+      none       neither: the deploy is refused before anything is written (deploy checks)"""
     rc, out = remote.call(kubectl("-n", OKVIS_NS, "get", "ds", OKVIS_DS, "-o",
                                   "jsonpath={.status.desiredNumberScheduled}"))
     desired = int(out.strip()) if rc == 0 and out.strip().isdigit() else None
-    if desired is not None and desired >= 1:
-        return RestartPath("daemonset", kubectl("-n", OKVIS_NS, "rollout", "restart", f"ds/{OKVIS_DS}"),
-                           f"DaemonSet {OKVIS_NS}/{OKVIS_DS} scheduled on {desired} node(s)")
+    why = ["no DaemonSet" if desired is None else f"DaemonSet {OKVIS_DS} scheduled on 0 nodes"]
+    if desired is not None:
+        node, value = node_label(remote)
+        if desired >= 1:
+            return RestartPath("daemonset", kubectl("-n", OKVIS_NS, "rollout", "restart", f"ds/{OKVIS_DS}"),
+                               f"DaemonSet {OKVIS_NS}/{OKVIS_DS} scheduled on {desired} node(s)", node=node)
+        rc, sel = remote.call(kubectl("-n", OKVIS_NS, "get", "ds", OKVIS_DS, "-o",
+                                      "jsonpath={.spec.template.spec.nodeSelector}"))
+        if rc == 0 and OKVIS_NODE_LABEL in sel and node and value is not None and value != "true":
+            return RestartPath("daemonset", label_argv(node, "true"),
+                               f"DaemonSet {OKVIS_NS}/{OKVIS_DS}, OKVIS off on {node} by its node label "
+                               f"({OKVIS_NODE_LABEL}={value or 'unset'}): started by setting it true",
+                               node=node, label_off=True)
+        why.append(f"this node's {OKVIS_NODE_LABEL} is {value!r}" if value is not None else "the node label unread")
     if remote.exists(OKVIS_SH):
-        return RestartPath("okvis_sh", ["env", f"OKVIS_LAUNCH_ORIGIN={origin}", "bash", OKVIS_SH, "restart"],
-                           f"{OKVIS_SH} (no scheduled {OKVIS_DS} DaemonSet)")
-    why = "no DaemonSet" if desired is None else f"DaemonSet {OKVIS_DS} scheduled on 0 nodes"
-    return RestartPath("none", [], f"{why} and no {OKVIS_SH}: OKVIS is not run on this robot")
+        ns, ds = OKVIS_SH_NEEDS
+        rc, _ = remote.call(kubectl("-n", ns, "get", "daemonset", ds, "-o", "name"))
+        if rc == 0:
+            return RestartPath("okvis_sh", ["env", f"OKVIS_LAUNCH_ORIGIN={origin}", "bash", OKVIS_SH, "restart"],
+                               f"{OKVIS_SH} (no scheduled {OKVIS_DS} DaemonSet; DaemonSet {ns}/{ds} there)")
+        why.append(f"{OKVIS_SH} is there but unusable: no DaemonSet {ns}/{ds} (it refuses without it)")
+    else:
+        why.append(f"no {OKVIS_SH}")
+    return RestartPath("none", [], "; ".join(why) + ": no way to start OKVIS on this robot was found")
 
 
 def okvis_image(remote: Remote):
@@ -492,7 +540,15 @@ def rollback_script(snap: DeploySnapshot, deploy_dir, new_name, producer_ns="dma
               f'for i in $(seq 1 90); do {K} get pods -l app={q(producer_deploy)} --no-headers 2>/dev/null | '
               f'grep -q "1/1 *Running" && break; sleep 1; done']
     kind = snap.restart.get("kind")
-    if kind == "daemonset":
+    if kind == "daemonset" and snap.restart.get("node"):
+        # OKVIS back whether the deploy left its node label on or off (13 Nov: a rollback that only restarted the
+        # DaemonSet could not bring back an OKVIS switched off by the label)
+        node = q(snap.restart["node"])
+        jp = q("jsonpath={.metadata.labels." + OKVIS_NODE_LABEL.replace(".", "\\.") + "}")
+        L.append(f'if [ "$(k0s kubectl get node {node} -o {jp})" != "true" ]; then '
+                 f"k0s kubectl label node {node} {OKVIS_NODE_LABEL}=true --overwrite; "
+                 f"else k0s kubectl -n {OKVIS_NS} rollout restart ds/{OKVIS_DS}; fi")
+    elif kind == "daemonset":
         L.append(f"k0s kubectl -n {OKVIS_NS} rollout restart ds/{OKVIS_DS}")
     elif kind == "okvis_sh":
         L.append(f"OKVIS_LAUNCH_ORIGIN={q('calibtool rollback to ' + old)} bash {OKVIS_SH} restart")
@@ -577,8 +633,18 @@ class Deployer:
     def rollback_path(self):
         return f"{self.deploy_dir}/rollback.sh"
 
+    def _restart_argv(self) -> list:
+        """the restart as the robot is NOW: on the DaemonSet path the node label set true when it is off (the pod then
+        starts on the current robot.env), else a rollout restart; the snapshot's argv otherwise"""
+        r = self.snap.restart
+        if r.get("kind") == "daemonset" and r.get("node"):
+            if label_of(self.remote, r["node"]) not in (None, "true"):
+                return label_argv(r["node"], "true")
+            return kubectl("-n", OKVIS_NS, "rollout", "restart", f"ds/{OKVIS_DS}")
+        return list(r.get("argv") or [])
+
     def _restart(self, argv=None):
-        argv = argv or self.snap.restart.get("argv") or []
+        argv = argv or self._restart_argv()
         if not argv:
             raise DeployFailed(f"no OKVIS restart path: {self.snap.restart.get('detail')}")
         rc, out = self.remote.call(argv, mutating=True, timeout=120)

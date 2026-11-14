@@ -193,6 +193,17 @@ class Assigner:
         for r in rel:
             r.label, r.released = TEST, True
 
+    def reopen(self):
+        """the session goes on after finish() (calib's E: more placements after a first fit; 13 Nov, phantom10: the
+        first hold of the extra placement raised "observe() after finish()"): the holds finish() released to TEST are
+        FIT and held back again, as before it; the next finish() decides afresh with the new holds. Idempotent"""
+        if not self.finished:
+            return
+        for r in self.holds.values():
+            if r.released:
+                r.label, r.released = FIT, False
+        self.finished = False
+
     def labels_if_finished(self) -> dict:
         """{hold: FIT | TEST} as finish() would leave them if the session ended now; changes nothing (the stop rule
         judges the split it would write)"""

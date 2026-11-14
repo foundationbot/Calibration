@@ -958,6 +958,44 @@ def test_no_x_unless_step66_alone_failed_and_by_little(tmp_path, failing, reason
     assert s.m.phase == "DONE" and s.fit_calls == 1 and "reopened" not in s.kinds()
 
 
+def _left_off_by(tmp_path, sid="20261113-180519-P10", stopped=True):
+    d = tmp_path / "root" / "sessions" / sid
+    d.mkdir(parents=True)
+    ok = {"restart": {"kind": "daemonset", "argv": [], "detail": "", "node": "phantom10"}, "node": "phantom10",
+          "label_value": "true", "stopped": stopped}
+    (d / "state.json").write_text(json.dumps({"phase": "DISCARDED", "updated": 1.0, "flow": {"okvis": ok}}))
+    return d / "state.json"
+
+
+def test_okvis_left_off_by_an_abandoned_session_is_taken_over_and_started_at_the_end(tmp_path):
+    """13 Nov, phantom10: a discarded session had switched OKVIS off by the node label and never back; the next
+    session read 'no OKVIS' as an okvis.sh robot and its deploy failed. Now the next session takes the duty over: the
+    DaemonSet path (label), OKVIS started by the deploy and the old session relieved of it"""
+    old = _left_off_by(tmp_path)
+    r = Robot(okvis_sh=True, nav_agent=False)
+    r.label = "false"
+    s = Session(tmp_path, keys=FULL_KEYS, robot=r).run()
+    assert s.m.phase == "DONE", s.kinds()[-15:]
+    ev = next(e for e in s.events() if e["kind"] == "okvis_left_off_taken_over")
+    assert ev["session"] == "20261113-180519-P10" and ev["label_value"] == "true"
+    snap = next(e for e in s.events() if e["kind"] == "deploy_snapshot")
+    assert snap["restart"]["kind"] == "daemonset" and snap["restart"]["label_off"]
+    assert json.loads(old.read_text())["flow"]["okvis"]["stopped"] is False
+    L = s.lines("okvis") + s.lines("deploy")
+    assert any("has-okvis=true" in x for x in L) and not any(dp.OKVIS_SH in x for x in L)
+    rep = json.loads((s.dirs.report / "session.json").read_text())
+    assert rep["outcome"] == "deployed", rep["outcome"]
+
+
+def test_okvis_off_for_another_reason_is_said_and_not_claimed(tmp_path):
+    _left_off_by(tmp_path, stopped=False)           # that session started it again: not the reason it is off
+    r = Robot(okvis_sh=False)
+    r.label = "false"
+    s = Session(tmp_path, keys=FULL_KEYS, robot=r).run()
+    assert s.m.phase == "DONE", s.kinds()[-15:]
+    assert "okvis_left_off_taken_over" not in s.kinds() and "okvis_off_found" in s.kinds()
+
+
 def test_the_spoken_time_is_the_measured_one():
     """10 Nov, phantom11: 49 poses took 118-119 s (2.5 s each); the operator: 'fix about 2 min to the real number'"""
     assert fl.minutes_text(49, 2.5) == "Moving the head now. About 2 minutes."

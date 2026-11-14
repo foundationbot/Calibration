@@ -471,3 +471,30 @@ def test_replay_capture_split_validates(name, data_root, tmp_path):
     print("CAPTURE REPLAY " + json.dumps(out, default=str))
     assert v.verdict == "PASS", v.text
     assert v.n_validated >= n16, f"{v.n_validated} judged entries vs {n16} on step 16's split"
+
+
+def test_reopen_after_finish_takes_more_holds_like_one_session(rig):
+    """calib's E (13 Nov, phantom10): the fit's split finished the labeler, the next placement's first hold raised
+    "observe() after finish()". reopen() undoes finish()'s releases; finishing again equals one uninterrupted session"""
+    from calibtool import assign
+    s = synth_session(rig.board, [("P1", [("centre", 0.5, 2)] * 14), ("P2", [("left", 0.75, 2)] * 6)])
+    holds = list(assign.capture_holds(s))
+    first = [h for h in holds if h.placement == "P1"]
+    a = assigner(rig)
+    for h in first:
+        a.observe(h)
+    a.finish()
+    assert any(i.released for i in a.holds.values())
+    with pytest.raises(RuntimeError, match="after finish"):
+        a.observe(holds[len(first)])
+    a.reopen()
+    assert not a.finished and not any(i.released for i in a.holds.values())
+    for h in holds[len(first):]:
+        a.observe(h)
+    a.finish()
+    b = assigner(rig)
+    for h in holds:
+        b.observe(h)
+    b.finish()
+    assert {k: v.label for k, v in a.holds.items()} == {k: v.label for k, v in b.holds.items()}
+    a.reopen(); a.reopen()                       # idempotent

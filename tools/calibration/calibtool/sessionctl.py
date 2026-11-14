@@ -178,7 +178,8 @@ class OkvisCtl:
                  origin="calibtool"):
         self.remote, self.restart = remote, dict(restart or {})
         self.kind = self.restart.get("kind") or "none"
-        self.node, self.label_value, self.stopped, self.origin = node, label_value, bool(stopped), origin
+        self.node = node or self.restart.get("node")
+        self.label_value, self.stopped, self.origin = label_value, bool(stopped), origin
 
     def _call(self, argv, what):
         rc, out = self.remote.call(argv, mutating=True, timeout=120)

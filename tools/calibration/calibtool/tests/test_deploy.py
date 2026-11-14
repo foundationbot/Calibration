@@ -60,13 +60,14 @@ def sha12(t):
 
 
 class FakeRobot:
-    def __init__(self, ds_desired=1, okvis_sh=False, producer_size=(1280, 800)):
+    def __init__(self, ds_desired=1, okvis_sh=False, producer_size=(1280, 800), label="true", nav_agent=True):
         self.files = {dp.ROBOT_ENV: ENV, f"{dp.HOST_CFG_DIR}/{OLD_NAME}": OLD, dp.HEAD_CAMERA_JSON: '{"cams": 1}',
                       "/etc/phantom/vla/rig.env": f"RIG_YAML=/etc/okvis/{OLD_NAME}\n",
                       "/etc/phantom/other.yaml": "nothing here\n"}
         if okvis_sh:
             self.files[dp.OKVIS_SH] = "#!/bin/bash\n"
         self.ds_desired = ds_desired
+        self.label, self.nav_agent = label, nav_agent     # the node's has-okvis label; okvis/nav-agent there
         self.image = "foundationbot/okvis2x:thor-98349e6c"
         self.producer_size = producer_size
         self.calls = []
@@ -97,6 +98,8 @@ class FakeRobot:
     def __call__(self, argv, input=None, timeout=None):
         self.calls.append((list(argv), input))
         a = list(argv)
+        if a == ["hostname"]:
+            return 0, "phantom10\n"
         if a[:2] == ["cat", a[1]] and len(a) == 2:
             return (0, self.files[a[1]]) if a[1] in self.files else (1, f"cat: {a[1]}: No such file")
         if a[:2] == ["test", "-e"]:
@@ -134,8 +137,20 @@ class FakeRobot:
                 return 1, 'Error from server (NotFound): daemonsets.apps "okvis2x" not found'
             jp = k[-1]
             if "desiredNumberScheduled" in jp:
-                return 0, str(self.ds_desired)
+                return 0, str(self.ds_desired if self.label == "true" else 0)
+            if "nodeSelector" in jp:
+                return 0, '{"foundation.bot/has-okvis":"true","foundation.bot/robot":"true"}'
             return 0, self.image
+        if k[:5] == ["-n", "okvis", "get", "daemonset", "nav-agent"]:
+            return (0, "daemonset.apps/nav-agent") if self.nav_agent else (1, "Error from server (NotFound)")
+        if k[:2] == ["get", "node"]:
+            return 0, self.label
+        if k[:2] == ["label", "node"]:
+            self.label = k[3].split("=")[1]
+            if self.label == "true":
+                self.restarts += 1
+                self._boot_okvis()
+            return 0, "node/phantom10 labeled"
         if k[:3] == ["-n", dp.OKVIS_NS, "rollout"]:
             self.restarts += 1
             self._boot_okvis()
@@ -246,6 +261,48 @@ def test_restart_path_okvis_sh_and_none():
     assert rp.kind == "okvis_sh" and rp.argv == ["env", "OKVIS_LAUNCH_ORIGIN=calibtool test", "bash", dp.OKVIS_SH,
                                                  "restart"]
     assert dp.restart_path(dp.Remote(FakeRobot(ds_desired=0))).kind == "none"
+
+
+def test_restart_path_reads_how_okvis_is_installed_not_whether_it_runs():
+    """13 Nov, phantom10: an earlier session left the DaemonSet off by its node label; the detection saw no OKVIS pod,
+    picked okvis.sh (its nav-agent deleted) and the deploy's restart and rollback both failed. Now: the DaemonSet path,
+    started by the label"""
+    rp = dp.restart_path(dp.Remote(FakeRobot(ds_desired=1, okvis_sh=True, label="false")))
+    assert rp.kind == "daemonset" and rp.label_off and rp.node == "phantom10"
+    assert rp.argv == dp.label_argv("phantom10", "true") and "false" in rp.detail
+    rp = dp.restart_path(dp.Remote(FakeRobot(ds_desired=1, okvis_sh=True)))
+    assert rp.kind == "daemonset" and not rp.label_off and rp.node == "phantom10"
+
+
+def test_okvis_sh_is_chosen_only_when_it_can_run():
+    rp = dp.restart_path(dp.Remote(FakeRobot(ds_desired=None, okvis_sh=True, nav_agent=False)))
+    assert rp.kind == "none" and "nav-agent" in rp.detail and "unusable" in rp.detail
+    assert dp.restart_path(dp.Remote(FakeRobot(ds_desired=None, okvis_sh=True))).kind == "okvis_sh"
+
+
+def test_no_usable_restart_path_refuses_the_deploy_before_any_write():
+    r = FakeRobot(ds_desired=None, okvis_sh=True, nav_agent=False)
+    d, applied = deployer(r)
+    with pytest.raises(dp.DeployRefused, match="nav-agent"):
+        d.deploy(plan())
+    assert not mutating_calls(r) and not applied and r.files[dp.ROBOT_ENV] == ENV
+
+
+def test_okvis_left_off_by_its_label_is_deployed_and_rolled_back_through_the_label():
+    """the 13 Nov case end to end on the fake: deploy starts OKVIS by the label; the rollback (in Python and as
+    rollback.sh) brings it back on the old file, the label already on -> a rollout restart"""
+    r = FakeRobot(ds_desired=1, okvis_sh=True, label="false")
+    d, applied = deployer(r)
+    res = d.deploy(plan())
+    assert res.ok, res.as_dict()
+    assert r.label == "true" and not any(dp.OKVIS_SH in " ".join(a) for a, _ in r.calls)
+    script = r.files[res.rollback_script]
+    assert "has-okvis=true --overwrite" in script and "rollout restart ds/okvis2x" in script
+    assert dp.OKVIS_SH not in script
+    n = r.restarts
+    d.rollback("on purpose")
+    assert r.restarts == n + 1 and any("rollout" in a for a, _ in r.calls[-20:])
+    assert dp.parse_env(r.files[dp.ROBOT_ENV])["OKVIS_CALIBRATION"].endswith(OLD_NAME)
 
 
 def test_snapshot_holds_what_rollback_needs():

@@ -36,10 +36,33 @@ DISCARD_MARK = "calibtool-menu-discard"
 # 10 Nov: "when i delete old sessions they are not deleted": a session can be discarded from the menu. Its folder is
 # kept (data retention, the report, rollback.sh); its state.json phase becomes DISCARDED, so it is no longer offered
 DISCARD = r'''# calibtool-menu-discard
-import json, os, sys, time
+import json, os, subprocess, sys, time
 p = os.path.join(sys.argv[1], "sessions", sys.argv[2], "state.json")
 with open(p) as f:
     st = json.load(f)
+# 13 Nov, phantom10: a discarded session had switched OKVIS off (DaemonSet node label) and nobody switched it back;
+# the next session's deploy then failed. OKVIS is started again here the way the session stopped it.
+ok = (st.get("flow") or {}).get("okvis") or {}
+if ok.get("stopped"):
+    kind = (ok.get("restart") or {}).get("kind")
+    node = ok.get("node") or (ok.get("restart") or {}).get("node")
+    if kind == "daemonset" and node:
+        argv = ["k0s", "kubectl", "label", "node", node,
+                "foundation.bot/has-okvis=" + (ok.get("label_value") or "true"), "--overwrite"]
+    elif kind == "okvis_sh":
+        argv = ["bash", "/data/okvis-perf/deployment/okvis.sh", "start"]
+    else:
+        argv = None
+    if argv:
+        env = dict(os.environ, KUBECONFIG="/var/lib/k0s/pki/admin.conf",
+                   OKVIS_LAUNCH_ORIGIN="calibtool discard " + sys.argv[2])
+        r = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=180)
+        print("OKVIS started again (" + " ".join(argv) + "): rc " + str(r.returncode) + " "
+              + (r.stdout + r.stderr).strip()[-200:])
+        if r.returncode != 0:
+            sys.exit("OKVIS could not be started again: the session is NOT discarded")
+        ok["stopped"] = False
+        st["flow"]["okvis"] = ok
 st["discarded_from"], st["phase"], st["discarded_t"] = st.get("phase"), "DISCARDED", time.time()
 with open(p + ".tmp", "w") as f:
     json.dump(st, f)
@@ -445,6 +468,8 @@ class Menu:
             ok, text = r.returncode == 0, (r.stdout or "") + (r.stderr or "")
         except (OSError, subprocess.TimeoutExpired) as e:
             ok, text = False, f"{type(e).__name__}: {e}"
+        for line in text.strip().splitlines()[:-1] if ok else ():
+            self.out(f"  | {line}")
         self.out(f"  discarded session {sid} (its folder stays on the robot; the motors are as they were)" if ok else
                  f"  could not discard {sid}: {text.strip()[-200:]}")
         return None

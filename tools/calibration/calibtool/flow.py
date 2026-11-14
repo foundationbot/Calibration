@@ -598,7 +598,58 @@ class FullFlow:
     def _make_okvis(self):
         rem = dp.Remote(self.robot.run, dry_run=self.robot.dry_run, log=self.rec.hook("okvis"))
         d = self.fl.get("okvis")
-        self.okvis = sc.OkvisCtl.from_dict(rem, d) if d else sc.OkvisCtl(rem, self.snap.restart)
+        if d:
+            self.okvis = sc.OkvisCtl.from_dict(rem, d)
+            return
+        restart = self.snap.restart
+        left = self._okvis_left_off() if restart.get("label_off") else None
+        if left is None:
+            self.okvis = sc.OkvisCtl(rem, restart)
+            if restart.get("label_off"):
+                self._event("okvis_off_found", detail=restart.get("detail"),
+                            note="not left off by a calibration session: it stays off after the session (a deploy "
+                                 "starts it to check the load)")
+            return
+        # 13 Nov, phantom10: a discarded session had switched OKVIS off by the node label and never back; this session
+        # takes the duty over (stopped, the label's value from before that session) and the old one is relieved of it
+        sid, ok = left
+        self.okvis = sc.OkvisCtl(rem, restart, node=restart.get("node") or ok.get("node"),
+                                 label_value=ok.get("label_value") or "true", stopped=True)
+        self._event("okvis_left_off_taken_over", session=sid, label_value=self.okvis.label_value)
+        self._handed_over(sid)
+
+    def _sessions_dir(self) -> Path:
+        return Path(self.dirs.root).parent
+
+    def _okvis_left_off(self):
+        """(session id, its flow.okvis) of the newest OTHER session that stopped OKVIS through the DaemonSet's node label
+        and did not start it again; None if none"""
+        best = None
+        for p in self._sessions_dir().glob("*/state.json"):
+            if p.parent.name == Path(self.dirs.root).name:
+                continue
+            try:
+                st = json.loads(p.read_text())
+            except (OSError, ValueError):
+                continue
+            ok = (st.get("flow") or {}).get("okvis") or {}
+            if ok.get("stopped") and (ok.get("restart") or {}).get("kind") == "daemonset":
+                t = float(st.get("updated") or st.get("created") or 0)
+                if best is None or t > best[0]:
+                    best = (t, p.parent.name, ok)
+        return None if best is None else (best[1], best[2])
+
+    def _handed_over(self, sid):
+        p = self._sessions_dir() / sid / "state.json"
+        try:
+            st = json.loads(p.read_text())
+            st["flow"]["okvis"]["stopped"] = False
+            st["flow"]["okvis"]["handed_over_to"] = Path(self.dirs.root).name
+            tmp = p.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(st))
+            tmp.replace(p)
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            self._event("okvis_hand_over_unrecorded", session=sid, error=f"{type(e).__name__}: {e}")
 
     def _persist_ctl(self):
         self.fl["producer"] = self.producer.as_dict()
@@ -1634,6 +1685,9 @@ class FullFlow:
         while True:
             k = self._wait_keys("DKR" + "".join(opts))
             if k == "E":
+                reopen = getattr(self.collection, "reopen", None)
+                if reopen is not None:
+                    reopen()            # the fit's split closed the labeler (13 Nov: the next hold raised)
                 self._reopen("E", "collect", extras_cap=int(self.fl.get("extras") or 0) + EXTRAS_PER_E,
                              collect_stop=False)
                 return "collect"
