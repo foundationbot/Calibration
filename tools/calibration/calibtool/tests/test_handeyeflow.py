@@ -177,3 +177,43 @@ def test_an_earlier_runs_log_is_moved_aside_before_a_new_wave():
     body = _s.split(line.split("setsid bash -c ", 1)[1])[0]
     assert "mv /data/calib/handeye/20261111-150000/left/log.jsonl" in body or "log.prev-" in body
     assert body.index("log.prev-") < body.index("handeye_wave.py")
+
+
+class SlowWave(Robot):
+    """the wave's log grows one line per poll; `alive` says per poll whether pgrep found the wave (__ALIVE__)"""
+
+    def __init__(self, n_lines, alive):
+        super().__init__()
+        self.n, self.alive, self.poll = n_lines, list(alive), 0
+
+    def __call__(self, argv, **kw):
+        line = argv[-1]
+        if "log.jsonl" in line and "pgrep" in line:
+            self.lines.append(line)
+            start = int(line.split("tail -n +")[1].split()[0]) - 1
+            have = min(self.poll + 1, self.n)
+            ev = [{"t": i, "kind": "burst", "name": f"{i:02d}", "dt": 9} for i in range(self.n - 1)] \
+                + [{"t": self.n, "kind": "done", "captures": self.n - 1}]
+            out = [json.dumps(e) for e in ev[start:have]]
+            if self.alive[min(self.poll, len(self.alive) - 1)]:
+                out.append("__ALIVE__")
+            self.poll += 1
+            return SimpleNamespace(returncode=0, stdout="\n".join(out), stderr="")
+        return super().__call__(argv, **kw)
+
+
+def test_scattered_misses_of_a_running_wave_are_not_lost():
+    """13 Nov 19:38, phantom10: three scattered pgrep misses (ssh hiccups) over a 7.5 min wave, never reset, called
+    the healthy right wave 'lost' during its return move and stopped the session before the left arm"""
+    alive = [True] * 40
+    for i in (5, 15, 25, 33):
+        alive[i] = False
+    r = SlowWave(40, alive)
+    h, _ = flow(r)
+    assert h.follow("/data/calib/handeye/20261111-150000/right") == "done"
+
+
+def test_three_misses_in_a_row_are_lost():
+    r = SlowWave(40, [True] * 5 + [False] * 40)
+    h, _ = flow(r)
+    assert h.follow("/data/calib/handeye/20261111-150000/right") == "lost"

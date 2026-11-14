@@ -139,7 +139,11 @@ class HandEye:
                     return "done"
                 if e.get("kind") == "stopped":
                     return "stopped"
-            if not alive:
+            # 13 Nov 19:38, phantom10: the misses were counted over the whole wave, never reset, and three scattered
+            # ones (ssh hiccups) called a healthy wave "lost" during its slow return move; now only 3 in a row count
+            if alive:
+                quiet = 0
+            else:
                 quiet += 1
                 if quiet >= 3:
                     return "lost"
