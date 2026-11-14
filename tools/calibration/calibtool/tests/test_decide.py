@@ -12,6 +12,8 @@ import pytest
 
 np = pytest.importorskip("numpy")
 
+from dataclasses import replace  # noqa: E402
+
 from calibtool import decide  # noqa: E402
 
 BAND_Z = (0.5, 0.75, 1.1, 1.5, 2.0)          # one z inside each band
@@ -239,6 +241,49 @@ def test_step66_fail_keeps_live_and_no_result_is_not_enough_data():
     assert v.decision == "KEEP_LIVE" and any("step 66" in r for r in v.reasons)
     v = decide.verdict(new, live, step66({}, verdict="NO RESULT"))
     assert v.decision == "NOT_ENOUGH_DATA"
+
+
+def _near_miss_step66(median=0.574, limit=0.5):
+    """step 66 FAILing one validated entry (13 Nov, phantom10: top 0.9-1.3 m +0.57 % vs 0.5 %)"""
+    table = [{"cell": "top", "dist_m": [0.9, 1.3], "median_pct": median, "limit_pct": limit, "ok": False},
+             {"cell": "left", "dist_m": [0.6, 0.9], "median_pct": -0.1, "limit_pct": 0.5, "ok": True}]
+    return SimpleNamespace(verdict="FAIL", entries=dict(ALL_EDGES), text="FAIL: synthetic near miss",
+                           failing={("top", (0.9, 1.3)): median}, report={"table": table})
+
+
+def test_step66_failing_reads_the_failed_rows_of_the_report():
+    assert decide.step66_failing(_near_miss_step66()) == [["top 0.9-1.3 m", 0.574, 0.5]]
+    assert decide.step66_failing(step66()) == []
+    assert decide.near_miss([["top 0.9-1.3 m", 0.574, 0.5]], 2.0)
+    assert not decide.near_miss([["top 0.9-1.3 m", 1.2, 0.5]], 2.0)
+    assert not decide.near_miss([["top 0.9-1.3 m", 0.574, 0.5]], 1.0) and not decide.near_miss([], 2.0)
+
+
+def test_a_step66_near_miss_keeps_live_by_the_rule_and_deploys_only_with_the_exception_and_new_better():
+    new, live = synthetic(0.3, 0.3), synthetic()
+    v = decide.verdict(new, live, _near_miss_step66())
+    assert v.decision == "KEEP_LIVE" and v.step66_failing == [["top 0.9-1.3 m", 0.574, 0.5]]
+    assert v.as_dict()["step66_failing"] == [["top 0.9-1.3 m", 0.574, 0.5]]
+    g = decide.Gates(step66_fail_factor=2.0)
+    v = decide.verdict(new, live, _near_miss_step66(), g)
+    assert v.decision == "DEPLOY", v.reasons
+    assert v.reasons[0].startswith("one-off exception") and "top 0.9-1.3 m +0.57 % vs 0.5 %" in v.reasons[0]
+    assert v.gates.step66_fail_factor == 2.0
+    # the exception never skips the comparison: new not better than live keeps live
+    assert decide.verdict(synthetic(), synthetic(), _near_miss_step66(), g).decision == "KEEP_LIVE"
+    # nor accepts a big miss, nor a FAIL without a report to judge it from
+    assert decide.verdict(new, live, _near_miss_step66(1.2), g).decision == "KEEP_LIVE"
+    assert decide.verdict(new, live, step66(verdict="FAIL"), g).decision == "KEEP_LIVE"
+    # nor deploys without live scores
+    v = decide.verdict(new, None, _near_miss_step66(), replace(g, allow_deploy_without_live=True), live_error="x")
+    assert v.decision == "KEEP_LIVE"
+
+
+def test_the_exception_reuses_a_bootstrap_made_with_its_gates():
+    new, live = synthetic(0.3, 0.3), synthetic()
+    g = decide.Gates(step66_fail_factor=2.0)
+    pr = decide.paired(new, live, g)
+    assert decide.verdict(new, live, _near_miss_step66(), g, paired_=pr).decision == "DEPLOY"
 
 
 def test_live_not_scorable_needs_the_explicit_gate():

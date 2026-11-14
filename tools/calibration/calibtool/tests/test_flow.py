@@ -241,6 +241,8 @@ class Session:
             self.fit_calls += 1
             self.gates_seen.append(gates_override)
             d = self.decision(self) if callable(self.decision) else self.decision
+            if isinstance(d, dict):                 # a whole decision (reasons, step66_failing, ...)
+                return {"config_text": TD.NEW, "name": TD.NEW_NAME, **d}
             why = ["5 judged entries (step 66 validated), 6 needed"] if d == "NOT_ENOUGH_DATA" else []
             return {"decision": d, "reasons": why + [f"fake verdict {d}"], "config_text": TD.NEW, "name": TD.NEW_NAME}
 
@@ -905,6 +907,39 @@ def test_the_finish_screen_lists_e_and_x_with_what_they_do(tmp_path):
     assert opts, s.kinds()[-15:]
     txt = " ".join(opts[0]["options"])
     assert "E = more placements" in txt and "X = decide again accepting 5 judged regions instead of 6" in txt
+
+
+NEAR_MISS = {"decision": "KEEP_LIVE", "step66_failing": [["top 0.9-1.3 m", 0.574, 0.5]],
+             "reasons": ["the new fit fails step 66: FAIL: 1 of 8 validated entries are outside the limits: top 0.9-1.3 m "
+                         "+0.57 %"]}
+
+
+def test_x_after_a_step66_near_miss_decides_again_with_the_exception_and_deploys(tmp_path):
+    """13 Nov, phantom10: 7 of 8 entries passing, top 0.9-1.3 m +0.57 % vs 0.5 %, live 2-12 % off: X decides again
+    with step66_fail_factor; the comparison with live still decides (the fake says DEPLOY)"""
+    keys = dict(FULL_KEYS)
+    keys["FINISH"] = ["X", "D", "D"]
+    s = Session(tmp_path, keys=keys, decision=lambda s: "DEPLOY" if s.gates_seen[-1] else NEAR_MISS).run()
+    assert s.m.phase == "DONE", s.kinds()[-20:]
+    opts = [e for e in s.events() if e["kind"] == "finish_options"]
+    assert "near miss (top 0.9-1.3 m +0.57 % vs 0.5 %" in opts[0]["options"][0], opts
+    assert s.fit_calls == 2 and s.gates_seen == [None, {"step66_fail_factor": 2.0}]
+    assert s.lines("deploy"), "deployed after the operator's X"
+    rep = json.loads((s.dirs.report / "session.json").read_text())
+    assert rep["outcome"] == "deployed" and "one-off" in json.dumps(rep["decision"])
+
+
+@pytest.mark.parametrize("failing,reasons", [
+    ([["top 0.9-1.3 m", 1.2, 0.5]], NEAR_MISS["reasons"]),                         # 2.4 x its limit: not near
+    ([], NEAR_MISS["reasons"]),                                                     # nothing to judge
+    ([["top 0.9-1.3 m", 0.574, 0.5]], ["new not shown better on median |depth error|: ..."]),   # not step 66's FAIL
+])
+def test_no_x_unless_step66_alone_failed_and_by_little(tmp_path, failing, reasons):
+    keys = dict(FULL_KEYS)
+    keys["FINISH"] = ["X", "D", "D"]
+    d = {**NEAR_MISS, "step66_failing": failing, "reasons": reasons}
+    s = Session(tmp_path, keys=keys, decision=d).run()
+    assert s.m.phase == "DONE" and s.fit_calls == 1 and "reopened" not in s.kinds()
 
 
 def test_the_spoken_time_is_the_measured_one():

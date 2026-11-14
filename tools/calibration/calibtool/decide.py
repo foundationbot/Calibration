@@ -27,7 +27,8 @@ Verdict (verdict()):
 An edge that is not required (default: the top) and has no judged entry does not block; the reasons say so.
 Every threshold is a field of Gates; the defaults were set in M1 C3 (9 Nov 2026, with the user) from the stored
 sessions: p21 5 Nov judged left, right and bottom but no top entry, p10 6 Nov all four; both deploy."""
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field, is_dataclass, replace
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -60,6 +61,10 @@ class Gates:
     # without live scores, deploy on step 66 alone (LIVE_NOT_SCORABLE_DEPLOY) only when this is set: "deploy only if
     # shown better than live" cannot be checked then, so it takes an explicit choice (else NOT_ENOUGH_DATA)
     allow_deploy_without_live: bool = False
+    # a step-66 FAIL of the new fit goes on to the comparison with live (a one-off exception, the operator's X after a
+    # near miss; 13 Nov, phantom10: 7 of 8 entries passing, top 0.9-1.3 m +0.57 % against 0.5 %, live off by 2-12 %)
+    # only when every failing entry's |median| is within this factor of its limit. 1.0 = never (the rule)
+    step66_fail_factor: float = 1.0
 
     def __post_init__(self):
         bad = set(self.required_edges) - set(EDGES)
@@ -276,6 +281,7 @@ class Verdict:
     judged: list = field(default_factory=list)          # step 66's validated entries on the new fit
     missing_edges: list = field(default_factory=list)
     gates: Gates = Gates()
+    step66_failing: list = field(default_factory=list)  # step66_failing(): [[entry, median %, limit %]] of a FAIL
 
     def as_dict(self):
         g = asdict(self.gates)
@@ -283,7 +289,25 @@ class Verdict:
         return {"decision": self.decision, "reasons": list(self.reasons),
                 "paired": self.paired.as_dict() if self.paired else None,
                 "judged": [f"{c} {lo:g}-{hi:g}" for c, (lo, hi) in self.judged],
-                "missing_edges": list(self.missing_edges), "gates": g}
+                "missing_edges": list(self.missing_edges), "gates": g,
+                "step66_failing": [list(x) for x in self.step66_failing]}
+
+
+def step66_failing(step66_new) -> list:
+    """[[entry text, median %, limit %]] of the validated entries step 66 failed, from its report's table (rows with
+    ok False); [] without a report or table"""
+    rep = getattr(step66_new, "report", None) or {}
+    out = []
+    for r in rep.get("table") or ():
+        if r.get("ok") is False and r.get("median_pct") is not None and r.get("limit_pct") is not None:
+            lo, hi = r["dist_m"]
+            out.append([f"{r['cell']} {lo:g}-{hi:g} m", float(r["median_pct"]), float(r["limit_pct"])])
+    return out
+
+
+def near_miss(failing, factor) -> bool:
+    """every failing entry ([entry, median %, limit %]) within factor x its limit (and at least one entry)"""
+    return bool(failing) and factor > 1.0 and all(abs(m) <= factor * lim for _, m, lim in failing)
 
 
 def _fmt(s: Stat, unit, level_pct=95.0):
@@ -295,8 +319,9 @@ def verdict(new: Scores, live, step66_new, gates: Gates = Gates(), live_error=No
     """the decision (DECISIONS) with its reasons. new / live: Scores on the same TEST file (live None: the live
     config could not be scored, live_error saying why); step66_new: step 66 of the new fit (pipeline.ValidateResult:
     .verdict, .entries). paired_: paired(new, live, g) already made with gates that differ from these at most in
-    required_edges (the bootstrap does not read them), used instead of a second bootstrap"""
-    if paired_ is not None and replace(paired_.gates, required_edges=gates.required_edges) != gates:
+    required_edges and step66_fail_factor (the bootstrap reads neither), used instead of a second bootstrap"""
+    if paired_ is not None and replace(paired_.gates, required_edges=gates.required_edges,
+                                       step66_fail_factor=gates.step66_fail_factor) != gates:
         raise ValueError("paired_ was made with other gates than required_edges: bootstrap again")
     v66 = getattr(step66_new, "verdict", None)
     judged = sorted(getattr(step66_new, "entries", {}) or {})
@@ -307,7 +332,22 @@ def verdict(new: Scores, live, step66_new, gates: Gates = Gates(), live_error=No
     if v66 not in ("PASS", "FAIL"):
         return Verdict("NOT_ENOUGH_DATA", [f"step 66 gave no result on the new fit: {text or v66}"], **base)
     if v66 == "FAIL":
-        return Verdict("KEEP_LIVE", [f"the new fit fails step 66: {text}"], **base)
+        failing = step66_failing(step66_new)
+        n_fail = len(getattr(step66_new, "failing", None) or {}) or len(failing)
+        if not (near_miss(failing, gates.step66_fail_factor) and len(failing) == n_fail):
+            return Verdict("KEEP_LIVE", [f"the new fit fails step 66: {text}"], step66_failing=failing, **base)
+        exc = ("one-off exception chosen by the operator (X): step 66's FAIL accepted, every failing entry within "
+               f"{gates.step66_fail_factor:g} x its limit (" +
+               "; ".join(f"{e} {m:+.2f} % vs {lim:g} %" for e, m, lim in failing) +
+               "); the comparison with live decides")
+        if live is None:
+            return Verdict("KEEP_LIVE", [exc, f"the live config could not be scored ({live_error or 'no reason given'})"
+                                         ": the exception needs the new fit shown better than live"],
+                           step66_failing=failing, **base)
+        v = verdict(new, live, replace(step66_new, verdict="PASS") if is_dataclass(step66_new)
+                    else SimpleNamespace(**{**vars(step66_new), "verdict": "PASS"}),
+                    replace(gates, step66_fail_factor=1.0), live_error, paired_)
+        return replace(v, reasons=[exc] + list(v.reasons), gates=gates, step66_failing=failing)
     no_live = f"the live config could not be scored ({live_error or 'no reason given'})"
     short = []
     if len(judged) < gates.min_judged:

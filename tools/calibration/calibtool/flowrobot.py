@@ -159,8 +159,8 @@ def pipeline_fit_decide(rig_path, live_config, out_name, gates=None, jobs=1, liv
         src = (f"live refit {fit.entry['source']['live_refit']} (step 45 not run)" if fit is not None
                else f"step 45 ({why})")
         out = {"decision": v["decision"], "reasons": list(v["reasons"]), "name": out_name, "config_text": None,
-               "fit_source": src}
-        if gates_override:
+               "fit_source": src, "step66_failing": list(v.get("step66_failing") or [])}
+        if gates_override and "min_judged" in gates_override:
             out["reasons"].append(f"one-off exception chosen by the operator: {g.min_judged} judged regions accepted "
                                   f"(the rule is {decide.Gates().min_judged}); every other rule applied")
         if v["decision"] == "DEPLOY":

@@ -39,6 +39,9 @@ FullFlow.run() walks the session in its own thread, one stage after the other, e
                E = more placements (robot.plan_next, up to EXTRAS_PER_E more) -> collect again -> decide again, and
                X = decide again accepting the regions judged (>= OVERRIDE_MIN_JUDGED; a one-off exception that changes
                only decide.Gates.min_judged, recorded in the decision and the report).
+               After KEEP_LIVE from a step-66 FAIL alone, every failing entry within STEP66_NEAR_MISS_FACTOR x its limit
+               (13 Nov, phantom10: top 0.9-1.3 m +0.57 % vs 0.5 %, live off by 2-12 %): X = decide again with
+               decide.Gates.step66_fail_factor (one-off; new better than live and every other rule still decide).
   restore      the producer as saved (unless the deploy left it at the deploy size), OKVIS started again (unless the
                deploy did), the lease released -> DONE.
 
@@ -167,6 +170,7 @@ def board_move_text(pitch, yaw, z) -> str:
 EXTRAS_PER_E = 2            # E: this many more extra placements, then the fit and the decision again
 OVERRIDE_MIN_JUDGED = 5     # X: never accepts fewer judged regions than this (the rule is decide.Gates.min_judged)
 _JUDGED = re.compile(r"(\d+) judged entries.*?(\d+) needed")
+STEP66_NEAR_MISS_FACTOR = 2.0   # X after a step-66 FAIL: every failing entry within this x its limit (decide.Gates)
 
 
 class Aborted(Exception):
@@ -1241,12 +1245,12 @@ class FullFlow:
                 fl["config_file"] = str(p)
             fl["decision"] = {"decision": out.get("decision"), "reasons": list(out.get("reasons") or []),
                               "name": out.get("name"), "imu_applied": bool(text and imu_.get("deploy")),
-                              "fit_source": out.get("fit_source")}
+                              "fit_source": out.get("fit_source"), "step66_failing": out.get("step66_failing") or []}
             if g:
                 fl["decision"]["gates_override"] = dict(g)
                 if not any("one-off" in r for r in fl["decision"]["reasons"]):
-                    fl["decision"]["reasons"].append(f"one-off exception chosen by the operator (X): "
-                                                     f"{g.get('min_judged')} judged regions accepted")
+                    fl["decision"]["reasons"].append("one-off exception chosen by the operator (X): " + ", ".join(
+                        f"{k} {v}" for k, v in sorted(g.items())))
             self._save()
         self._upd(busy=None)
         self._enter("DECIDE")
@@ -1554,7 +1558,11 @@ class FullFlow:
         reason is the judged-region count and n >= OVERRIDE_MIN_JUDGED were judged"""
         fl = self.fl
         dec = fl.get("decision") or {}
-        if fl.get("outcome") != "keep_live" or dec.get("decision") != "NOT_ENOUGH_DATA":
+        if fl.get("outcome") != "keep_live":
+            return {}
+        if dec.get("decision") == "KEEP_LIVE":
+            return self._near_miss_option(dec)
+        if dec.get("decision") != "NOT_ENOUGH_DATA":
             return {}
         out = {}
         if self.robot.plan_next is not None and int(fl.get("extras") or 0) < self.max_extras:
@@ -1563,8 +1571,37 @@ class FullFlow:
         if m and int(m.group(1)) >= OVERRIDE_MIN_JUDGED and not fl.get("gates_override"):
             n = int(m.group(1))
             out["X"] = (f"X = decide again accepting {n} judged regions instead of {m.group(2)} (a one-off exception; "
-                        "left, right and bottom edges and new better than live are still required)", n)
+                        "left, right and bottom edges and new better than live are still required)", {"min_judged": n})
         return out
+
+    def _step66_failing(self, dec) -> list:
+        """the decision's step-66 failing entries; for a decision stored before they were kept (13 Nov), read from the
+        session's step-66 report of the new fit"""
+        if dec.get("step66_failing") is not None:
+            return list(dec["step66_failing"])
+        rp = Path(self.dirs.fit) / "validate-new" / "report.json"
+        try:
+            from types import SimpleNamespace
+            from calibtool import decide
+            return decide.step66_failing(SimpleNamespace(report=json.loads(rp.read_text())))
+        except (OSError, ValueError):
+            return []
+
+    def _near_miss_option(self, dec) -> dict:
+        """after KEEP_LIVE from a step-66 FAIL alone, every failing entry within STEP66_NEAR_MISS_FACTOR x its limit:
+        {"X": (text, gates override)}: decide again accepting the near miss (one-off; the comparison with live, the
+        judged-region count, the edges and the bands still decide)"""
+        from calibtool import decide
+        reasons = dec.get("reasons") or []
+        if self.fl.get("gates_override") or not reasons or not str(reasons[0]).startswith("the new fit fails step 66"):
+            return {}
+        failing = self._step66_failing(dec)
+        if not decide.near_miss(failing, STEP66_NEAR_MISS_FACTOR):
+            return {}
+        miss = "; ".join(f"{e} {m:+.2f} % vs {lim:g} %" for e, m, lim in failing)
+        return {"X": (f"X = decide again accepting step 66's near miss ({miss}; within {STEP66_NEAR_MISS_FACTOR:g} x "
+                      "the limit) as a one-off exception; new better than live is still required",
+                      {"step66_fail_factor": STEP66_NEAR_MISS_FACTOR})}
 
     def _reopen(self, key, to, **extra):
         fl = self.fl
@@ -1593,7 +1630,7 @@ class FullFlow:
                              collect_stop=False)
                 return "collect"
             if k == "X":
-                self._reopen("X", "decide", gates_override={"min_judged": opts["X"][1]})
+                self._reopen("X", "decide", gates_override=dict(opts["X"][1]))
                 return "decide"
             if k == "R":
                 if self.fl.get("outcome") == "deployed":
