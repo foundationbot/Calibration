@@ -131,6 +131,9 @@ def main(argv=None):
     ap.add_argument("--okvis-kb4t", action="store_true",
                     help="write the OKVIS config with the whole lens (distortion_type kb4t, 6 coefficients): depth "
                          "uses KB4T, VIO k1..k4; needs an OKVIS image with the kb4t change (older images refuse it)")
+    ap.add_argument("--accept-fail", metavar="REASON",
+                    help="export although step 66 says FAIL (a one-off exception the decision granted, e.g. calibtool's "
+                         "X after a near miss); REASON is written into the exported files")
     rigcfg.add_arg(ap)
     a = ap.parse_args(argv)
     if a.okvis_kb4t and a.allow_4term_okvis:
@@ -145,8 +148,10 @@ def main(argv=None):
         sys.exit(f"ERROR: {a.fit}: step 45's verdict {fit_verdict!r}: only a converged fit is exported")
     model, intr, C = sf.load_calibration(a.fit)
     rep = json.loads(a.report.read_text())
-    if rep.get("verdict") != "PASS":
-        sys.exit(f"ERROR: {a.report}: verdict {rep.get('verdict')!r}; only a PASS is exported")
+    if rep.get("verdict") != "PASS" and not (rep.get("verdict") == "FAIL" and a.accept_fail):
+        sys.exit(f"ERROR: {a.report}: verdict {rep.get('verdict')!r}; only a PASS is exported"
+                 + (" (a FAIL only with --accept-fail)" if rep.get("verdict") == "FAIL" else ""))
+    accepted = f"step 66 FAIL accepted: {a.accept_fail}" if rep.get("verdict") == "FAIL" else None
     if rep["calibration"]["sha256"] != sf.calibration_digest(model, intr, C):
         sys.exit(f"ERROR: {a.report} judged another calibration than {a.fit}")
     fitted_on = fit.get("inputs", {}).get("sha256")
@@ -171,7 +176,7 @@ def main(argv=None):
              "cameras": [{"kalibr": f"cam{c}", "side": rig.kalibr[c]["side"], "dma_queue": int(rig.kalibr[c]["dma_queue"]),
                           "intr": intr[c].tolist()} for c in (0, 1)],
              "C_cam1_to_cam0": C.tolist(), "baseline_mm": float(1e3 * np.linalg.norm(C[:3, 3])),
-             "validation": {"verdict": rep["verdict"], "report": str(a.report),
+             "validation": {"verdict": rep["verdict"], "report": str(a.report), "accepted_fail": accepted,
                             "validated_cells": rep["validated_cells"], "not_validated_cells": rep["not_validated_cells"],
                             "unconstrained_cells": unc},
              "p_drop_cost_px": cost, "p_drop_depth_pct": dcost, "sha256": rep["calibration"]["sha256"],
@@ -185,7 +190,7 @@ def main(argv=None):
         vio_cost = "; ".join(f"camera {c} {v['within_350px']:.2f} px within 350 px, {v['whole_image']:.2f} px at the "
                              "edge" for c, v in enumerate(cost))
         notes = [f"{rig.okvis_yaml_name}: {rig.name}, KB4T stereo calibration {canon['sha256'][:12]} (step 71 from "
-                 f"{a.fit.name}; step 66 PASS).",
+                 f"{a.fit.name}; {accepted or 'step 66 PASS'}).",
                  "distortion_type kb4t, distortion_coefficients [k1, k2, k3, k4, p1, p2]. depth: full KB4T (the stereo "
                  "network's rectification map); VIO: k1..k4 (p1, p2 dropped there, pixel cost " + vio_cost + ").",
                  "Needs an OKVIS image with the kb4t change (OKVIS2-X #796, in AI-1184 since fc255aaa); older images refuse "
@@ -203,7 +208,7 @@ def main(argv=None):
               "the kb4t change; --allow-4term-okvis writes the 4-term one anyway, for a run that uses no stereo depth.")
     elif a.okvis_template:
         notes = [f"{rig.okvis_yaml_name}: {rig.name}, KB4T stereo calibration {canon['sha256'][:12]} (step 71 from "
-                 f"{a.fit.name}; step 66 PASS).",
+                 f"{a.fit.name}; {accepted or 'step 66 PASS'}).",
                  "APPROXIMATION, NOT FOR STEREO DEPTH: the lens is written as its 4-term equidistant part (written "
                  "because --allow-4term-okvis was given; --okvis-kb4t writes the whole lens).", warn,
                  "KB4T p1, p2 (not read by OKVIS): " + "; ".join(f"camera {c} {intr[c][8]:.6g}, {intr[c][9]:.6g}"

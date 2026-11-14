@@ -165,9 +165,12 @@ def pipeline_fit_decide(rig_path, live_config, out_name, gates=None, jobs=1, liv
                                   f"(the rule is {decide.Gates().min_judged}); every other rule applied")
         if v["decision"] == "DEPLOY":
             ex = out_dir / "export"
+            acc = next((r for r in out["reasons"] if r.startswith("one-off exception") and "step 66" in r), None)
             rc, _ = pipeline._run(paths.script("71_export_lens"),
                                   [ev["fit"]["json_path"], ev["validate_new"]["report_path"], ex, "--okvis-template",
-                                   live, "--okvis-kb4t", "--rig", rig_path], out_dir / "71.log")
+                                   live, "--okvis-kb4t", "--rig", rig_path]
+                                  + (["--accept-fail", acc] if acc and ev["validate_new"].get("verdict") == "FAIL"
+                                     else []), out_dir / "71.log")
             f = ex / pipeline.load_rig(rig_path).okvis_yaml_name
             if rc != 0 or not f.is_file():
                 return {**out, "decision": "NOT_ENOUGH_DATA",

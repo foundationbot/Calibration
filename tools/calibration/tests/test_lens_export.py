@@ -161,6 +161,29 @@ def test_only_a_pass_for_this_calibration_is_exported(exported, tmp_path):
         assert msg in str(e.value)
 
 
+def test_a_fail_is_exported_only_with_accept_fail_and_says_so(exported, tmp_path):
+    """calibtool's X after a step-66 near miss (13 Nov, phantom10): the decision granted the exception, step 71 exports
+    the FAIL with --accept-fail and writes the reason into the canonical JSON and the OKVIS config's header"""
+    P = S.pipeline()
+    rep = json.loads((exported / "v" / "report.json").read_text())
+    bad = tmp_path / "r.json"
+    bad.write_text(json.dumps({**rep, "verdict": "FAIL"}))
+    args = [str(P / "fit.json"), str(bad), str(tmp_path / "e"), "--okvis-template", str(exported / "template.yaml"),
+            "--okvis-kb4t", "--rig", str(S.RIG12)]
+    with pytest.raises(SystemExit) as e:
+        m71.main(args)
+    assert "only with --accept-fail" in str(e.value)
+    why = "one-off exception chosen by the operator (X): top 0.9-1.3 m +0.57 % vs 0.5 %"
+    assert m71.main(args + ["--accept-fail", why]) == 0
+    canon = json.loads((tmp_path / "e" / "phantom12-kb4t.json").read_text())
+    assert canon["validation"]["verdict"] == "FAIL" and why in canon["validation"]["accepted_fail"]
+    assert "step 66 FAIL accepted: one-off exception" in (tmp_path / "e" / "phantom12_stereo.yaml").read_text()
+    # a PASS exports as before and records nothing accepted
+    assert m71.main([str(P / "fit.json"), str(exported / "v" / "report.json"), str(tmp_path / "p"), "--rig",
+                     str(S.RIG12)]) in (0, None)
+    assert json.loads((tmp_path / "p" / "phantom12-kb4t.json").read_text())["validation"]["accepted_fail"] is None
+
+
 def test_a_report_on_the_fit_sweep_itself_is_not_exported(exported, tmp_path):
     """step 66 run on the recording step 45 fitted passes easily (in-sample) and is no validation"""
     rep = json.loads((exported / "v" / "report.json").read_text())
