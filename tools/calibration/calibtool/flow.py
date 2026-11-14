@@ -170,6 +170,7 @@ def board_move_text(pitch, yaw, z) -> str:
 EXTRAS_PER_E = 2            # E: this many more extra placements, then the fit and the decision again
 OVERRIDE_MIN_JUDGED = 5     # X: never accepts fewer judged regions than this (the rule is decide.Gates.min_judged)
 _JUDGED = re.compile(r"(\d+) judged entries.*?(\d+) needed")
+EXPORT_FAILED = "step 71 wrote no OKVIS file"      # flowrobot.fit_decide's reason when DEPLOY could not be exported
 STEP66_NEAR_MISS_FACTOR = 2.0   # X after a step-66 FAIL: every failing entry within this x its limit (decide.Gates)
 
 
@@ -1565,6 +1566,13 @@ class FullFlow:
         if dec.get("decision") != "NOT_ENOUGH_DATA":
             return {}
         out = {}
+        if any(str(r).startswith(EXPORT_FAILED) for r in dec.get("reasons") or ()):
+            # the decision said DEPLOY and the OKVIS file was not written (13 Nov: step 71 refused the near miss's
+            # FAIL report): X decides again with the same gates, the exception included
+            return {"X": ("X = decide again: last time the new calibration could not be written as an OKVIS file "
+                          "(see the reasons); the same rules" + (" and the same one-off exception" if
+                                                                  fl.get("gates_override") else ""),
+                          dict(fl.get("gates_override") or {}))}
         if self.robot.plan_next is not None and int(fl.get("extras") or 0) < self.max_extras:
             out["E"] = ("E = more placements (the planner asks for what is short), then fit and decide again", None)
         m = next((x for x in (_JUDGED.search(r) for r in dec.get("reasons") or ()) if x), None)

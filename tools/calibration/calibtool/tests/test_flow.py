@@ -929,6 +929,22 @@ def test_x_after_a_step66_near_miss_decides_again_with_the_exception_and_deploys
     assert rep["outcome"] == "deployed" and "one-off" in json.dumps(rep["decision"])
 
 
+def test_x_decides_again_with_the_same_exception_when_the_export_failed(tmp_path):
+    """13 Nov, phantom10: X's exception decided DEPLOY, step 71 refused to write the FAIL (fixed since); the session
+    must be able to decide again with the same exception, not only E"""
+    seq = [NEAR_MISS, {"decision": "NOT_ENOUGH_DATA", "step66_failing": NEAR_MISS["step66_failing"],
+                       "reasons": ["one-off exception chosen by the operator (X): step 66 ...",
+                                   "step 71 wrote no OKVIS file (exit 1): see 71.log"]}, "DEPLOY"]
+    keys = dict(FULL_KEYS)
+    keys["FINISH"] = ["X", "X", "D", "D"]
+    s = Session(tmp_path, keys=keys, decision=lambda s: seq[s.fit_calls - 1]).run()
+    assert s.m.phase == "DONE", s.kinds()[-20:]
+    assert s.fit_calls == 3 and s.gates_seen == [None, {"step66_fail_factor": 2.0}, {"step66_fail_factor": 2.0}]
+    opts = [e for e in s.events() if e["kind"] == "finish_options"]
+    assert "could not be written as an OKVIS file" in opts[1]["options"][0], opts
+    assert s.lines("deploy")
+
+
 @pytest.mark.parametrize("failing,reasons", [
     ([["top 0.9-1.3 m", 1.2, 0.5]], NEAR_MISS["reasons"]),                         # 2.4 x its limit: not near
     ([], NEAR_MISS["reasons"]),                                                     # nothing to judge
